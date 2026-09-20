@@ -1,0 +1,97 @@
+<div align="center">
+    <img width="75" src="/FCL/src/main/res/drawable/img_app.png"></img>
+</div>
+
+<h1 align="center">Fold Craft Launcher</h1>
+
+<div align="center">
+
+[![Android CI](https://github.com/FCL-Team/FoldCraftLauncher/actions/workflows/build.yml/badge.svg)](https://github.com/FCL-Team/FoldCraftLauncher/actions/workflows/build.yml)
+![Загрузки](https://img.shields.io/github/downloads/FCL-Team/FoldCraftLauncher/total?style=flat-square&color=f18cb9)
+![Релиз](https://img.shields.io/github/v/release/FCL-Team/FoldCraftLauncher?style=flat-square&color=f18cb9)
+
+[![Discord](https://img.shields.io/badge/Discord-red?logo=discord&logoColor=white)](https://discord.gg/ffhvuXTwyV)
+[![QQ](https://img.shields.io/badge/QQ-green)](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=LwxydGEvBZJnn09sXOjkQo9tuuLcYwx5&authKey=seyY5pPUCIHMWS5FqVryq926T0G2GarSXetpxxV9DJxBVt%2FPcg1vxN%2F%2FXpsCowyk&noverify=0&group_code=762054349)
+[![Поддержать](https://img.shields.io/badge/sponsor-blue?logo=GitHub-Sponsors)](https://afdian.com/@tungs)
+
+</div>
+
+🌍 **Язык**
+[简体中文](./README.md) | [English](./README_EN.md) | Русский
+
+> 「Fold Craft Launcher」 — это лаунчер Minecraft: Java Edition для платформы Android, разрабатываемый командой FCL Team. Созданный на базе ключевых функций [HMCL](https://github.com/HMCL-dev/HMCL) и с интеграцией бэкенда [PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher), он позволяет запускать Minecraft: Java Edition на мобильных устройствах, поддерживая загрузку и работу модов для всех версий игры.
+
+---
+
+## 🚀 Основные возможности
+
+✅ **Поддержка всех версий**  
+- Встроенная поддержка всех версий Minecraft (включая последние снапшоты)
+- Поддержка загрузчиков модов: Forge/NeoForge/LiteLoader/OptiFine/Fabric/Quilt/Cleanroom...
+
+⚙️ **Основные преимущества**  
+- Встроенные среды выполнения Java разных версий (Java 8/17/21/25) с возможностью импорта пользовательских версий Java
+- Виртуальная мышь и переназначение клавиш
+- Конвертация раскладок управления между FCL и ZalithLauncher2, импорт раскладок ZL2 с автоматическим преобразованием
+- Поддержка шейдеров (требуются рендереры VirGL/Zink/MG)
+- Гибкое управление ресурсами (моды/модпаки/текстуры/шейдеры/сохранения)
+- Настройка тем оформления (фон/цветовые схемы)
+- Поддержка [плагинов рендеринга](https://github.com/ShirosakiMio/FCLRendererPlugin)
+
+---
+
+## 🎮 Скриншоты
+
+<div align="center">
+  <img src="/.github/images/ui_main_light.jpg" width="30%" alt="Светлая тема">
+  <img src="/.github/images/ui_main_dark.jpg" width="30%" alt="Тёмная тема">
+  <img src="/.github/images/game.jpg" width="30%" alt="Игровой процесс">
+</div>
+
+---
+
+## 📜 Лицензия
+
+Данный проект распространяется под **[лицензией GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html)**
+
+---
+
+## 🌍 Перевод
+
+Присоединяйтесь к переводу проекта! Локализация управляется через [Weblate](https://hosted.weblate.org/projects/foldcraftlauncher/) — никаких инструментов не требуется, просто переводите в браузере.
+
+---
+
+## 🤝 Участие и благодарности
+### Стена участников
+<a href="https://github.com/FCL-Team/FoldCraftLauncher/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=FCL-Team/FoldCraftLauncher" />
+</a>
+
+### Связанные проекты
+- [HMCL](https://github.com/HMCL-dev/HMCL)
+- [Boat и связанные проекты](https://github.com/AOF-Dev/Boat)
+- [PojavLauncher и связанные проекты](https://github.com/PojavLauncherTeam/PojavLauncher)
+- [authlib-injector](https://github.com/yushijinhun/authlib-injector)
+
+### Сторонние компоненты
+
+- [PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher): [GLGPL]
+- Android Support
+  Libraries: [Apache License 2.0](https://android.googlesource.com/platform/prebuilts/maven_repo/android/+/master/NOTICE.txt)
+- [GL4ES](https://github.com/AngelAuraMC/gl4es): [MIT License](https://github.com/ptitSeb/gl4es/blob/master/LICENSE)
+- [NG-GL4ES (Krypton Wrapper)](https://github.com/BZLZHH/NG-GL4ES)
+- [ANGLE](https://chromium.googlesource.com/angle/angle): [All Rights Reserved](app_pojavlauncher/src/main/assets/licenses/ANGLE_LICENSE)
+- [OpenJDK](https://github.com/AngelAuraMC/openjdk-multiarch-jdk8u): [GNU GPLv2 License](https://openjdk.java.net/legal/gplv2+ce.html)
+- [LWJGL3](https://github.com/AngelAuraMC/lwjgl3): [BSD-3 License](https://github.com/LWJGL/lwjgl3/blob/master/LICENSE.md)
+- [LWJGLX](https://github.com/AngelAuraMC/lwjglx) (LWJGL2 API compatibility layer for LWJGL3):
+  unknown license
+- [Mesa 3D Graphics Library](https://gitlab.freedesktop.org/mesa/mesa): [MIT License](https://docs.mesa3d.org/license.html)
+- [bhook](https://github.com/bytedance/bhook) (Used for exit code
+  trapping): [MIT license](https://github.com/bytedance/bhook/blob/main/LICENSE).
+- [libepoxy](https://github.com/anholt/libepoxy): [MIT License](https://github.com/anholt/libepoxy/blob/master/COPYING).
+- [virglrenderer](https://github.com/AngelAuraMC/virglrenderer): [MIT License](https://gitlab.freedesktop.org/virgl/virglrenderer/-/blob/master/COPYING).
+- [OpenAL-Soft](https://github.com/kcat/openal-soft): [GNU GPLv2](app_pojavlauncher/src/main/assets/licenses/OPENAL-SOFT_GPL2)
+    - [oboe](https://github.com/google/oboe): [Apache License 2.0](app_pojavlauncher/src/main/assets/licenses/OBOE_APACHE2).
+    - [pfffft](https://bitbucket.org/jpommier/pffft/src/master/): [ARR](app_pojavlauncher/src/main/assets/licenses/PFFFT_LICENSE)
+- [control-converter](https://github.com/NingZeStudio/control-converter) (конвертер раскладок управления FCL↔ZL2, встроенная реализация на чистом Kotlin на основе семантики cc.py, больше не упакован как `libcc.so`): [MIT License](https://opensource.org/licenses/MIT)

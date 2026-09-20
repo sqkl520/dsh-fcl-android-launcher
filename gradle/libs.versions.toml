@@ -1,0 +1,89 @@
+[versions]
+compileSdk = "35"
+datastore = "1.2.1"
+kotlinxSerializationJson = "1.10.0"
+minSdk = "26"
+targetSdk = "34"
+agp = "8.13.2"
+kotlin = "2.4.10"
+coreKtx = "1.13.0"
+lifecycle = "2.6.2"
+recyclerview = "1.3.1"
+coroutines = "1.9.0"
+taptargetview = "1.14.0"
+nanohttpd = "2.3.1"
+commonsCompress = "1.26.0"
+xz = "1.9"
+opennbt = "1.5"
+gson = "2.10.1"
+appcompat = "1.7.0"
+viewpager2 = "1.1.0"
+coreSplashscreen = "1.0.1"
+material = "1.12.0"
+constraintlayout = "2.2.0"
+glide = "4.16.0"
+touchcontroller = "0.0.5"
+paletteKtx = "1.0.0"
+gamepadRemapper = "2.0.3"
+segmentedButton = "3.1.9"
+commonsIo = "2.15.1"
+tomlj = "1.1.1"
+constantPoolScanner = "1.2"
+jsoup = "1.18.3"
+jelf = "0.9.0"
+bytehook = "1.0.10"
+chardet = "2.5.0"
+junrar = "7.5.5"
+jspecify = "1.0.0"
+androidxTestExtJunit = "1.1.5"
+androidxTestRunner = "1.5.2"
+desugarJdkLibs = "2.1.5"
+room = "2.8.5"
+ksp = "2.3.12"
+
+[libraries]
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
+core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+lifecycle-viewmodel = { group = "androidx.lifecycle", name = "lifecycle-viewmodel", version.ref = "lifecycle" }
+recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
+coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+datastore = { module = "androidx.datastore:datastore", version.ref = "datastore" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+taptargetview = { group = "com.getkeepsafe.taptargetview", name = "taptargetview", version.ref = "taptargetview" }
+nanohttpd = { group = "org.nanohttpd", name = "nanohttpd", version.ref = "nanohttpd" }
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
+xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
+opennbt = { group = "com.github.steveice10", name = "opennbt", version.ref = "opennbt" }
+gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-viewpager2 = { group = "androidx.viewpager2", name = "viewpager2", version.ref = "viewpager2" }
+core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "coreSplashscreen" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
+glide = { group = "com.github.bumptech.glide", name = "glide", version.ref = "glide" }
+touchcontroller = { group = "top.fifthlight.touchcontroller", name = "proxy-client-android", version.ref = "touchcontroller" }
+palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "paletteKtx" }
+gamepad-remapper = { group = "com.github.Mathias-Boulay", name = "android_gamepad_remapper", version.ref = "gamepadRemapper" }
+segmented-button = { group = "com.github.addisonElliott", name = "SegmentedButton", version.ref = "segmentedButton" }
+commons-io = { group = "commons-io", name = "commons-io", version.ref = "commonsIo" }
+tomlj = { group = "org.tomlj", name = "tomlj", version.ref = "tomlj" }
+constant-pool-scanner = { group = "org.jenkins-ci", name = "constant-pool-scanner", version.ref = "constantPoolScanner" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
+jelf = { group = "net.fornwall", name = "jelf", version.ref = "jelf" }
+bytehook = { group = "com.bytedance", name = "bytehook", version.ref = "bytehook" }
+chardet = { module = "org.glavo:chardet", version.ref = "chardet" }
+junrar = { group = "com.github.junrar", name = "junrar", version.ref = "junrar" }
+jspecify = { module = "org.jspecify:jspecify", version.ref = "jspecify" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

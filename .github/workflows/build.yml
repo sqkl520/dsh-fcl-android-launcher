@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+    paths-ignore:
+      - ".github/workflows/**"
+      - "**.md"
+      - "version_map.json"
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build for ${{matrix.arch}}
+    strategy:
+      matrix:
+        arch: ["all", "arm", "arm64", "x86", "x86_64"]
+      fail-fast: false
+    env:
+      FCL_KEYSTORE_PASSWORD: ${{ secrets.FCL_KEYSTORE_PASSWORD }}
+      CURSE_API_KEY: ${{ secrets.CURSE_API_KEY }}
+      OAUTH_API_KEY: ${{ secrets.OAUTH_API_KEY }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: 17
+          cache: "gradle"
+
+      - name: Build release apk
+        if: ${{ github.repository_owner == 'FCL-Team' && github.event_name != 'pull_request' }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assemblerelease -Darch=${{ matrix.arch }} --no-daemon
+
+      - name: Build debug apk
+        if: ${{ github.repository_owner != 'FCL-Team' || github.event_name == 'pull_request' }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assemblefordebug -Darch=${{ matrix.arch }} --no-daemon
+
+      - name: Upload apk
+        uses: actions/upload-artifact@v6
+        with:
+          name: app-${{matrix.arch}}
+          path: FCL/build/outputs/apk/*/*
+        #  retention-days: 1

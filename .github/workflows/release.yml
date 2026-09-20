@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download apks
+        uses: actions/download-artifact@v6
+        with:
+          path: apks
+
+      - name: Extract changelog for current version
+        run: |
+          awk -v tag="$GITHUB_REF_NAME" '
+            $0 ~ "^## \\[" tag "\\]" { found = 1; next }
+            found && $0 ~ "^## \\[" { exit }
+            found { print }
+          ' CHANGELOG.md > RELEASE_BODY.md
+
+      - name: Release
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.TOKEN }}
+          files: apks/**/*.apk
+          body_path: RELEASE_BODY.md

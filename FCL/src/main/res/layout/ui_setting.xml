@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- tab 随内容滚动收起/展开（AppBarLayout 效果） -->
+    <com.mio.ui.widget.FCLAppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@android:color/transparent">
+
+        <com.tungsten.fcllibrary.component.view.FCLTabLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:id="@+id/tab_layout"
+            app:layout_scrollFlags="scroll|enterAlways|snap"
+            android:background="@drawable/bg_tab_top_rounded"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="10dp"
+            android:layout_marginTop="10dp"
+            app:tabUnboundedRipple="false"
+            app:tabGravity="fill"
+            app:tabInlineLabel="true"
+            app:tabMode="auto"
+            app:follow_theme="true"
+            app:tabTextAppearance="@style/TabTextAppearance">
+
+            <com.google.android.material.tabs.TabItem
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:icon="@drawable/ic_baseline_tune_24"
+                android:text="@string/settings_type_global_manage"/>
+
+            <com.google.android.material.tabs.TabItem
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:icon="@drawable/ic_baseline_settings_24"
+                android:text="@string/settings_launcher"/>
+
+            <com.google.android.material.tabs.TabItem
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:icon="@drawable/ic_outline_extension_24"
+                android:text="@string/settings_plugin"/>
+
+            <com.google.android.material.tabs.TabItem
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:icon="@drawable/ic_baseline_info_24"
+                android:text="@string/about"/>
+
+        </com.tungsten.fcllibrary.component.view.FCLTabLayout>
+
+    </com.mio.ui.widget.FCLAppBarLayout>
+
+    <com.tungsten.fcllibrary.component.view.FCLUILayout
+        android:id="@+id/container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior"/>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

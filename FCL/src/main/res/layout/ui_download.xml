@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- tabMode=scrollable：TabLayout 自身即 HorizontalScrollView，页签溢出时可拖动滚动，选中的页签自动滚入视野 -->
+    <com.tungsten.fcllibrary.component.view.FCLTabLayout
+        android:id="@+id/tab_layout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:layout_marginTop="10dp"
+        android:layout_marginEnd="10dp"
+        android:background="@drawable/bg_tab_top_rounded"
+        app:follow_theme="true"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tabInlineLabel="true"
+        app:tabMode="scrollable"
+        app:tabTextAppearance="@style/TabTextAppearance"
+        app:tabUnboundedRipple="false">
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:icon="@drawable/ic_baseline_videogame_asset_24"
+            android:text="@string/version_game" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:icon="@drawable/ic_package_2_outlined"
+            android:text="@string/modpack" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:icon="@drawable/ic_cube"
+            android:text="@string/mods" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:icon="@drawable/ic_baseline_texture_24"
+            android:text="@string/resourcepack" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:icon="@drawable/ic_baseline_earth_24"
+            android:text="@string/world" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:icon="@drawable/ic_baseline_palette_24"
+            android:text="@string/shaderpack" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:icon="@drawable/ic_star_outline"
+            android:text="@string/favorites" />
+
+    </com.tungsten.fcllibrary.component.view.FCLTabLayout>
+
+    <com.tungsten.fcllibrary.component.view.FCLUILayout
+        android:id="@+id/container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/tab_layout" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -1,0 +1,293 @@
+/*
+ * Hello Minecraft! Launcher
+ * Copyright (C) 2020  huangyuhui <huanghongxun2008@126.com> and contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package com.tungsten.fclcore.mod;
+
+import com.tungsten.fclcore.fakefx.beans.property.BooleanProperty;
+import com.tungsten.fclcore.fakefx.beans.property.SimpleBooleanProperty;
+import com.tungsten.fclcore.util.Logging;
+import com.tungsten.fclcore.util.io.FileUtils;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.util.logging.Level;
+import java.util.stream.Collectors;
+
+public final class LocalModFile implements Comparable<LocalModFile> {
+
+    private Path file;
+    private final ModManager modManager;
+    private final LocalMod mod;
+    private final String name;
+    private final Description description;
+    private final String authors;
+    private final String version;
+    private final String gameVersion;
+    private final String url;
+    private final String fileName;
+    private final String logoPath;
+    private final BooleanProperty activeProperty;
+    private RemoteMod.Version remoteVersion;
+
+    public LocalModFile(ModManager modManager, LocalMod mod, Path file, String name, Description description) {
+        this(modManager, mod, file, name, description, "", "", "", "", "");
+    }
+
+    public LocalModFile(ModManager modManager, LocalMod mod, Path file, String name, Description description, String authors, String version, String gameVersion, String url, String logoPath) {
+        this.modManager = modManager;
+        this.mod = mod;
+        this.file = file;
+        // 元数据 record 在真机上 Gson 反序列化缺失字段为 null（构造器不执行），此处归一化回旧类的 "" 默认值
+        this.name = name == null ? "" : name;
+        this.description = description;
+        this.authors = authors == null ? "" : authors;
+        this.version = version == null ? "" : version;
+        this.gameVersion = gameVersion == null ? "" : gameVersion;
+        this.url = url == null ? "" : url;
+        this.logoPath = logoPath == null ? "" : logoPath;
+
+        activeProperty = new SimpleBooleanProperty(this, "active", !modManager.isDisabled(file)) {
+            @Override
+            protected void invalidated() {
+                if (isOld()) return;
+
+                Path path = LocalModFile.this.file.toAbsolutePath();
+
+                try {
+                    if (get())
+                        LocalModFile.this.file = modManager.enableMod(path);
+                    else
+                        LocalModFile.this.file = modManager.disableMod(path);
+                } catch (IOException e) {
+                    Logging.LOG.log(Level.SEVERE, "Unable to invert state of mod file " + path, e);
+                }
+            }
+        };
+
+        fileName = FileUtils.getNameWithoutExtension(ModManager.getModName(file));
+
+        if (isOld()) {
+            mod.getOldFiles().add(this);
+        } else {
+            mod.getFiles().add(this);
+        }
+    }
+
+    public ModManager getModManager() {
+        return modManager;
+    }
+
+    public LocalMod getMod() {
+        return mod;
+    }
+
+    public Path getFile() {
+        return file;
+    }
+
+    public ModLoaderType getModLoaderType() {
+        return mod.getModLoaderType();
+    }
+
+    public String getId() {
+        return mod.getId();
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public Description getDescription() {
+        return description;
+    }
+
+    public String getAuthors() {
+        return authors;
+    }
+
+    public String getVersion() {
+        return version;
+    }
+
+    public String getGameVersion() {
+        return gameVersion;
+    }
+
+    public String getUrl() {
+        return url;
+    }
+
+    public String getLogoPath() {
+        return logoPath;
+    }
+
+    public BooleanProperty activeProperty() {
+        return activeProperty;
+    }
+
+    public boolean isActive() {
+        return activeProperty.get();
+    }
+
+    public void setActive(boolean active) {
+        activeProperty.set(active);
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public boolean isOld() {
+        return modManager.isOld(file);
+    }
+
+    public void setOld(boolean old) throws IOException {
+        file = modManager.setOld(this, old);
+
+        if (old) {
+            mod.getFiles().remove(this);
+            mod.getOldFiles().add(this);
+        } else {
+            mod.getOldFiles().remove(this);
+            mod.getFiles().add(this);
+        }
+    }
+
+    public void disable() throws IOException {
+        file = modManager.disableMod(file);
+    }
+
+    public ModUpdate checkUpdates(String gameVersion, RemoteModRepository repository) throws IOException {
+        Optional<RemoteMod.Version> currentVersion = Optional.empty();
+        try {
+            currentVersion = repository.getRemoteVersionByLocalFile(this, file);
+        } catch (Throwable e) {
+            Logging.LOG.log(Level.SEVERE, e.toString());
+        }
+
+        if (currentVersion.isEmpty()) return null;
+        Optional<RemoteMod.Version> finalCurrentVersion = currentVersion;
+        // 秒级精度比较：网络数据带毫秒/微秒，缓存序列化只保留到秒，精度不一致会让
+        // 同一次发布内的伴生/重传文件首次检查被误判为有更新、二次检查又消失
+        List<RemoteMod.Version> remoteVersions = repository.getRemoteVersionsById(currentVersion.get().modid())
+                .filter(version -> version.gameVersions().contains(gameVersion))
+                .filter(version -> version.loaders().contains(getModLoaderType()))
+                .filter(version -> version.datePublished().truncatedTo(ChronoUnit.SECONDS)
+                        .compareTo(finalCurrentVersion.get().datePublished().truncatedTo(ChronoUnit.SECONDS)) > 0)
+                .sorted(Comparator.comparing(RemoteMod.Version::datePublished).reversed())
+                .collect(Collectors.toList());
+        if (remoteVersions.isEmpty()) return null;
+        return new ModUpdate(this, currentVersion.get(), remoteVersions);
+    }
+
+    @Override
+    public int compareTo(LocalModFile o) {
+        return getFileName().compareToIgnoreCase(o.getFileName());
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        return obj instanceof LocalModFile && Objects.equals(getFileName(), ((LocalModFile) obj).getFileName());
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(getFileName());
+    }
+
+    public RemoteMod.Version getRemoteVersion() {
+        return remoteVersion;
+    }
+
+    public void setRemoteVersion(RemoteMod.Version remoteVersion) {
+        this.remoteVersion = remoteVersion;
+    }
+
+    public static class ModUpdate {
+        private final LocalModFile localModFile;
+        private final RemoteMod.Version currentVersion;
+        private final List<RemoteMod.Version> candidates;
+
+        public ModUpdate(LocalModFile localModFile, RemoteMod.Version currentVersion, List<RemoteMod.Version> candidates) {
+            this.localModFile = localModFile;
+            this.currentVersion = currentVersion;
+            this.candidates = candidates;
+        }
+
+        public LocalModFile getLocalMod() {
+            return localModFile;
+        }
+
+        public RemoteMod.Version getCurrentVersion() {
+            return currentVersion;
+        }
+
+        public List<RemoteMod.Version> getCandidates() {
+            return candidates;
+        }
+    }
+
+    public static class Description {
+        private final List<Part> parts;
+
+        public Description(String text) {
+            this.parts = new ArrayList<>();
+            this.parts.add(new Part(text == null ? "" : text, "black"));
+        }
+
+        public Description(List<Part> parts) {
+            this.parts = parts;
+        }
+
+        public List<Part> getParts() {
+            return parts;
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder builder = new StringBuilder();
+            for (Part part : parts) {
+                builder.append(part.text);
+            }
+            return builder.toString();
+        }
+
+        public static class Part {
+            private final String text;
+            private final String color;
+
+            public Part(String text) {
+                this(text, "");
+            }
+
+            public Part(String text, String color) {
+                this.text = Objects.requireNonNull(text);
+                this.color = Objects.requireNonNull(color);
+            }
+
+            public String getText() {
+                return text;
+            }
+
+            public String getColor() {
+                return color;
+            }
+        }
+    }
+}

@@ -1,0 +1,275 @@
+/*
+ * Hello Minecraft! Launcher
+ * Copyright (C) 2021  huangyuhui <huanghongxun2008@126.com> and contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package com.tungsten.fclcore.mod;
+
+import static com.tungsten.fclcore.util.io.NetworkUtils.encodeLocation;
+
+import androidx.annotation.NonNull;
+
+import com.tungsten.fclcore.mod.curse.CurseForgeRemoteModRepository;
+import com.tungsten.fclcore.mod.modrinth.ModrinthRemoteModRepository;
+import com.tungsten.fclcore.task.FileDownloadTask;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Stream;
+
+public class RemoteMod {
+    private static RemoteMod EMPTY = null;
+
+    public static void registerEmptyRemoteMod(RemoteMod empty) {
+        EMPTY = empty;
+    }
+
+    public static RemoteMod getEmptyRemoteMod() {
+        if (EMPTY == null) {
+            throw new NullPointerException();
+        }
+        return EMPTY;
+    }
+
+    private final String slug;
+    private final String author;
+    private final String title;
+    private final String description;
+    private final List<String> categories;
+    private final String pageUrl;
+    private final String iconUrl;
+    private final IMod data;
+    private final int downloadCount;
+    private String modID;
+
+    public RemoteMod(String slug, String author, String title, String description, List<String> categories, String pageUrl, String iconUrl, IMod data, int downloadCount, String modID) {
+        this.slug = slug;
+        this.author = author;
+        this.title = title;
+        this.description = description;
+        this.categories = categories;
+        this.pageUrl = pageUrl;
+        this.iconUrl = iconUrl;
+        this.data = data;
+        this.downloadCount = downloadCount;
+        this.modID = modID;
+    }
+
+    public String getSlug() {
+        return slug;
+    }
+
+    public String getAuthor() {
+        return author;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public List<String> getCategories() {
+        return categories;
+    }
+
+    public String getPageUrl() {
+        return pageUrl;
+    }
+
+    public String getIconUrl() {
+        return iconUrl;
+    }
+
+    public IMod getData() {
+        return data;
+    }
+
+    public int getDownloadCount() {
+        return downloadCount;
+    }
+
+    public String getModID() {
+        return modID;
+    }
+
+    public void setModID(String modID) {
+        this.modID = modID;
+    }
+
+    public enum VersionType {
+        Release,
+        Beta,
+        Alpha
+    }
+
+    public enum DependencyType {
+        REQUIRED,
+        OPTIONAL,
+        TOOL,
+        INCLUDE,
+        EMBEDDED,
+        INCOMPATIBLE,
+        BROKEN
+    }
+
+    public static final class Dependency {
+        private static Dependency BROKEN_DEPENDENCY = null;
+
+        private final DependencyType type;
+
+        private final RemoteModRepository remoteModRepository;
+
+        private final String id;
+
+        private transient RemoteMod remoteMod = null;
+
+        private Dependency(DependencyType type, RemoteModRepository remoteModRepository, String modid) {
+            this.type = type;
+            this.remoteModRepository = remoteModRepository;
+            this.id = modid;
+        }
+
+        public static Dependency ofGeneral(DependencyType type, RemoteModRepository remoteModRepository, String modid) {
+            if (type == DependencyType.BROKEN) {
+                return ofBroken();
+            } else {
+                return new Dependency(type, remoteModRepository, modid);
+            }
+        }
+
+        public static Dependency ofBroken() {
+            if (BROKEN_DEPENDENCY == null) {
+                BROKEN_DEPENDENCY = new Dependency(DependencyType.BROKEN, null, null);
+            }
+            return BROKEN_DEPENDENCY;
+        }
+
+        public DependencyType getType() {
+            return this.type;
+        }
+
+        public RemoteModRepository getRemoteModRepository() {
+            return this.remoteModRepository;
+        }
+
+        public String getId() {
+            return this.id;
+        }
+
+        public RemoteMod load() throws IOException {
+            if (this.remoteMod == null) {
+                if (this.type == DependencyType.BROKEN) {
+                    this.remoteMod = RemoteMod.getEmptyRemoteMod();
+                } else {
+                    this.remoteMod = this.remoteModRepository.getModById(this.id);
+                }
+            }
+            return this.remoteMod;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            Dependency that = (Dependency) o;
+
+            if (type != that.type) return false;
+            if (!remoteModRepository.equals(that.remoteModRepository)) return false;
+            return id.equals(that.id);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = type.hashCode();
+            result = 31 * result + remoteModRepository.hashCode();
+            result = 31 * result + id.hashCode();
+            return result;
+        }
+    }
+
+    public enum Type {
+        CURSEFORGE(CurseForgeRemoteModRepository.MODS),
+        MODRINTH(ModrinthRemoteModRepository.MODS);
+
+        private final RemoteModRepository remoteModRepository;
+
+        public RemoteModRepository getRemoteModRepository() {
+            return this.remoteModRepository;
+        }
+
+        Type(RemoteModRepository remoteModRepository) {
+            this.remoteModRepository = remoteModRepository;
+        }
+    }
+
+    public interface IMod {
+        List<RemoteMod> loadDependencies(RemoteModRepository modRepository) throws IOException;
+
+        Stream<Version> loadVersions(RemoteModRepository modRepository) throws IOException;
+
+        List<Screenshot> loadScreenshots(RemoteModRepository modRepository) throws IOException;
+    }
+
+    public interface IVersion {
+        Type getType();
+    }
+
+    public record Version(IVersion self, String modid, String name, String version,
+                          String changelog, Instant datePublished, VersionType versionType,
+                          File file, List<Dependency> dependencies, List<String> gameVersions,
+                          List<ModLoaderType> loaders) {
+    }
+
+    public record File(Map<String, String> hashes, String url, String filename) {
+
+        public FileDownloadTask.IntegrityCheck getIntegrityCheck() {
+                if (hashes.containsKey("md5")) {
+                    return new FileDownloadTask.IntegrityCheck("MD5", hashes.get("md5"));
+                } else if (hashes.containsKey("sha1")) {
+                    return new FileDownloadTask.IntegrityCheck("SHA-1", hashes.get("sha1"));
+                } else if (hashes.containsKey("sha256")) {
+                    return new FileDownloadTask.IntegrityCheck("SHA-256", hashes.get("sha256"));
+                } else if (hashes.containsKey("sha512")) {
+                    return new FileDownloadTask.IntegrityCheck("SHA-512", hashes.get("sha512"));
+                } else {
+                    return null;
+                }
+            }
+
+            @Override
+            public String url() {
+                return encodeLocation(url);
+            }
+        }
+
+    public record Screenshot(String imageUrl, String title, String description) {
+
+        @NonNull
+            @Override
+            public String toString() {
+                return "Screenshot{" +
+                        "imageUrl='" + imageUrl + '\'' +
+                        ", title='" + title + '\'' +
+                        ", description=" + description +
+                        '}';
+            }
+        }
+}

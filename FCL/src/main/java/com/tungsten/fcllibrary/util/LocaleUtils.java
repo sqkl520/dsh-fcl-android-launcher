@@ -1,0 +1,140 @@
+package com.tungsten.fcllibrary.util;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.res.Configuration;
+import android.os.LocaleList;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+
+public class LocaleUtils {
+
+    /**
+     * 0: System
+     * 1: English
+     * 2: Simplified Chinese
+     * 3: Russian
+     * 4: Brazilian Portuguese
+     * 5: Persian
+     * 6: Ukrainian
+     * 7: German
+     * 8: Traditional Chinese (Hong Kong)
+     * 9: Japanese
+     * 10: Turkish
+     * 11: Traditional Chinese (Taiwan)
+     */
+    public static Locale RUSSIAN = new Locale("ru");
+    public static Locale BRAZILIAN_PORTUGUESE = new Locale("pt", "BR");
+    public static Locale PERSIAN = new Locale("fa");
+    public static Locale UKRAINIAN = new Locale("uk");
+    public static Locale GERMAN = new Locale("de");
+    public static Locale HK = new Locale("zh", "HK");
+    public static Locale JAPANESE = new Locale("ja");
+    public static Locale TURKISH = new Locale("tr");
+    public static Locale TW = new Locale("zh", "TW");
+
+    private static DateTimeFormatter dateTimeFormatter;
+
+    public static final boolean IS_CHINA_MAINLAND = isChinaMainland();
+
+    private static boolean isChinaMainland() {
+        if ("Asia/Shanghai".equals(ZoneId.systemDefault().getId()))
+            return true;
+
+        // 手动计算 8 小时对应的秒数（兼容 API 26）
+        long offsetSeconds = ZonedDateTime.now().getOffset().getTotalSeconds();
+        long eightHoursInSeconds = 8 * 3600; // 8 小时 = 8 * 3600 秒
+        if (offsetSeconds == eightHoursInSeconds) {
+            return "CN".equals(Locale.getDefault().getCountry());
+        }
+
+        return false;
+    }
+
+    public static boolean isChinese(Context context) {
+        SharedPreferences sharedPreferences = context.getSharedPreferences("launcher", Context.MODE_PRIVATE);
+        int lang = sharedPreferences.getInt("lang", 0);
+        return lang == 2 || lang == 8 || lang == 11 || (lang == 0 && getSystemLocale().getLanguage().startsWith("zh"));
+    }
+
+    public static int getLanguage(Context context) {
+        SharedPreferences sharedPreferences = context.getSharedPreferences("launcher", Context.MODE_PRIVATE);
+        return sharedPreferences.getInt("lang", 0);
+    }
+
+    public static Context setLanguage(Context context) {
+        SharedPreferences sharedPreferences = context.getSharedPreferences("launcher", Context.MODE_PRIVATE);
+        return updateResources(context, sharedPreferences.getInt("lang", 0));
+    }
+
+    public static void changeLanguage(Context context, int lang) {
+        SharedPreferences sharedPreferences = context.getSharedPreferences("launcher", Context.MODE_PRIVATE);
+        @SuppressLint("CommitPrefEdits") SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putInt("lang", lang);
+        editor.apply();
+    }
+
+    private static Context updateResources(Context context, int lang) {
+        Locale locale = getLocale(lang);
+        Configuration configuration = context.getResources().getConfiguration();
+        configuration.setLocale(locale);
+        configuration.setLocales(new LocaleList(locale));
+        return context.createConfigurationContext(configuration);
+    }
+
+    public static Locale getLocale(int lang) {
+        switch (lang) {
+            case 1:
+                return Locale.ENGLISH;
+            case 2:
+                return Locale.CHINA;
+            case 3:
+                return RUSSIAN;
+            case 4:
+                return BRAZILIAN_PORTUGUESE;
+            case 5:
+                return PERSIAN;
+            case 6:
+                return UKRAINIAN;
+            case 7:
+                return GERMAN;
+            case 8:
+                return HK;
+            case 9:
+                return JAPANESE;
+            case 10:
+                return TURKISH;
+            case 11:
+                return TW;
+            default:
+                return getSystemLocale();
+        }
+    }
+
+    public static Locale getSystemLocale() {
+        return LocaleList.getDefault().get(0);
+    }
+
+    public static String formatDateTime(Context context, Instant instant) {
+        return getDateTimeFormatter(context).format(instant);
+    }
+
+    public static DateTimeFormatter getDateTimeFormatter(Context context) {
+        if (dateTimeFormatter == null) {
+            @SuppressLint("DiscouragedApi") int resId = context.getResources().getIdentifier("world_time", "string", context.getPackageName());
+            String time = "EEE, MMM d, yyyy HH:mm:ss";
+            if (resId != 0) {
+                time = context.getString(resId);
+            }
+            dateTimeFormatter = DateTimeFormatter.ofPattern(time).withZone(ZoneId.systemDefault());
+        }
+        return dateTimeFormatter;
+    }
+
+}
