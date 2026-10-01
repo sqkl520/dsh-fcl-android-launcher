@@ -46,7 +46,12 @@ public class FCLPath {
     public static void loadPaths(Context context) {
         NATIVE_LIB_DIR = context.getApplicationInfo().nativeLibraryDir;
 
-        LOG_DIR = Environment.getExternalStorageDirectory().getAbsolutePath() + "/FCL/log";
+        // [M-02] 原为 /sdcard/FCL/log。存储权限已随本次变更移除（MANAGE_EXTERNAL_STORAGE /
+        // READ|WRITE_EXTERNAL_STORAGE 全部删除），targetSdk 34 下该目录不可写，
+        // Logging.start 的 catch(IOException) 会静默吞掉异常 —— fcl.log 永远建不出来，
+        // 崩溃后无可取证文件；而 SplashActivity 的 KDoc 却声称"日志全在私有目录"，
+        // 属文档级误导。迁到 App 私有目录，无需任何权限，随 App 卸载自动清理。
+        LOG_DIR = context.getDir("log", 0).getAbsolutePath();
         CACHE_DIR = context.getCacheDir() + "/fclauncher";
 
         RUNTIME_DIR = context.getDir("runtime", 0).getAbsolutePath();

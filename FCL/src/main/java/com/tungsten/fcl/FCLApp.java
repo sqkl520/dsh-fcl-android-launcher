@@ -28,6 +28,17 @@ public class FCLApp extends Application implements Application.ActivityLifecycle
     public void onCreate() {
         super.onCreate();
         this.registerActivityLifecycleCallbacks(this);
+        // [M-01] FCLPath 是所有 Activity（含 com.dsh.*）与 ThemeEngine 的隐式前置。
+        // 原先它在 FCLActivity.onCreate 里被 hasPermission 门控调用；本次删除存储权限后
+        // 该分支恒不可达（isExternalStorageManager() 恒 false、checkSelfPermission 恒 DENIED），
+        // 于是全仓库只剩 SplashActivity 一条路径会初始化它 —— 通知栏 PendingIntent
+        // 冷启动（DshRuntimeService -> DshInstancesActivity）会绕过启动页。
+        // 上提到 Application 层，保证任何入口（Activity / Service / PendingIntent / 测试）
+        // 在首次读取 FCLPath.* 之前就已就绪。
+        //
+        // 注意：loadPaths() 幂等（纯赋值 + exists()/mkdirs()），重复调用安全；
+        // 调用点唯一性由 SplashActivity.kt 中已删除的对应调用保证 —— 不要在那里加回去。
+        com.tungsten.fclauncher.utils.FCLPath.loadPaths(this);
         // DeepSeek Harness 启动器：初始化路径与实例仓库。
         // 只用 App 私有目录（filesDir/cacheDir），不需要任何存储权限；幂等。
         com.dsh.core.DshPaths.loadPaths(this);

@@ -22,10 +22,19 @@ import java.nio.file.Paths
  *
  * [外壳改造] 本 app 是 **DeepSeek Harness (dsh) 启动器**，不再需要 FCL 那套 Minecraft
  * 运行时门禁（LWJGL / Caciocavallo / JRE 8·17·21·25 / JNA）与 MC 主界面，
- * 因此启动流程简化为：初始化 dsh 路径 → 直接进入 dsh 实例列表。
+ * 因此启动流程简化为：直接进入 dsh 实例列表。
  *
- * 也不再申请外部存储权限：dsh 的 rootfs / 实例 / 日志全部在 App 私有目录
+ * 也不再申请外部存储权限：dsh 的 rootfs / 实例全部在 App 私有目录
  * （filesDir / cacheDir）内，无需 MANAGE_EXTERNAL_STORAGE。
+ *
+ * 路径初始化（FCLPath / DshPaths）**均不在此处**：已上提到 [com.tungsten.fcl.FCLApp]
+ * 的 onCreate，见该文件内 [M-01] 注释。本页只**消费** FCLPath.LOG_DIR，不负责初始化 ——
+ * 若在此处加回 loadPaths()，会重新制造"必须先经过启动页"的隐式依赖（通知栏
+ * PendingIntent 冷启动会绕过本页），未来任一处改参数另一处不受影响。
+ *
+ * 日志：[M-02] fcl.log 写入 App 私有目录（FCLPath.LOG_DIR = context.getDir("log", 0)），
+ * 随 App 卸载清理；不写外部存储 —— 存储权限已移除。注：dsh 自身运行日志走
+ * DshLogBus / <filesDir>/dsh/logs/runtime.log，与此处 fcl.log 是两套。
  */
 @SuppressLint("CustomSplashScreen")
 class SplashActivity : FCLActivity() {
@@ -46,7 +55,9 @@ class SplashActivity : FCLActivity() {
     private fun init() {
         lifecycleScope.launch {
             async(Dispatchers.IO) {
-                FCLPath.loadPaths(this@SplashActivity)
+                // 注意：此处不再调用 FCLPath.loadPaths()。初始化已上提到 FCLApp.onCreate，
+                // 见该文件内 [M-01] 注释。若在此处加回，会造成两处初始化，未来任一处改参数
+                // 另一处不受影响 —— 这正是本次要消除的隐式依赖。此处仅消费 FCLPath.LOG_DIR。
                 Logging.start(Paths.get(FCLPath.LOG_DIR))
             }.await()
             enterDsh()
