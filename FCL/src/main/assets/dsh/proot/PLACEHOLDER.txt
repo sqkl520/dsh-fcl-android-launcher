@@ -1,0 +1,2 @@
+把真实 arm64 proot 二进制放这里(libproot.so / libproot_loader.so)，或用 jniLibs 方案(推荐)。
+详见本 assets 根目录 README.md。占位文件不影响编译，但运行前必须替换为真二进制。

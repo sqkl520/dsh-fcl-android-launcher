@@ -17,13 +17,16 @@
  */
 package com.tungsten.fclcore.util.io;
 
-import com.tungsten.fclcore.download.ArtifactMalformedException;
 import com.tungsten.fclcore.util.DigestUtils;
 
 import java.io.IOException;
 import java.nio.file.Path;
 
-public final class ChecksumMismatchException extends ArtifactMalformedException {
+/**
+ * [外壳改造] 原继承自 {@code com.tungsten.fclcore.download.ArtifactMalformedException}
+ * （MC 下载链路），该包已随 MC 移除；这里改为直接继承 {@link IOException}。
+ */
+public final class ChecksumMismatchException extends IOException {
 
     private final String algorithm;
     private final String expectedChecksum;

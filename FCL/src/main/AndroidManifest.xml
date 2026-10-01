@@ -2,59 +2,40 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-feature android:glEsVersion="0x00020000" />
-    <uses-feature
-        android:name="android.hardware.type.pc"
-        android:required="false" />
+    <!-- [外壳改造] 已移除 Minecraft 专属权限与组件，只保留 dsh 启动器需要的。 -->
 
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission
-        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+    <!-- 网络：npm registry 拉版本、DeepSeek 云端 API -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- 保活 dsh web 长驻进程 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-    <uses-permission
-        android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"
-        tools:ignore="HighSamplingRate" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".FCLApp"
         android:allowBackup="true"
-        android:allowNativeHeapPointerTagging="false"
-        android:appCategory="game"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:hasFragileUserData="true"
         android:icon="@mipmap/ic_launcher"
-        android:isGame="true"
         android:label="@string/app_name"
-        android:largeHeap="true"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:preserveLegacyExternalStorage="true"
-        android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.FoldCraftLauncher"
         android:usesCleartextTraffic="true"
         tools:ignore="DiscouragedApi"
         tools:targetApi="33">
+
         <activity
             android:name=".activity.SplashActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
             android:exported="true"
-            android:screenOrientation="sensorLandscape"
-            android:theme="@style/Theme.Splash">
+            android:screenOrientation="sensorPortrait"
+            android:theme="@style/Theme.Splash"
+            tools:ignore="LockedOrientationActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
@@ -62,109 +43,57 @@
             </intent-filter>
         </activity>
 
-        <activity-alias
-            android:name=".ImportActivity"
-            android:exported="true"
-            android:label="@string/app_name_import"
-            android:targetActivity=".activity.SplashActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data android:scheme="file" />
-                <data android:scheme="content" />
-                <data android:mimeType="application/zip" />
-                <data android:mimeType="application/x-zip-compressed" />
-                <data android:mimeType="application/x-7z-compressed" />
-                <data android:mimeType="application/octet-stream" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data android:scheme="file" />
-                <data android:scheme="content" />
-                <data android:host="*" />
-                <data android:pathPattern=".*\\.zip" />
-                <data android:pathPattern=".*\\.mrpack" />
-                <data android:pathPattern=".*\\.7z" />
-            </intent-filter>
-        </activity-alias>
-
+        <!-- DeepSeek Harness (dsh) 启动器页面：实例 / 下载 / 日志 / 设置 / WebView -->
         <activity
-            android:name=".activity.MainActivity"
+            android:name="com.dsh.ui.DshInstancesActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorLandscape" />
+            android:screenOrientation="sensorPortrait"
+            tools:ignore="LockedOrientationActivity" />
         <activity
-            android:name=".activity.WebActivity"
+            android:name="com.dsh.ui.DshDownloadActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorLandscape" />
+            android:screenOrientation="sensorPortrait"
+            tools:ignore="LockedOrientationActivity" />
         <activity
-            android:name=".activity.ControllerActivity"
+            android:name="com.dsh.ui.DshLogsActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorLandscape" />
+            android:screenOrientation="sensorPortrait"
+            tools:ignore="LockedOrientationActivity" />
         <activity
-            android:name=".activity.ShellActivity"
+            android:name="com.dsh.ui.DshSettingsActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
             android:screenOrientation="sensorPortrait"
             android:windowSoftInputMode="adjustResize"
             tools:ignore="LockedOrientationActivity" />
         <activity
-            android:name=".activity.JVMActivity"
-            android:alwaysRetainTaskState="true"
+            android:name="com.dsh.ui.DshWebViewActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:launchMode="standard"
-            android:screenOrientation="sensorLandscape" />
-        <activity
-            android:name=".activity.JVMCrashActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:process=":crash"
-            android:screenOrientation="sensor" />
+            android:screenOrientation="sensor"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- fcllibrary 通用件（非 MC）：文件浏览、崩溃上报 -->
         <activity
             android:name="com.tungsten.fcllibrary.browser.FileBrowserActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorLandscape" />
+            android:screenOrientation="sensorPortrait" />
         <activity
             android:name="com.tungsten.fcllibrary.crash.CrashReportActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
             android:screenOrientation="sensor" />
 
+        <!-- dsh 运行时前台服务：保活 dsh web 长驻进程。
+             dataSync 在 Android 15 起有"每天累计 6 小时"的限制，对长时间挂着的 agent 是硬伤，
+             因此同时声明 specialUse（API 34+ 运行时会优先用它）。 -->
         <service
-            android:name="com.tungsten.fclcore.download.ProcessService"
+            android:name="com.dsh.core.DshRuntimeService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync"
-            android:process=":jvm" />
-        <service
-            android:name="com.mio.download.DownloadService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-        <service
-            android:name=".terracotta.TerracottaVPNService"
-            android:exported="true"
-            android:foregroundServiceType="connectedDevice|dataSync"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            tools:ignore="VpnServicePolicy">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a local AI agent server (dsh web) that the user started and can stop at any time." />
         </service>
 
-        <provider
-            android:name=".scoped.FolderProvider"
-            android:authorities="${applicationId}.document.provider"
-            android:exported="true"
-            android:grantUriPermissions="true"
-            android:permission="android.permission.MANAGE_DOCUMENTS">
-            <intent-filter>
-                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
-            </intent-filter>
-        </provider>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"
@@ -180,14 +109,4 @@
             android:exported="false"
             android:initOrder="101" />
     </application>
-    <queries>
-        <package android:name="net.kdt.pojavlaunch.ffmpeg" />
-
-        <intent>
-            <action android:name="android.intent.action.MAIN" />
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.TTS_SERVICE" />
-        </intent>
-    </queries>
 </manifest>

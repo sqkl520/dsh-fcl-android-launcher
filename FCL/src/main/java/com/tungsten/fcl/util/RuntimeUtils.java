@@ -3,11 +3,7 @@ package com.tungsten.fcl.util;
 import android.content.Context;
 import android.system.Os;
 
-import com.tungsten.fcl.R;
-import com.tungsten.fclauncher.FCLauncher;
-import com.tungsten.fclauncher.utils.Architecture;
 import com.tungsten.fclcore.util.Logging;
-import com.tungsten.fclcore.util.Pack200Utils;
 import com.tungsten.fclcore.util.io.FileUtils;
 import com.tungsten.fclcore.util.io.IOUtils;
 
@@ -23,6 +19,14 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 
+/**
+ * 资产解压工具。
+ *
+ * [外壳改造] 原 FCL 版本还包含 {@code installJna} / {@code installJava} / {@code patchJava}
+ * （为 Minecraft 运行时装 JRE、JNA、打 freetype/jsound 补丁），那些已随 MC 一起移除。
+ * 现在只保留 dsh 首启解压（{@link com.dsh.core.DshBootstrap}）用到的通用部分：
+ * version 比对、assets 目录复制、tar.xz 解压（含符号链接处理）。
+ */
 public class RuntimeUtils {
 
     /**
@@ -65,53 +69,6 @@ public class RuntimeUtils {
         FileUtils.deleteDirectory(new File(targetDir));
         new File(targetDir).mkdirs();
         copyAssets(context, srcDir, targetDir, listener);
-    }
-
-    public static void installJna(Context context, String targetDir, String srcDir) throws IOException {
-        installJna(context, targetDir, srcDir, null);
-    }
-
-    public static void installJna(Context context, String targetDir, String srcDir, InstallListener listener) throws IOException {
-        FileUtils.deleteDirectory(new File(targetDir));
-        new File(targetDir).mkdirs();
-        copyAssets(context, srcDir + "/version", targetDir + "/version", listener);
-        // assets 按 <版本>/natives/<abi>/libjnidispatch.so 分架构存放，
-        // 将当前架构的 so 复制到 <版本>/ 下，得到运行时加载所需的 libjnidispatch.so 结构
-        String abi = Architecture.archAsStringAndroid(Architecture.getDeviceArchitecture());
-        for (String version : context.getAssets().list(srcDir)) {
-            String nativesDir = srcDir + "/" + version + "/natives/" + abi;
-            if (context.getAssets().list(nativesDir).length > 0) {
-                copyAssets(context, nativesDir, targetDir + "/" + version, listener);
-            }
-        }
-    }
-
-    @SuppressWarnings("ResultOfMethodCallIgnored")
-    public static void installJava(Context context, String targetDir, String srcDir) throws IOException {
-        installJava(context, targetDir, srcDir, null);
-    }
-
-    @SuppressWarnings("ResultOfMethodCallIgnored")
-    public static void installJava(Context context, String targetDir, String srcDir, InstallListener listener) throws IOException {
-        FileUtils.deleteDirectory(new File(targetDir));
-        new File(targetDir).mkdirs();
-        String universalPath = srcDir + "/universal.tar.xz";
-        String archName = "bin-" + Architecture.archAsString(Architecture.getDeviceArchitecture()) + ".tar.xz";
-        String archPath = srcDir + "/" + archName;
-        String version = IOUtils.readFullyAsString(RuntimeUtils.class.getResourceAsStream("/assets/" + srcDir + "/version"));
-        if (listener != null) {
-            listener.onUpdate("universal.tar.xz");
-        }
-        uncompressTarXZ(context.getAssets().open(universalPath), new File(targetDir), listener);
-        if (listener != null) {
-            listener.onUpdate(archName);
-        }
-        uncompressTarXZ(context.getAssets().open(archPath), new File(targetDir), listener);
-        FileUtils.writeText(new File(targetDir + "/version"), version);
-        if (listener != null) {
-            listener.onStage(R.string.splash_runtime_patching);
-        }
-        patchJava(context, targetDir);
     }
 
     @SuppressWarnings("ResultOfMethodCallIgnored")
@@ -215,38 +172,6 @@ public class RuntimeUtils {
             tarEntry = tarIn.getNextTarEntry();
         }
         tarIn.close();
-    }
-
-    @SuppressWarnings("ResultOfMethodCallIgnored")
-    public static void patchJava(Context context, String javaPath) throws IOException {
-        Pack200Utils.unpack(context.getApplicationInfo().nativeLibraryDir, javaPath);
-        File dest = new File(javaPath);
-        if (!dest.exists())
-            return;
-        String libFolder = FCLauncher.getJavaLibDir(javaPath);
-        if (FCLauncher.isJDK8(javaPath)) {
-            libFolder = "/jre" + libFolder;
-        }
-        File ftIn = new File(dest, libFolder + "/libfreetype.so.6");
-        File ftOut = new File(dest, libFolder + "/libfreetype.so");
-        if (ftIn.exists() && (!ftOut.exists() || ftIn.length() != ftOut.length())) {
-            ftIn.renameTo(ftOut);
-        }
-        ftIn = new File(dest, FCLauncher.getJavaLibDir(javaPath) + "/libfreetype.so");
-        if (FCLauncher.isJDK8(javaPath) && ftIn.exists()) {
-            ftIn.renameTo(ftOut);
-        }
-        File fileLib = new File(dest, libFolder + "/libawt_xawt.so");
-        fileLib.delete();
-        FileUtils.copyFile(new File(context.getApplicationInfo().nativeLibraryDir, "libawt_xawt.so"), fileLib);
-        // 补装 libjsound.so：jre17/21/25 资产原生缺失该库，jre8 自带的 ALSA 版在
-        // Android 上无后端，统一替换为 OpenAL 后端的原生 Java Sound 实现
-        File jsound = new File(context.getApplicationInfo().nativeLibraryDir, "libjsound.so");
-        if (jsound.exists()) {
-            File jsoundDest = new File(dest, libFolder + "/libjsound.so");
-            jsoundDest.delete();
-            FileUtils.copyFile(jsound, jsoundDest);
-        }
     }
 
 }

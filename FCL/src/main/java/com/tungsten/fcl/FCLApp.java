@@ -26,10 +26,12 @@ public class FCLApp extends Application implements Application.ActivityLifecycle
 
     @Override
     public void onCreate() {
-        // enabledStrictMode();
         super.onCreate();
         this.registerActivityLifecycleCallbacks(this);
-//        PerfUtil.install();
+        // DeepSeek Harness 启动器：初始化路径与实例仓库。
+        // 只用 App 私有目录（filesDir/cacheDir），不需要任何存储权限；幂等。
+        com.dsh.core.DshPaths.loadPaths(this);
+        com.dsh.core.DshInstances.init();
     }
 
     @NotNull

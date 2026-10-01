@@ -1,7 +1,6 @@
 package com.mio.util
 
 import android.content.Context
-import com.mio.dialog.ItemSelectionDialog
 import com.tungsten.fcl.R
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.dialog.FCLDialog
@@ -17,20 +16,6 @@ fun showErrorDialog(context: Context, message: String) {
         .setNegativeButton(context.getString(R.string.dialog_positive)) { }
         .create()
         .show()
-}
-
-@JvmOverloads
-fun showItemSelectionDialog(
-    context: Context,
-    title: String = "",
-    items: List<String>,
-    small: Boolean = true,
-    selectedIndex: Int = -1,
-    callback: (Int, String) -> Unit
-) {
-    ItemSelectionDialog(context, title, items, small, selectedIndex) { position, item ->
-        callback(position, item)
-    }.show()
 }
 
 fun showWarningDialog(context: Context, message: String, onConfirm: () -> Unit) {

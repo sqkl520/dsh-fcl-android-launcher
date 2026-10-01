@@ -26,10 +26,8 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.tungsten.fcl.FCLApp
 import com.tungsten.fcl.R
-import com.tungsten.fcl.activity.WebActivity
 import com.tungsten.fclcore.util.Logging
 import com.tungsten.fclcore.util.io.FileUtils
-import net.fornwall.jelf.ElfFile
 import java.io.DataInputStream
 import java.io.File
 import java.io.RandomAccessFile
@@ -75,67 +73,6 @@ fun getElfArchFromSo(filePath: String): String {
     }
 }
 
-fun checkElfIsAndroid(file: File): Boolean {
-    val elfFile = ElfFile.from(file)
-    var isAndroid = true
-    elfFile.dynamicSection.neededLibraries.forEach {
-        if (Regex("lib[^.]+\\.so\\.\\d+").matches(it)) {
-            isAndroid = false
-        }
-    }
-    return isAndroid
-}
-
-fun getElfArchFromZip(zipFile: File, elfEntryPath: String): String {
-    var arch = ""
-    try {
-        ZipFile(zipFile).let { zip ->
-            val entry = zip.entries().toList().find { it.name == elfEntryPath }
-            if (entry == null || entry.isDirectory) {
-                return@let
-            }
-            zip.getInputStream(entry).let { stream ->
-                DataInputStream(stream).let { dataStream ->
-                    val magic = ByteArray(4)
-                    dataStream.readFully(magic)
-                    if (!(magic[0] == 0x7F.toByte() && magic[1] == 'E'.code.toByte() &&
-                                magic[2] == 'L'.code.toByte() && magic[3] == 'F'.code.toByte())
-                    ) {
-                        return@let
-                    }
-                    val eIdentRest = ByteArray(12)
-                    dataStream.readFully(eIdentRest)
-                    val eiData = eIdentRest[1].toInt()
-                    dataStream.skipBytes(2)
-                    val machineBytes = ByteArray(2)
-                    dataStream.readFully(machineBytes)
-                    val byteOrder = when (eiData) {
-                        1 -> ByteOrder.LITTLE_ENDIAN
-                        2 -> ByteOrder.BIG_ENDIAN
-                        else -> ByteOrder.LITTLE_ENDIAN
-                    }
-                    val machineType = ByteBuffer.wrap(machineBytes)
-                        .order(byteOrder)
-                        .short.toInt() and 0xFFFF
-                    arch = when (machineType) {
-                        0x03 -> "x86"
-                        0x3E -> "x86_64"
-                        0x28 -> "ARM"
-                        0xB7 -> "AArch64"
-                        0x08 -> "MIPS"
-                        0xF3 -> "RISC-V"
-                        0x2A -> "SPARC"
-                        0x18 -> "ARM64"
-                        else -> ""
-                    }
-                }
-            }
-        }
-    } catch (_: Exception) {
-    }
-    return arch
-}
-
 private fun getMemoryInfo(context: Context): ActivityManager.MemoryInfo {
     return ActivityManager.MemoryInfo().apply {
         ((context.getSystemService(Context.ACTIVITY_SERVICE)) as ActivityManager).getMemoryInfo(this)
@@ -168,16 +105,6 @@ fun openLink(context: Context, link: String) {
         Toast.makeText(context, context.getString(R.string.open_link_failed), Toast.LENGTH_LONG)
             .show()
     }
-}
-
-fun openLinkWithBuiltinWebView(context: Context, link: String) {
-    val intent = Intent(context, WebActivity::class.java).apply {
-        putExtras(Bundle().apply { putString("url", link) })
-        // 复用已打开的登录页，避免事件重复触发时堆叠多个实例
-        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-    }
-    // 调用方多为 OAuth 后台线程，统一切到主线程启动页面
-    Handler(Looper.getMainLooper()).post { context.startActivity(intent) }
 }
 
 fun copyText(context: Context, text: String) {

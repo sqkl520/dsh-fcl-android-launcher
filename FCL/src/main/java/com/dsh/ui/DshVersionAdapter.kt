@@ -1,0 +1,92 @@
+package com.dsh.ui
+
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.RecyclerView
+import com.dsh.core.DshVersionListItem
+import com.tungsten.fcl.R
+import com.tungsten.fcl.databinding.ItemDshVersionBinding
+
+/**
+ * 下载页版本列表 Adapter。已安装的版本显示"已安装"角标、隐藏安装按钮。
+ *
+ * ## 本次改造
+ * - [DiffUtil] 替代全量重绘（列表有 20+ 项，每次刷新都重建会很跳）。
+ * - 正在安装的版本按钮变成"安装中…"并禁用：原来连点会创建多个实例、并发跑多个 npm。
+ */
+class DshVersionAdapter(
+    private val onInstall: (DshVersionListItem) -> Unit
+) : RecyclerView.Adapter<DshVersionAdapter.VH>() {
+
+    private var items: List<DshVersionListItem> = emptyList()
+    private var installingVersions: Set<String> = emptySet()
+
+    fun submit(list: List<DshVersionListItem>) {
+        val newItems = ArrayList(list)
+        val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+            override fun getOldListSize(): Int = items.size
+            override fun getNewListSize(): Int = newItems.size
+            override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
+                items[oldPos].version == newItems[newPos].version
+
+            override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
+                items[oldPos] == newItems[newPos]
+        })
+        items = newItems
+        diff.dispatchUpdatesTo(this)
+    }
+
+    /** 正在安装的版本集合（按钮态） */
+    fun submitInstalling(versions: Set<String>) {
+        installingVersions = versions
+        notifyItemRangeChanged(0, itemCount)
+    }
+
+    class VH(val binding: ItemDshVersionBinding) : RecyclerView.ViewHolder(binding.root)
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
+        VH(ItemDshVersionBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        val item = items[position]
+        val b = holder.binding
+        val ctx = b.root.context
+        b.version.text = item.version
+
+        if (item.tag != null) {
+            b.tag.visibility = View.VISIBLE
+            b.tag.text = item.tag
+        } else {
+            b.tag.visibility = View.GONE
+        }
+
+        // 体积文本：tarball 解压大小 + 提示实际安装约 300MB（含依赖）
+        b.size.text = ctx.getString(R.string.dsh_version_size, item.sizeText)
+
+        val installing = installingVersions.contains(item.version)
+        when {
+            installing -> {
+                b.installedBadge.visibility = View.VISIBLE
+                b.installedBadge.text = ctx.getString(R.string.dsh_state_installing)
+                b.installedBadge.setTextColor(0xFF888888.toInt())
+                b.btnInstall.visibility = View.GONE
+            }
+            item.installed -> {
+                b.installedBadge.visibility = View.VISIBLE
+                b.installedBadge.text = ctx.getString(R.string.dsh_installed)
+                b.installedBadge.setTextColor(0xFF4CAF50.toInt())
+                b.btnInstall.visibility = View.GONE
+            }
+            else -> {
+                b.installedBadge.visibility = View.GONE
+                b.btnInstall.visibility = View.VISIBLE
+                b.btnInstall.isEnabled = true
+                b.btnInstall.setOnClickListener { onInstall(item) }
+            }
+        }
+    }
+
+    override fun getItemCount(): Int = items.size
+}
