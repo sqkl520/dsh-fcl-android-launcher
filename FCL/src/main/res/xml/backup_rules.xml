@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older that API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+  自动备份规则（Android 11 及以下；API 31+ 用 data_extraction_rules.xml）。
+
+  ## 本次收紧（审查发现 P2）
+  `<filesDir>/dsh/` 是 dsh 运行时目录，内含 rootfs（数百 MB）、npm 缓存、各实例的
+  node_modules（每实例约 300MB）与运行日志。自动备份/云备份对单个 App 只有约 25MB 配额：
+  - 备份它会瞬间撑爆配额（把别的 App 的数据挤掉），且上传体积巨大；
+  - 恢复也没有意义：version 文件是按本机 assets 比对的，恢复后仍要重新解包；
+    实例清单（instances.json）本身可由界面重建。
+  因此整目录排除。API 密钥密文（instances/<id>/credentials.enc）也在其中：它用本机
+  Keystore 主密钥加密，换机后本就解不开（界面会显示"无法解密"），排除反而避免误解。
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="file" path="dsh/" />
 </full-backup-content>

@@ -138,6 +138,16 @@ class DshInstancesActivity : FCLActivity() {
     }
 
     private fun notifyIfNeeded(st: DshRuntime.State) {
+        // ★ 新一轮生命周期开始（Idle/Starting/Stopping）时清掉"已提示过"标记。
+        // 否则同一个原因连续失败两次（例如第二次仍然超时）会因为 Failed 数据类相等而被静默吞掉：
+        // 用户只会在第一次看到失败弹窗。
+        if (st is DshRuntime.State.Idle ||
+            st is DshRuntime.State.Starting ||
+            st is DshRuntime.State.Stopping
+        ) {
+            lastNotifiedState = null
+            return
+        }
         if (st == lastNotifiedState) return
         when (st) {
             is DshRuntime.State.Failed -> {

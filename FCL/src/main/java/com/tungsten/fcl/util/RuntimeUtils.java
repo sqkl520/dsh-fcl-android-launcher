@@ -15,6 +15,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
@@ -28,6 +30,25 @@ import java.util.logging.Level;
  * version 比对、assets 目录复制、tar.xz 解压（含符号链接处理）。
  */
 public class RuntimeUtils {
+
+    /**
+     * 按 tar 头还原"可执行位"。
+     *
+     * 只在 tar 里带 x 位时动作（普通数据文件直接返回）。目标权限 = tar 里的 mode，另加 owner 的 x。
+     */
+    private static void restoreExecutableBit(File path, TarArchiveEntry entry) {
+        int mode = entry.getMode();
+        if ((mode & 0111) == 0) return;
+        int target = (mode & 0777) | 0100;
+        try {
+            Os.chmod(path.getAbsolutePath(), target);
+        } catch (Throwable e) {
+            // Os.chmod 在非 Android 环境（单元测试）不可用：退回 Java API
+            if (!path.setExecutable(true, false)) {
+                Logging.LOG.log(Level.WARNING, "chmod failed: " + path + " (" + e.getMessage() + ")");
+            }
+        }
+    }
 
     /**
      * 安装进度回调，回调运行在后台线程，实现方需自行切换到主线程刷新 UI。
@@ -131,22 +152,24 @@ public class RuntimeUtils {
         uncompressTarXZ(tarFileInputStream, dest, null);
     }
 
+    /** 解压文件时的拷贝缓冲区：原来固定 1024 字节，解压 300MB+ 的 rootfs 时会多出几十万次系统调用 */
+    private static final int EXTRACT_BUFFER_SIZE = 64 * 1024;
+
     @SuppressWarnings("ResultOfMethodCallIgnored")
     public static void uncompressTarXZ(final InputStream tarFileInputStream, final File dest, final InstallListener listener) throws IOException {
         dest.mkdirs();
         TarArchiveInputStream tarIn = new TarArchiveInputStream(new XZCompressorInputStream(tarFileInputStream));
+        byte[] buffer = new byte[EXTRACT_BUFFER_SIZE];
         TarArchiveEntry tarEntry = tarIn.getNextTarEntry();
         while (tarEntry != null) {
             if (listener != null && !tarEntry.isDirectory()) {
                 listener.onUpdate(tarEntry.getName());
             }
-            if (tarEntry.getSize() <= 20480) {
-                try {
-                    Thread.sleep(25);
-                } catch (InterruptedException ignored) {
-
-                }
-            }
+            // [性能修复] 这里原来是：
+            //     if (tarEntry.getSize() <= 20480) Thread.sleep(25);
+            // rootfs 这类"几万个小文件"的包里，几乎每个条目都会命中，等于 25ms × N 的纯等待
+            // （N 以万计 → 十几分钟）。它原本是想给 UI 留刷新机会，但那应该由进度回调自己节流：
+            // 现在由调用方 DshBootstrap.listener 按时间节流（默认 ≤5 次/秒），解压本身全速跑。
             File destPath = new File(dest, tarEntry.getName());
             if (tarEntry.isSymbolicLink()) {
                 Objects.requireNonNull(destPath.getParentFile()).mkdirs();
@@ -155,19 +178,48 @@ public class RuntimeUtils {
                 } catch (Throwable e) {
                     Logging.LOG.log(Level.WARNING, e.getMessage());
                 }
+            } else if (tarEntry.isLink()) {
+                // [正确性修复] 硬链接条目：旧实现落到最后一个 else 分支，被当成"0 字节普通文件"
+                // 创建出来（tar 里链接条目 size=0），于是 rootfs 内共享 inode 的可执行文件
+                // （如 /usr/bin 下的一批命令）会"存在但跑不起来/内容为空"。
+                // 优先建真硬链接；目标文件系统不支持时退化为复制目标内容。
+                File linkTarget = new File(dest, tarEntry.getLinkName());
+                Objects.requireNonNull(destPath.getParentFile()).mkdirs();
+                try {
+                    Os.link(linkTarget.getAbsolutePath(), destPath.getAbsolutePath());
+                } catch (Throwable e) {
+                    Logging.LOG.log(Level.WARNING, "hard link failed: " + e.getMessage());
+                    try {
+                        if (linkTarget.isFile()) {
+                            Files.copy(linkTarget.toPath(), destPath.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                        }
+                    } catch (IOException copyError) {
+                        Logging.LOG.log(Level.WARNING, copyError.getMessage());
+                    }
+                }
             } else if (tarEntry.isDirectory()) {
                 destPath.mkdirs();
                 destPath.setExecutable(true);
             } else if (!destPath.exists() || destPath.length() != tarEntry.getSize()) {
                 Objects.requireNonNull(destPath.getParentFile()).mkdirs();
                 destPath.createNewFile();
-                FileOutputStream os = new FileOutputStream(destPath);
-                byte[] buffer = new byte[1024];
-                int byteCount;
-                while ((byteCount = tarIn.read(buffer)) != -1) {
-                    os.write(buffer, 0, byteCount);
+                // try-with-resources：原来异常路径上 FileOutputStream 不会关闭（解压失败时句柄泄漏）
+                try (FileOutputStream os = new FileOutputStream(destPath)) {
+                    int byteCount;
+                    while ((byteCount = tarIn.read(buffer)) != -1) {
+                        os.write(buffer, 0, byteCount);
+                    }
                 }
-                os.close();
+            }
+            // [正确性修复] 普通文件还原可执行位（tar 头里的 x 位）。
+            // 原来只有目录被 setExecutable(true)，普通文件一律是 FileOutputStream 的默认权限
+            // （0600/0644，无 x 位）—— 于是解压出来的 rootfs 里 /bin/sh、/usr/bin/env、node
+            // **全都不可执行**，proot 第一次 execve 就 EACCES：表象是"rootfs 解压成功，但连
+            // /bin/sh 都跑不起来"（DshBootstrap 的自检探针会在这里失败）。
+            // 注意只还原 x 位，不还原读/写位：App 是这些文件唯一的用户，保持 owner 可写，
+            // 避免 tar 里 0444/0555 的文件在"重复解压"时写不进去。
+            if (!tarEntry.isDirectory() && !tarEntry.isSymbolicLink() && !tarEntry.isLink()) {
+                restoreExecutableBit(destPath, tarEntry);
             }
             tarEntry = tarIn.getNextTarEntry();
         }

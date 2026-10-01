@@ -111,8 +111,16 @@ class DshInstaller(
         // start = LAZY：先把 job 登记进 running 再 start()，确保"任务体"不可能先跑完、
         // 再被这里把已经结束的 job 写回表里（那会让 isInstalling 永远为真）。
         val job = DshAppScope.scope.launch(start = CoroutineStart.LAZY) {
+            // 本次安装的"身份"：running[instanceId] 里登记的也是它，用来判断共享状态是否还归我管
+            val myJob = coroutineContext[Job]
             try {
                 val ok = runInstall(instance, version)
+                if (!isCurrentOwner(instance.id, myJob)) {
+                    // 本次任务已经被"取消后重新发起的那次安装"接管：再写状态就是改别人的数据
+                    // （旧实现会把新安装的实例标成 BROKEN、把进度写成失败，界面显示"安装失败"而其实在装）
+                    DshLogBus.append("[install] ${instance.name} 本次安装已被更新的一次安装接管，忽略本次结果")
+                    return@launch
+                }
                 if (cancelled.contains(instance.id)) {
                     // 用户取消了：不能用 npm 的失败输出把实例标成 BROKEN。
                     // 但如果文件其实已经装完整（取消来得太晚），按磁盘事实标记 READY，
@@ -139,17 +147,24 @@ class DshInstaller(
                     fail(instance, errorSummary(instance.id))
                 }
             } catch (t: Throwable) {
-                if (!cancelled.contains(instance.id)) {
+                if (!isCurrentOwner(instance.id, myJob)) {
+                    DshLogBus.append("[install] ${instance.name} 本次安装已被接管，忽略异常：${t.message ?: t}")
+                } else if (!cancelled.contains(instance.id)) {
                     fail(instance, t.message ?: t.toString())
                 } else {
                     DshLogBus.append("[install] ${instance.name} 的安装已取消（${t.message ?: t}）")
                 }
             } finally {
-                cancelled.remove(instance.id)
-                errorSummaries.remove(instance.id)
-                errorTails.remove(instance.id)
-                running.remove(instance.id)
-                gate.release(instance.id)
+                // ★ 只有"登记表里还是我"时才清理共享状态。
+                // cancel() 会立刻放掉单飞闸门（让用户可以马上重装），新的安装随后接管 running[instanceId]；
+                // 旧任务若仍然无条件 release / remove，就会把**新任务**的闸门放掉（于是能再起一个 npm，
+                // 两个进程同时写同一个 node_modules），并抹掉新任务的错误摘要与取消标记。
+                if (running.remove(instance.id, myJob)) {
+                    cancelled.remove(instance.id)
+                    errorSummaries.remove(instance.id)
+                    errorTails.remove(instance.id)
+                    gate.release(instance.id)
+                }
             }
         }
         running[instance.id] = job
@@ -157,13 +172,19 @@ class DshInstaller(
         return true
     }
 
-    /** 取消某实例的安装（界面上的"取消"）：取消协程 + 杀掉**本实例**正在跑的 proot 子进程 */
+    /**
+     * 取消某实例的安装（界面上的"取消"）：取消协程 + 杀掉**本实例**正在跑的 proot 子进程。
+     *
+     * ★ 注意：这里**不**把 [running] 里的登记删掉 —— 登记同时代表"共享状态（错误摘要、闸门）
+     * 当前归哪个任务管"。让它自己在 finally 里收尾（[isCurrentOwner] 判断），
+     * 既保留"取消时其实已装完 → 标 READY"的判定，也避免旧任务的收尾动作伤到下一次安装。
+     */
     fun cancel(instanceId: String) {
         // 先打标记再取消：任务体是阻塞在 proot 上的（协程取消打断不了阻塞调用），
         // 它会等到进程被杀、runInstall 返回非 0 之后才继续；如果没有这个标记，
         // 用户点"取消"会看到实例变成 BROKEN（"安装失败"）而不是"已取消"。
         cancelled.add(instanceId)
-        running.remove(instanceId)?.cancel()
+        running[instanceId]?.cancel()
         gate.release(instanceId)
         killActive(instanceId)
         _statuses.update { it - instanceId }
@@ -173,6 +194,10 @@ class DshInstaller(
             error = context.getString(com.tungsten.fcl.R.string.dsh_install_cancelled)
         )
     }
+
+    /** 该实例当前的安装登记是否仍是 [job] 本人（没有被 cancel 之后的新安装接管） */
+    private fun isCurrentOwner(instanceId: String, job: Job?): Boolean =
+        job != null && running[instanceId] === job
 
     private fun fail(instance: DshInstance, reason: String) {
         DshInstances.markState(instance.id, DshInstance.State.BROKEN, error = reason)

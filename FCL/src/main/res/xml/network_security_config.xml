@@ -1,6 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<network-security-config xmlns:tools="http://schemas.android.com/tools">
-    <base-config
-        cleartextTrafficPermitted="true"
-        tools:ignore="InsecureBaseConfiguration" />
+<!--
+  dsh 启动器的网络安全配置。
+
+  ## 本次收紧（审查发现 P2）
+  原来 base-config 是全局 `cleartextTrafficPermitted="true"`，等于允许 App 的 Java 网络层
+  向**任意主机**发明文 HTTP。但实际上：
+    - 对外两个端点（registry.npmjs.org、api.deepseek.com）都是 HTTPS；
+    - 唯一的明文流量是 WebView 加载本机的 `http://127.0.0.1:<port>/?token=...`
+      （dsh web 只绑回环，见 DshRuntime 的 HOST=127.0.0.1）。
+  现在默认禁止明文，只对回环地址开例外：即使某处代码被误导向站外发明文请求，也会直接失败
+  而不是静默泄露（含 dsh 的 token/cookie）。
+
+  ## 影响范围说明
+  - 只作用于 App 进程内的 Java/WebView 网络栈。
+  - rootfs 内的 apt / npm（proot 里的 native 进程，直接走 socket）**不受**该策略约束，
+    因此不影响 rootfs 内安装 Node/dsh 依赖。
+  - android:usesCleartextTraffic 自 API 24 起在存在本文件时被忽略，实际策略以本文件为准。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- 本机 dsh web 服务（WebView 唯一需要明文的目标） -->
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
 </network-security-config>

@@ -1,19 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+  数据提取规则（Android 12 / API 31+）。参见 backup_rules.xml 中的同一条目说明。
+
+  ## 本次收紧（审查发现 P2）
+  `<filesDir>/dsh/` 排除在 **云备份** 与 **设备间迁移** 之外：
+  - 云备份：配额约 25MB，而该目录 1GB 起（rootfs + 每实例 node_modules）；
+  - 设备间迁移：传输数百 MB～GB 级运行时数据既慢又无意义——rootfs / proot 二进制随 APK 走，
+    实例清单与密钥密文换机后都不可用（Keystore 主密钥不出本机）。
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="dsh/" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="dsh/" />
     </device-transfer>
-    -->
 </data-extraction-rules>

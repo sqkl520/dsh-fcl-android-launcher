@@ -263,9 +263,27 @@ object DshBootstrap {
 
     private fun prootDir(): File = File(DshPaths.ROOT_DIR, "proot")
 
+    /**
+     * 解压进度回调 → [Progress.Detail]。
+     *
+     * ★ 节流（配合 RuntimeUtils 去掉的"每文件 sleep 25ms"）：解压 rootfs 时每个文件都会回调一次
+     * （几万次），如果原样往下传，UI 线程会被几万个 `runOnUiThread { dialog.setMessage(...) }`
+     * 淹没。这里把回调压到约 5 次/秒：解压全速跑，界面仍然每 200ms 刷新一次。
+     */
     private fun listener(onProgress: (Progress) -> Unit) =
         object : RuntimeUtils.InstallListener {
-            override fun onUpdate(detail: String) = onProgress(Progress.Detail(detail))
+            private var lastEmitAt = 0L
+
+            override fun onUpdate(detail: String) {
+                val now = System.currentTimeMillis()
+                if (now - lastEmitAt < DETAIL_THROTTLE_MS) return
+                lastEmitAt = now
+                onProgress(Progress.Detail(detail))
+            }
+
             override fun onStage(resId: Int) { /* dsh 用文本 Stage，忽略 resId */ }
         }
+
+    /** 解压进度明细的最小刷新间隔（毫秒） */
+    private const val DETAIL_THROTTLE_MS = 200L
 }
