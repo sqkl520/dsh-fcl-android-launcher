@@ -1,13 +1,9 @@
 package com.tungsten.fcllibrary.component;
 
-import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.content.res.Configuration;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultCallback;
@@ -17,20 +13,14 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 
 import com.mio.util.DisplayUtil;
-import com.tungsten.fclauncher.utils.FCLPath;
-import com.tungsten.fcllibrary.browser.FileBrowserLauncher;
 import com.tungsten.fcllibrary.component.theme.ThemeEngine;
 import com.tungsten.fcllibrary.util.LocaleUtils;
 
-import java.util.List;
 import java.util.Map;
 
 public class FCLActivity extends AppCompatActivity {
-    public FileBrowserLauncher fileLauncher;
     private ActivityResultLauncher<String[]> permissionLauncher;
     private ActivityResultLauncher<Intent> activityLauncher;
     private Runnable permissionCallback;
@@ -44,16 +34,9 @@ public class FCLActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         applySavedNightMode();
         DisplayUtil.updateWindowSize(this);
-        boolean hasPermission;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            hasPermission = Environment.isExternalStorageManager();
-        } else {
-            hasPermission = ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
-        }
-        if (hasPermission) {
-            FCLPath.loadPaths(this);
-        }
-        fileLauncher = new FileBrowserLauncher(this);
+        // 说明：原先此处按“外部存储权限是否已授予”决定是否调用 FCLPath.loadPaths(this)。
+        // 本项目已移除存储权限（dsh 只用应用私有目录），该分支恒为 false；
+        // FCLPath.loadPaths 现由 FCLApp.onCreate 统一调用，故整块删除。
         permissionLauncher = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), new ActivityResultCallback<Map<String, Boolean>>() {
             @Override
             public void onActivityResult(Map<String, Boolean> o) {

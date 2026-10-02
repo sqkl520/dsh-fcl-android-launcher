@@ -61,7 +61,11 @@ class DshWebViewActivity : FCLActivity() {
             render(DshRuntime.state.value)
         }
         findViewById<View>(R.id.btn_logs).setOnClickListener {
-            startActivity(Intent(this, DshLogsActivity::class.java))
+            startActivity(
+                com.dsh.ui.shell.DshMainActivity.intentForTab(
+                    this, com.dsh.ui.shell.DshShellHost.TAB_LOGS
+                )
+            )
         }
         findViewById<View>(R.id.btn_stop).setOnClickListener {
             DshRuntime.stop("用户从界面停止")

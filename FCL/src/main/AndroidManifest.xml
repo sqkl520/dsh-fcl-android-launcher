@@ -43,29 +43,15 @@
             </intent-filter>
         </activity>
 
-        <!-- DeepSeek Harness (dsh) 启动器主外壳（阶段 1）：左侧菜单 + ViewPager2 五页 -->
+        <!-- DeepSeek Harness (dsh) 启动器主外壳：左侧菜单 + ViewPager2 五页 + 右侧面板 -->
         <activity
             android:name="com.dsh.ui.shell.DshMainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
+            android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape"
             tools:ignore="LockedOrientationActivity" />
 
-        <!-- DeepSeek Harness (dsh) 启动器页面：实例 / 下载 / 日志 / 设置 / WebView -->
-        <activity
-            android:name="com.dsh.ui.DshInstancesActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorPortrait"
-            tools:ignore="LockedOrientationActivity" />
-        <activity
-            android:name="com.dsh.ui.DshDownloadActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorPortrait"
-            tools:ignore="LockedOrientationActivity" />
-        <activity
-            android:name="com.dsh.ui.DshLogsActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorPortrait"
-            tools:ignore="LockedOrientationActivity" />
+        <!-- dsh 详情页：实例设置 / WebView（均经 DshMainActivity 的 singleTop 复用外壳实例） -->
         <activity
             android:name="com.dsh.ui.DshSettingsActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
@@ -75,18 +61,14 @@
         <activity
             android:name="com.dsh.ui.DshWebViewActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensor"
+            android:screenOrientation="sensorLandscape"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- fcllibrary 通用件（非 MC）：文件浏览、崩溃上报 -->
-        <activity
-            android:name="com.tungsten.fcllibrary.browser.FileBrowserActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorPortrait" />
+        <!-- fcllibrary 崩溃上报（非 MC） -->
         <activity
             android:name="com.tungsten.fcllibrary.crash.CrashReportActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensor" />
+            android:screenOrientation="sensorLandscape" />
 
         <!-- dsh 运行时前台服务：保活 dsh web 长驻进程。
              dataSync 在 Android 15 起有"每天累计 6 小时"的限制，对长时间挂着的 agent 是硬伤，
