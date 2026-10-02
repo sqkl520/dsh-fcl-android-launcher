@@ -13,6 +13,46 @@
 
 ---
 
+## [Unreleased · 第九轮审查与优化] - 2026-10-02
+
+> 本轮 = 第八轮之后的独立复审。重点：第八轮遗留的\"使用逻辑\"缺口（下载页空实例污染、isReady 与
+> preflight 判据不一致）。完整报告见 `docs/PROJECT_REVIEW_AND_OPTIMIZATION.md`；
+> 速览见 `docs/reports/round9-review-and-optimization.md`。
+> 代码改动：`DshBootstrap.kt` + `DshDownloadViewModel.kt` + 新增 4 个单测（见下）。
+> 验证：编译 BUILD SUCCESSFUL（`run-compile.sh`）；单测 **27/27**（原 23 + 新增 4）；脚本一致性 18/18。
+
+### Changed
+
+**1. `DshBootstrap.isReady()` 补 proot 二进制存在性校验（P2，正确性/一致性）**
+- 问题：原 `isReady()` 只校验版本文件 + `start-dsh.sh` + rootfs 布局，**不校验 proot 是否可解析**；
+  而 `missingSummary()` / `ProotCommand.preflight()` 都把 proot 当作必要条件。于是可同时出现
+  \"`isReady()==true`（bootstrap 横幅隐藏）但一启动就 preflight 报『缺少 proot 可执行文件』\"的自相矛盾。
+- 改动：`isReady()` 增加 `&& DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR).isFile`（jniLibs 优先、assets 回退）。
+- 影响：横幅的\"是否提示准备运行时\"与真实可启动性一致；纯增量校验，对正常就绪设备零行为变化。
+
+**2. `DshBootstrap.install()` proot 分支补\"文件缺失即解压\"兜底（P2，可靠性）**
+- 背景：第八轮只给 scripts 分支加了文件存在性兜底，proot 分支仍只依赖 `isLatest`。一旦
+  `getResourceAsStream` 在该环境不可解析（`isLatest` 恒为 true），assets 方案的 proot 会被
+  **永远跳过解压**，与本轮 `isReady()` 新校验互相印证后会形成一个\"永远不具备\"的空转。
+- 改动：解压条件改为 `!isLatest(...) || prootMissing`，`prootMissing` 用 `resolveProotBin()`（jniLibs 优先）判定，
+  避免 jniLibs 已就位时因 prootDir 无 `libproot.so` 而每次重复解压 assets 副本。
+- 影响：幂等\"缺二进制即补\";jniLibs 主路径不受影响。
+
+### Added
+
+**3. 下载页\"反复点安装\"去重（P2，数据卫生，承接第八轮建议 R8-08）**
+- 问题：`DshDownloadViewModel.installVersion()` 每次点击都 `DshInstances.create()` 新建实例；
+  用户换版本/重复点击会在实例列表积累一堆只有目录、没装 dsh 的**空实例**。
+- 改动：
+  - 新增纯函数 `DshDownloadViewModel.chooseInstanceToInstall(instances, version)`：
+    ① 已 READY 装过同版本 → 复用（不重复触发安装/重新下载依赖树）；
+    ② 否则有 NOT_INSTALLED 空壳 → 复用它（避免累积）；③ 都没有 → 新建。
+  - `installVersion()` 改用该函数。
+- 影响：误点/重复安装不再污染列表；对\"本来就要新建\"的正常路径行为不变。
+- 单测：`DshCoreLogicTest` 新增 4 例（复用同版本 / 不同版本不复用 / 复用空壳 / 无可复用则新建）。
+
+---
+
 ## [Unreleased · 第八轮审查与优化] - 2026-10-02
 
 > 本轮 = 独立复审（第七轮之后），重点核查前七轮可能遗漏的**使用逻辑/资源机制/安全卫生**类问题。
@@ -23,25 +63,134 @@
 
 **1. 移除 AndroidManifest 全局明文开关（P3，安全卫生）**
 - `android:usesCleartextTraffic="true"` 与 `@xml/network_security_config` 并存：API 24+（本工程 minSdk 26）起 NSC 优先，此开关实际是死配置；
-  且它向阅读者传达"全局允许明文"的错误印象（实际 NSC 已收口到 127.0.0.1/localhost）。
+  且它向阅读者传达\"全局允许明文\"的错误印象（实际 NSC 已收口到 127.0.0.1/localhost）。
 - 删除该行，明文策略以 `network_security_config.xml`（base 禁明文 + 回环放行）为唯一真源。
 - 影响范围：仅 Manifest 属性；WebView 加载 `http://127.0.0.1:<port>` 仍由 NSC 的 domain-config 放行，行为不变。
 
-**2. `DshBootstrap` 首次解压补"文件存在性"兜底（P1→P2，可靠性）**
+**2. `DshBootstrap` 首次解压补\"文件存在性\"兜底（P1→P2，可靠性）**
 - 背景：`RuntimeUtils.isLatest(...)` 用 `Class.getResourceAsStream("/assets/...")` 读版本号，
-  与解压用的 `context.getAssets().open("dsh/...")` 是**两套访问机制**。若前者在任何环境解析不到（返回"已是最新"），
+  与解压用的 `context.getAssets().open("dsh/...")` 是**两套访问机制**。若前者在任何环境解析不到（返回\"已是最新\"），
   仅靠 `isLatest` 判定的 `DshBootstrap.install` 会**永远跳过首次解压** → scripts/probe.sh、start-dsh.sh 缺失，
-  实例永远起不来，而 `isReady()` 也可能误报"就绪"。这是前七轮未覆盖的静默失败路径。
+  实例永远起不来，而 `isReady()` 也可能误报\"就绪\"。这是前七轮未覆盖的静默失败路径。
 - 改动：
   - `isReady()` 增加 `&& File(SCRIPTS_DIR, "start-dsh.sh").isFile`；
   - `install()` 的脚本解压条件改为 `!isLatest(...) || !start-dsh.sh.isFile`。
-- 性质：纯"文件缺失即补解压"的幂等防护；`isLatest` 正常工作的环境行为不变。
+- 性质：纯\"文件缺失即补解压\"的幂等防护；`isLatest` 正常工作的环境行为不变。
 - 影响范围：仅底座脚本（scripts）首次/修复解压；rootfs 分支已有 `rootfsLooksUsable()` 防护，proot 走 jniLibs 不受影响。
 
 ### Notes
 
 - 验证：`run-compile.sh` **BUILD SUCCESSFUL**（1m31s，5 executed / 29 up-to-date）；单测 23/23；脚本 18/18；**未打包**。
 - 本项 `isLatest` 的资源机制是否在真机可解析属**待真机确认**（不要仅凭机制推理下死判断）——本次先做不改变正常工作路径的防御性兜底。
+
+## [Unreleased · 第七轮审查与优化] - 2026-10-02
+
+> 本轮 = 评估 + 修复，审查对象：`com/dsh/**`（全部核心 + UI）+ 可达 FCL 遗产 + 脚本/资源/Manifest/Gradle。
+> 完整报告见 `docs/PROJECT_REVIEW_AND_OPTIMIZATION.md`；速览见 `docs/reports/round7-review-and-optimization.md`。
+> 全部改动已提交 `494f234`（`git revert 494f234` 可整体回滚）。
+
+### Fixed
+
+**1. 实例删除竞态：删除目录前先等进程真正退出（P1）**
+- **现象**：`DshInstances.delete()` 里先调 `DshRuntime.stop("实例被删除")`，紧接着 `deleteRecursively()`。
+  但 `stop()` 内部是 `scope.launch { h?.terminate(5000) }` —— **异步**的，返回时旧进程可能还活着（TERM 后最多 5s 才 KILL）。
+  若 node 仍在往 `node_modules` 写文件，`deleteRecursively` 就删不干净，留下 ~300MB 残留，
+  而界面早已把实例从列表移除，**用户完全看不到提示**。
+- **改动**：
+  - `DshRuntime.kt`：新增 `suspend fun stopAndWait(reason, timeoutMs = 8s)` —— 先 `stop()`，
+    再轮询 `_state` 直到离开"本实例的 Stopping"（即进程已退出、状态被 onProcessExit/stop 协程落到 Idle 或别的新状态）。
+  - `DshInstances.kt`：`delete()` 协程里把 `DshRuntime.stop(...)` 换成 `DshRuntime.stopAndWait("实例被删除")`，
+    超时（8s）仍继续硬删，并在日志总线留一行"停止超时"以便事后追查。
+- **影响范围**：仅"删除实例"路径；其它 `stop()` 调用点（用户手动停、切实例、通知栏停）不受影响，语义不变。
+- **兼容性**：`stopAndWait` 是新增 API，未改 `stop()` 签名；`delete()` 在 `DshAppScope`（IO）协程内调用，可安全 suspend。
+- **验证**：编译 BUILD SUCCESSFUL；单测 23/23。（删目录的并发行为需真机复现确认，沙箱无法实测。）
+
+**2. WebView 失败面板被 `onPageFinished` 盖成空白（P1）**
+- **现象**：`DshWebViewActivity` 里 `onReceivedError` / `onReceivedHttpError`(4xx) 调 `showError()` 显示错误面板，
+  但 **WebView 对"失败页面"同样会回调 `onPageFinished`**（常见顺序：onPageStarted → onReceivedError → onPageFinished），
+  而原来的 `onPageFinished` 无条件 `showWeb()` —— 于是错误面板瞬间被盖上，用户只见一片空白 WebView，
+  像 dsh 卡死，且"重试/看日志/停止/返回"这些出口全部不可见。
+- **改动**：`DshWebViewActivity.kt` 新增 `private var pageFailed = false`：
+  - `onPageStarted`（且 URL 是回环）→ `pageFailed = false` + `showWeb()`
+  - `onReceivedError`（主 frame）→ `pageFailed = true` + `showError(...)`
+  - `onReceivedHttpError`：401 走重载前清标志；401 无 token 或其它 ≥400 → `pageFailed = true` + `showError(...)`
+  - `onPageFinished` → **先查 `pageFailed`，为真则不 `showWeb()`**（保留错误面板）
+- **影响范围**：仅 WebView 页；对正常加载无行为变化（onPageStarted 已清标志）。
+- **验证**：编译通过。真机上需确认各厂商 WebView 回调顺序一致（尤其 401 重载后成功时标志确实被清）。
+
+**3. 安装看门狗超时无可读文案（P2）**
+- **现象**：`ProotProcessExecutor` 在 `timeoutMs` 超时后返回 `-2`（魔法数），`DshInstaller.runInstall`
+  `return exit == 0` → false → `errorSummary` 落到泛化的 `dsh_install_failed_generic`（"Install failed"），
+  用户完全不知道是 npm 卡死/超时。
+- **改动**：
+  - `ProotProcessExecutor.kt`：抽命名常量 `companion object { const val TIMEOUT_EXIT_CODE = -2 }`，返回处用常量替代 `-2`。
+  - `DshInstaller.kt`：`runInstall` 里 `if (exit == ProotProcessExecutor.TIMEOUT_EXIT_CODE)` →
+    `errorSummaries[id] = context.getString(R.string.dsh_install_timeout, INSTALL_TIMEOUT_MS / 60_000)`。
+  - `strings.xml` / `strings-zh.xml`：新增 `dsh_install_timeout`（中英，带 `%1$d` 分钟数）。
+- **影响范围**：仅安装失败时的原因文案；退出码语义不变。
+- **配套**：`DshResourceFormatTest` 的 `callSites` 登记 `dsh_install_timeout`（否则"带占位符文案必须登记"契约测试会红）。
+- **验证**：编译通过；单测 23/23（含占位符契约）。
+
+**4. 通知状态在非运行态误报"运行中"（P2）**
+- **现象**：`DshRuntimeService.buildNotification` 的 `status` 分支里，`Stopping` / `Idle` / `Failed` / `Exited`
+  全部落到 `else -> dsh_notify_running`（"运行中"），在服务即将自停的极短窗口里会误导用户。
+- **改动**：
+  - `DshRuntimeService.kt`：`status` 增加 `is DshRuntime.State.Stopping -> dsh_notify_stopping`，
+    `else`（Idle/Failed/Exited）也改用 `dsh_notify_stopping`（不再误标 Running）。
+  - `strings.xml` / `strings-zh.xml`：新增 `dsh_notify_stopping`（"停止中…"）。
+- **影响范围**：仅通知文案；服务仍会在非 Running/Starting 时自停（行为不变）。
+- **验证**：编译通过。
+
+### Changed
+
+**§2.5 硬性要求收尾：实例页 / WebView 页去 Material（P2，UI 一致性）**
+- **背景**：`app-shell.md §2.5` 要求所有 dsh 布局一律用 fcllibrary 控件 + ThemeEngine 主题。
+  阶段 2 已把 6 个布局换成 FCL 控件，但 `activity_dsh_instances.xml` 与 `activity_dsh_webview.xml`
+  仍混着 `MaterialButton` / 原生 `ProgressBar` / `TextView` —— 正是 §2.5.5 验收命令
+  `grep -l "com.google.android.material" *dsh*.xml` 会抓住的地方（改前这两行有输出）。
+- **改动**：
+  - `activity_dsh_instances.xml`：2 个 `MaterialButton`（btn_logs/btn_download）→ `FCLButton`（`app:ripple`）；
+    `title` / `empty_hint` 原生 `TextView` → `FCLTextView`（`app:auto_text_tint` 随主题换色），去掉写死的 `#888888`。
+  - `activity_dsh_webview.xml`：4 个 `MaterialButton`（btn_retry/logs/stop/back）→ `FCLButton`；
+    2 个原生 `ProgressBar` → `FCLProgressBar`；`state_text` 原生 `TextView` → `FCLTextView`；
+    状态面板背景 `?android:attr/colorBackground` → `@drawable/bg_container_white`（FCL 容器风格）。
+- **影响范围**：仅这两个布局；所有 `@+id` 不变，viewBinding 字段名未变 → 无编译/逻辑破坏。
+- **验收**：**8 个 dsh 布局 0 Material 控件**，`grep -l com.google.android.material *dsh*.xml` 输出为空（命令 1 通过）。
+- **遗留**：代码里 `MaterialAlertDialogBuilder` 在 `com/dsh` 仍有 22 处（§2.5 允许"新代码统一 FCLAlertDialog，逐步归零"），
+  作 P3 项，本轮未大范围替换（避免一次性改动面过大）。
+
+### Removed
+
+- **未引用文案 `dsh_action_configure_key`（中英）**：全仓 0 引用（grep 确认），删除（R-17）。
+
+### Optimized
+
+- **`DshLogBus` 环形裁剪 O(n²) → O(n)**：原来 `repeat(buffer.size - MAX_LINES) { removeAt(0) }` 是逐行
+  `removeAt(0)`（ArrayList 头删 = 数组搬移），且注释自称"避免每行搬移"与实际不符。改为
+  `buffer.subList(0, buffer.size - MAX_LINES).clear()`（单次搬移）+ 修正注释。
+
+### Refactored
+
+- **`ProotProcessExecutor` 超时退出码抽为命名常量** `TIMEOUT_EXIT_CODE = -2`（替代魔法数）。
+
+### Notes
+
+- 验证：`run-compile.sh` **BUILD SUCCESSFUL**；`run-tests.sh` **23/23**；`test-scripts-posix.sh` **18/18**；**未打包**。
+- 新增/删除依赖：**无**。
+- 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
+
+## [Unreleased · 打包脚本适配与 APK 产出] - 2026-10-03
+
+### Fixed
+- 修正 `build-apk.sh`：移除已删除的旧 native CMake 配置流程（不再访问 `FCL/src/main/jni`），改为当前无 native 工程的 Gradle arm64 打包流程
+- 打包脚本统一复制并校验最终 APK，输出固定为 `dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+
+### Notes
+- APK 已成功产出：`/workspace/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+- SHA-256：`12520a91df56245c4ee33de54186a3fde29b482df4d94dd190d8b8eb241d1013`
+- 文件大小约 11MB；本轮是首次实际打包，尚未真机安装验证
+
+---
 
 ## [Unreleased · 文档：新增经验文档并瘦身 CHANGELOG] - 2026-10-02
 

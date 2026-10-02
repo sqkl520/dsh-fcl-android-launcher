@@ -179,6 +179,19 @@
 - 新增/删除依赖：**无**。
 - 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
 
+## [Unreleased · 打包脚本适配与 APK 产出] - 2026-10-03
+
+### Fixed
+- 修正 `build-apk.sh`：移除已删除的旧 native CMake 配置流程（不再访问 `FCL/src/main/jni`），改为当前无 native 工程的 Gradle arm64 打包流程
+- 打包脚本统一复制并校验最终 APK，输出固定为 `dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+
+### Notes
+- APK 已成功产出：`/workspace/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+- SHA-256：`12520a91df56245c4ee33de54186a3fde29b482df4d94dd190d8b8eb241d1013`
+- 文件大小约 11MB；本轮是首次实际打包，尚未真机安装验证
+
+---
+
 ## [Unreleased · 文档：新增经验文档并瘦身 CHANGELOG] - 2026-10-02
 
 ### Added
