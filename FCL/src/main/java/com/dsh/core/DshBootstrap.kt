@@ -60,16 +60,18 @@ object DshBootstrap {
     /** 互斥用：两个界面同时触发解压时，只允许一个真正执行（比读 _busy 再写更可靠） */
     private val busyGuard = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** 底座是否已就绪（三项 version 都最新 + proot 可解析 + rootfs 内容可信） */
+    /**
+     * 底座是否已就绪。
+     *
+     * ★ 方案 B：proot / loader / busybox 一律由 **jniLibs** 提供（nativeLibraryDir 有执行位，
+     * 才能在 W^X 下 execve），因此不再要求 assets 里存在 proot 副本与版本文件。
+     */
     fun isReady(): Boolean = runCatching {
-        RuntimeUtils.isLatest(prootDir().absolutePath, "/assets/$ASSET_ROOT/proot") &&
-            RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") &&
+        RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") &&
             RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") &&
             File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile &&
-            // ★ 修正一致性：原实现不校验 proot 二进制，而 missingSummary() / ProotCommand.preflight()
-            // 都把它当作必要条件——于是可能出现"isReady()==true（横幅隐藏）但一启动就报缺少 proot"
-            // 的自相矛盾。这里补上，与 missingSummary() 的口径对齐（jniLibs 优先、assets 回退）。
             DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).isFile &&
+            DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).isFile &&
             DshPaths.rootfsLooksUsable()
     }.getOrDefault(false)
 
@@ -80,7 +82,9 @@ object DshBootstrap {
             !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile -> "缺少启动脚本"
             !File(DshPaths.ROOTFS_DIR).isDirectory || !DshPaths.rootfsLooksUsable() -> "rootfs 未就绪"
             !DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).exists() ->
-                "缺少 proot 可执行文件"
+                "缺少 proot 可执行文件（jniLibs）"
+            !DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).exists() ->
+                "缺少 proot loader（jniLibs）"
             else -> "运行时底座需要更新"
         }
     }
@@ -134,21 +138,25 @@ object DshBootstrap {
                 markExecutableShellScripts(File(DshPaths.SCRIPTS_DIR))
             }
 
-            // 2) proot 二进制（jniLibs 优先；assets 作为回退）
-            // ★ 与 isReady() 对齐：除了版本比对，再加一道"目标二进制缺失即补解压"的文件存在性兜底。
-            // 判据用 resolveProotBin()（jniLibs 优先）而不是 prootDir()，避免 jniLibs 已就位时
-            // 每次都因为"prootDir 下没有 libproot.so"而重复解压 assets 副本。
-            val prootMissing = !DshPaths.resolveProotBin(
-                com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR
-            ).isFile
-            if (!RuntimeUtils.isLatest(prootDir().absolutePath, "/assets/$ASSET_ROOT/proot") || prootMissing) {
-                emit(Progress.Stage("解压 proot 运行时", 0.1))
-                RuntimeUtils.install(
-                    context, prootDir().absolutePath, "$ASSET_ROOT/proot",
-                    listener(emit)
+            // 2) proot / loader / busybox：方案 B 一律走 jniLibs（nativeLibraryDir 有执行位）。
+            // 不再从 assets 解压 proot 副本——assets 方案在 targetSdk>=29 会被 W^X 拒绝 execve。
+            val nativeLibDir = com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR
+            val prootBin = DshPaths.resolveProotBin(nativeLibDir)
+            val prootLoader = DshPaths.resolveProotLoader(nativeLibDir)
+            if (!prootBin.isFile || !prootLoader.isFile) {
+                // 明确报出缺哪个，并给出可操作指引（这是打包问题，不是运行环境问题）
+                val missing = buildList {
+                    if (!prootBin.isFile) add("libproot.so")
+                    if (!prootLoader.isFile) add("libproot-loader.so")
+                }.joinToString("、")
+                fail(
+                    emit,
+                    "缺少 $missing（应随 APK 的 jniLibs/arm64-v8a 提供）。" +
+                        "这属于打包问题，请检查构建产物是否包含该原生库。"
                 )
-                prootDir().walkTopDown().forEach { if (it.isFile) it.setExecutable(true, false) }
+                return
             }
+            emit(Progress.Stage("proot 运行时已就位（jniLibs）", 0.1))
 
             // 3) rootfs（tar.xz，最耗时）
             if (!RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") ||

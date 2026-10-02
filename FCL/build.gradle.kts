@@ -73,6 +73,15 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // 方案 B：PtyNative 负责在 Android 进程内创建 PTY；proot/loader/busybox
+    // 以预编译 arm64 jniLibs 随 APK 提供，不在这里重新编译 proot。
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/ptyjni/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     testBuildType = "fordebug"
 
     buildTypes {

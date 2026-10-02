@@ -43,7 +43,18 @@ ssh://git@ssh.github.com:443/<owner>/<repo>.git
 - `~/.ssh` **可能不跨会话持久**；密钥丢了要重新生成 + 重新把公钥加到 GitHub
 - 编译耗时长（3~9 分钟）；长时间占用会被 `workspace_shell` 的调用超时打断（表现为 gradle 被 SIGTERM）
 - aapt2 / cmake / ninja / clang 等工具是 **x86_64**，在 arm64 沙箱里需用 `qemu-x86_64-static` 包装
+- **⚠️ qemu 包装脚本的"双重包装"坑**：如果按
+  `for f in *; do [ -f "$f.real" ] && continue; mv "$f" "$f.real"; 写包装脚本; done`
+  这种写法循环，**刚生成的 `X.real` 会在同一次循环里被再包一层**（因为此时 `X.real.real` 还不存在，
+  守卫条件拦不住），于是变成 `X` → `X.real`(脚本) → `X.real.real`(真二进制)，
+  而 `X.real` 是脚本、被 qemu 当 x86_64 ELF 执行 → 直接失败，且**报错信息极不明显**
+  （cmake 只会说 "CMake will not be able to correctly generate this project"）。
+  - **判断方法**：`ls $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/*.real.real | wc -l`
+    不为 0 就是被双重包装了
+  - **修复**：对每个 `X.real.real` 执行 `mv -f X.real.real X.real`（保留外层包装脚本不动）
+  - 本项目 NDK 27 曾出现 38 个工具被双重包装，修复后 clang 恢复正常
 - 沙箱内 `.git/objects` 里可能出现 `.l2s.tmp_*` 残留符号链接（中断操作的产物），会挡住 `git gc` 与备份；确认无引用后直接删掉
+
 
 ---
 
