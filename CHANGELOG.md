@@ -12,6 +12,42 @@
 
 ---
 
+## [Unreleased · 外壳改造阶段 4：裁剪不可达代码与资源] - 2026-10-02
+
+### Changed
+- **外壳锁横屏补齐**：`DshWebViewActivity`、`CrashReportActivity` 由 `sensor` 改为 **`sensorLandscape`**
+  （`DshMainActivity` 加 `launchMode="singleTop"`，供详情页跳回并复用同一外壳实例）
+- `FCLActivity`：移除 `fileLauncher` 字段（文件浏览器已删）与**已失效的外部存储权限判断分支**
+  （项目已无存储权限，该分支恒为 false；`FCLPath.loadPaths` 现由 `FCLApp.onCreate` 统一调用）
+
+### Removed
+- **已被外壳页取代的 3 个 Activity**：`DshInstancesActivity` / `DshDownloadActivity` / `DshLogsActivity`
+  （连 Manifest 注册一并删除；其布局 `activity_dsh_*.xml` 由对应 `Dsh*UI` 页面继续使用，保留）
+  - 新增 `DshMainActivity.intentForTab(context, tab)` + `EXTRA_OPEN_TAB`：详情页（实例设置 / WebView）
+    改用它跳回指定 tab，替代原先直接 `startActivity` 到旧 Activity
+- **文件浏览器模块**（`fcllibrary/browser/`，9 文件）+ `FileBrowserActivity` 注册
+  —— MC 时代调用方已删，全仓无启动入口
+- **连带死类**：`EditDialog`、`FCLNumberSeekBar`、`FCLCheckBoxTreeAdapter`、`FCLCheckBoxTreeItem`、
+  `FCLFragment`、`view/color/`（`ColorPickerView` + `AlphaPatternDrawable`）
+- **fclcore 死代码（18 个）**：`util/io/{CSVTable,ChecksumMismatchException,CompressingUtils,HttpMultipartRequest,JarUtils,Unzipper,Zipper}`、
+  `util/{CacheRepository,DigestUtils,FutureCallback,Hex,InfiniteSizeList,MurmurHash2}`、
+  `task/{FetchTask,DownloadException}`、`util/platform/{CommandBuilder,MemoryUtils}`、`fakefx/PlatformUtil`
+- **资源**：3 个布局（`activity_file_browser` / `item_file_browser` / `item_check_box_tree`）、
+  2 个图标（`ic_baseline_file_24` / `ic_baseline_folder_24`）、
+  22 条无用字符串（`file_browser_*` 21 条 + `color_picker_*` 2 条，中英同步）、
+  7 个无对应类的 `declare-styleable`（`KeycodeView`/`LogWindow`/`DraggableTextView`/`FCLTitleView`/`FCLAppBarLayout`/`FCLNumberSeekBar`/`ColorPickerView`）、
+  `build.gradle.kts` 中已无用的 `file_browser_provider` resValue
+
+### Notes
+- 合计 **44 个文件删除 + 9 个修改**
+- 判据：**全仓 0 引用 + 传递闭包确认**（逐个核验，未照单全删）
+  - 期间纠正两处误判：`DialogUtil`（被 `showErrorDialog` 扩展函数使用）、
+    `ProgressDialog`（被 `LogSharingUtils` 使用）——均属"Kotlin 顶层函数/`Kt` 后缀"导致的假死，已恢复
+  - `OperatingSystem` 被活着的 `IOUtils` 引用，保留
+- 验证：`run-compile.sh` BUILD SUCCESSFUL；**未打包**
+
+---
+
 ## [Unreleased · 建仓、推送与历史精简] - 2026-10-02
 
 ### Added

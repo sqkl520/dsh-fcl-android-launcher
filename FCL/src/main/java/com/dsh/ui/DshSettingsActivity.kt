@@ -16,6 +16,8 @@ import com.dsh.core.DshServices
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshSettingsBinding
+import com.dsh.ui.shell.DshMainActivity
+import com.dsh.ui.shell.DshShellHost
 import com.tungsten.fcllibrary.component.FCLActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -190,7 +192,7 @@ class DshSettingsActivity : FCLActivity() {
             val version = inst.dshVersion
             if (version == null) {
                 Toast.makeText(this, R.string.dsh_reinstall_pick_version, Toast.LENGTH_LONG).show()
-                startActivity(Intent(this, DshDownloadActivity::class.java))
+                startActivity(DshMainActivity.intentForTab(this, DshShellHost.TAB_DOWNLOAD))
             } else {
                 DshServices.installer(this).install(inst, version)
                 Toast.makeText(this, getString(R.string.dsh_install_started, version), Toast.LENGTH_SHORT).show()
@@ -198,7 +200,7 @@ class DshSettingsActivity : FCLActivity() {
         }
 
         binding.btnLogs.setOnClickListener {
-            startActivity(Intent(this, DshLogsActivity::class.java))
+            startActivity(DshMainActivity.intentForTab(this, DshShellHost.TAB_LOGS))
         }
 
         binding.btnDelete.setOnClickListener {

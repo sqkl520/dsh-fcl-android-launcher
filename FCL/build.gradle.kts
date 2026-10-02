@@ -88,8 +88,6 @@ android {
             initWith(getByName("debug"))
             applicationIdSuffix = ".debug"
             signingConfig = signingConfigs.getByName("FCLDebugKey")
-            // 与 FileProvider authority（${applicationId}.provider）保持一致
-            resValue("string", "file_browser_provider", "com.dsh.fcl.androidlauncher.debug.provider")
         }
         configureEach {
             resValue("string", "app_version", defaultConfig.versionName.toString())

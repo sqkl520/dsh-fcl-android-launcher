@@ -1,5 +1,6 @@
 package com.dsh.ui.shell
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import com.dsh.core.DshInstance
@@ -70,7 +71,22 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         binding.instances.setSelected(true)
         binding.title.refresh(getString(uiManager.titles[0]))
 
+        // 详情页（实例设置 / WebView）可带 EXTRA_OPEN_TAB 跳回指定 tab
+        intent?.getIntExtra(EXTRA_OPEN_TAB, -1)?.takeIf { it >= 0 }?.let { openTab(it) }
+
         setupRightPanel()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getIntExtra(EXTRA_OPEN_TAB, -1).takeIf { it >= 0 }?.let { openTab(it) }
+    }
+
+    private fun openTab(position: Int) {
+        if (position in menus.indices) {
+            menus[position].setSelected(true)
+        }
     }
 
     /** 右面板：当前实例卡 + 启动/停止 + 打开界面 */
@@ -173,5 +189,17 @@ class DshMainActivity : FCLActivity(), DshShellHost {
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
+    }
+
+    companion object {
+        /** 详情页用它请求外壳打开指定 tab（见 [DshShellHost] 的 TAB_* 常量） */
+        const val EXTRA_OPEN_TAB = "dsh_open_tab"
+
+        /** 构造"回到外壳并切到某 tab"的 Intent（singleTop，复用已有实例） */
+        fun intentForTab(context: Context, tab: Int): Intent =
+            Intent(context, DshMainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(EXTRA_OPEN_TAB, tab)
+            }
     }
 }
