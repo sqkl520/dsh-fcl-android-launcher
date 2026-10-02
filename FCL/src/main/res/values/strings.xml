@@ -162,4 +162,24 @@
     <string name="dsh_right_current_instance">Current instance</string>
     <string name="dsh_right_no_instance">No instance yet</string>
     <string name="dsh_action_open_webui">Open UI</string>
+    <string name="dsh_setting_group_common">通用</string>
+    <string name="dsh_setting_group_runtime">运行环境</string>
+    <string name="dsh_setting_group_dsh">DeepSeek Harness</string>
+    <string name="dsh_setting_group_hint">FCL 启动器设置</string>
+    <string name="dsh_setting_language">语言 / Language</string>
+    <string name="dsh_setting_language_desc">跟随系统语言（语言设置将在后续版本接入）</string>
+    <string name="dsh_setting_about">关于本启动器</string>
+    <string name="dsh_setting_runtime_check">运行时自检</string>
+    <string name="dsh_setting_runtime_check_desc">检查 proot、rootfs、Node.js 与启动脚本状态</string>
+    <string name="dsh_setting_logs">运行日志</string>
+    <string name="dsh_setting_logs_desc">查看 dsh 安装与运行日志</string>
+    <string name="dsh_setting_download">dsh 版本管理</string>
+    <string name="dsh_setting_download_desc">浏览并安装不同版本的 DeepSeek Harness</string>
+    <string name="dsh_setting_instance">实例管理</string>
+    <string name="dsh_setting_instance_desc">管理实例名称、API Key、模型、profile 与端口</string>
+    <string name="dsh_setting_export_logs">复制日志</string>
+    <string name="dsh_setting_export_logs_desc">将当前日志复制到剪贴板</string>
+    <string name="dsh_setting_theme_coming">主题模式设置将在下一步接入 ThemeEngine</string>
+    <string name="dsh_about_version">版本：%1$s</string>
+    <string name="dsh_action_open">Open</string>
 </resources>

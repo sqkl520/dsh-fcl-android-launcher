@@ -179,6 +179,26 @@
 - 新增/删除依赖：**无**。
 - 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
 
+## [Unreleased · FCL 风格启动器设置页第一批实现] - 2026-10-03
+
+### Added
+- 新增 FCL 风格全局设置页布局 `ui_dsh_launcher_settings.xml`
+- 新增设置行布局 `item_dsh_setting.xml`
+- 新增 `DshLauncherSettingAdapter`：使用 RecyclerView 分组行组织通用 / 运行环境 / dsh 设置
+
+### Changed
+- `DshSettingsUI` 从实例详情表单改为全局启动器设置页
+- 设置页接入真实入口：运行时自检、日志、dsh 版本管理、实例管理、复制日志、关于页
+- 实例级配置继续由独立 `DshSettingsActivity` 承载，职责与全局启动器设置分离
+- `DshUIManager` 设置页工厂改为传入 `DshShellHost`
+
+### Notes
+- 本批次只实现 FCL 设置页的结构、分组和 dsh 入口；ThemeEngine 的语言/主题色/背景/动画等可编辑设置将在下一批接入
+- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
+- FCL 原版对应关系与后续还原清单见 `docs/design/fcl-ui-restoration.md`
+
+---
+
 ## [Unreleased · FCL 原汁原味 UI 还原审查] - 2026-10-03
 
 ### Added
