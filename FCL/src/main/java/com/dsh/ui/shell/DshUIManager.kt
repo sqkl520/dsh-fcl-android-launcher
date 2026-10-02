@@ -37,7 +37,7 @@ class DshUIManager(
         { DshPlaceholderUI(context, R.string.dsh_tab_manage, R.string.dsh_manage_placeholder) },
         { DshDownloadUI(context, host) },
         { DshLogsUI(context) },
-        { DshSettingsUI(context) },
+        { DshSettingsUI(context, host) },
     )
 
     private val registry = arrayOfNulls<FCLCommonUI>(factories.size)
