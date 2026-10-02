@@ -26,7 +26,6 @@
         <string name="dsh_action_clear_key">Clear key</string>
         <string name="dsh_action_close">Close</string>
         <string name="dsh_action_configure">Configure</string>
-        <string name="dsh_action_configure_key">Configure key</string>
         <string name="dsh_action_copy">Copy</string>
         <string name="dsh_action_delete">Delete</string>
         <string name="dsh_action_download">Download</string>
@@ -68,6 +67,7 @@
         <string name="dsh_install_done">Installed %1$s</string>
         <string name="dsh_install_failed">Install failed: %1$s</string>
         <string name="dsh_install_failed_generic">Install failed (see logs for details)</string>
+        <string name="dsh_install_timeout">Install timed out (%1$d min). Network may be slow or npm hung; check the log and retry.</string>
         <string name="dsh_install_incomplete">Install finished but the dsh package is incomplete; please reinstall.</string>
         <string name="dsh_install_started">Installing %1$s…</string>
         <string name="dsh_install_started_message">Installing %1$s in the background. You can watch progress on the instance list.</string>
@@ -103,6 +103,7 @@
         <string name="dsh_no_key_title">No API key</string>
         <string name="dsh_notify_running">Running</string>
         <string name="dsh_notify_starting">Starting…</string>
+        <string name="dsh_notify_stopping">Stopping…</string>
         <string name="dsh_port_auto">auto</string>
         <string name="dsh_port_invalid">Port must be between 0 and 65535</string>
         <string name="dsh_reason_exited_early">The dsh process exited before becoming ready (code %1$d)</string>

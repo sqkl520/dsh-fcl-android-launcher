@@ -289,6 +289,14 @@ class DshInstaller(
             errorSummaries[instance.id] = t.message ?: t.toString()
             return false
         }
+        // ★ R-14：看门狗超时（ProotProcessExecutor 约定返回 -2）时给可读文案，
+        // 否则 errorSummary 只会落到泛化的\"安装失败\"，用户完全不知道是卡死/超时。
+        if (exit == ProotProcessExecutor.TIMEOUT_EXIT_CODE) {
+            errorSummaries[instance.id] = context.getString(
+                com.dsh.fcl.androidlauncher.R.string.dsh_install_timeout,
+                INSTALL_TIMEOUT_MS / 60_000
+            )
+        }
         return exit == 0
     }
 

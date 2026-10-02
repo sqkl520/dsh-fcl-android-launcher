@@ -65,6 +65,7 @@ class DshResourceFormatTest {
         "dsh_version_size" to arrayOf<Any>("48 KB"),
         "dsh_install_done" to arrayOf<Any>("0.1.5-rc.2"),
         "dsh_install_failed" to arrayOf<Any>("npm ERR! code ENETUNREACH"),
+        "dsh_install_timeout" to arrayOf<Any>(30),
 
         // DshWebViewActivity / DshLogsActivity
         "dsh_webview_error" to arrayOf<Any>("net::ERR_CONNECTION_REFUSED"),

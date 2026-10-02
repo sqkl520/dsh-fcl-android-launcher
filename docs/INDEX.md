@@ -46,6 +46,7 @@
 | `reports/mc-removal-review-brief.md` | **送审请求书**：给审查方（AI/人工）的背景、范围、六问与重点关注项 | 要送审时的入口文档 |
 | `reports/mc-removal-impact-review.md` | **MC 移除影响审查结果**（1166 行）：八维度影响面分析 + M-01~M-04 + 补丁 A/B/C | 想知道"删 MC 有没有伤到别的地方" |
 | `reports/round6-optimization.md` | **第六轮：项目评估与优化**（26 文件 +175/−73016）：失效测试源集、rootfs 解压正确性/性能（18.5×）、明文收口、备份规则、安装竞态 | 想知道"最新一轮改了什么、**R-02 平台风险**如何决策" |
+| `reports/round7-review-and-optimization.md` | **第七轮：评估与优化**（4 个 P1/P2 修复 + §2.5 去 Material 收尾）；全文 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"去 Material 收尾、删除竞态、WebView 失败面板、超时文案"怎么修的 |
 | `reports/mc-removal-review-brief.md` | **审查请求书**：送审背景（仓库/版本/技术栈/运行方式/业务目标/已知限制）+ **影响面清单** + 期望审查方回答的问题 | 要送审时先看这份 |
 
 分类规则：**顶层**放长期常读的三份（总纲 / 规划 / 打包）；`design/` 放功能设计；

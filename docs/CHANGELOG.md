@@ -13,6 +13,38 @@
 
 ---
 
+## [Unreleased · 第七轮审查与优化] - 2026-10-02
+
+### Fixed
+- **实例删除竞态**：`DshInstances.delete()` 删除目录前先 `DshRuntime.stopAndWait()`（新增）等进程**真正退出**，
+  避免 `node` 还在写 `node_modules` 时删目录留下 ~300MB 残留；超时仍硬删并记日志
+- **WebView 失败面板被盖掉**：`DshWebViewActivity` 增加 `pageFailed` 标志，`onReceivedError`/HTTP 4xx 后
+  `onPageFinished` 不再无条件 `showWeb()`（失败页面也会回调 onPageFinished，原实现会让用户只见空白页而非错误信息）
+- **安装超时无文案**：`DshInstaller` 对 `ProotProcessExecutor` 超时退出码（新增常量 `TIMEOUT_EXIT_CODE = -2`）
+  转为可读文案 `@string/dsh_install_timeout`（含分钟数），不再落到泛化的"安装失败"
+- **通知误报"运行中"**：`DshRuntimeService.buildNotification` 对 `Stopping/Idle/Failed/Exited` 状态改用
+  `@string/dsh_notify_stopping`（新增），不再显示 `Running`
+
+### Changed
+- **实例/日志页去 Material（§2.5 硬性要求落地收尾）**：`activity_dsh_instances.xml`、`activity_dsh_webview.xml`
+  由 `MaterialButton`/原生 `ProgressBar`/`TextView` 全部换为 `FCLButton`/`FCLProgressBar`/`FCLTextView`；
+  实例页标题、空态提示改用 `FCLTextView + auto_text_tint`（随主题换色），WebView 状态面板背景改 `bg_container_white`
+  —— 至此 **8 个 dsh 布局 0 Material 控件**，`app-shell.md §2.5.5` 验收命令 1 输出为空
+
+### Removed
+- 未引用的文案 `dsh_action_configure_key`（中英）—— 全仓 0 引用（R-17）
+
+### Optimized
+- `DshLogBus` 环形裁剪由 `removeAt(0)` 循环（O(n²) 数组搬移）改为 `subList().clear()`（单次搬移），并修正注释
+
+### Refactored
+- `ProotProcessExecutor` 超时退出码抽为命名常量 `TIMEOUT_EXIT_CODE`（替代魔法数 `-2`）
+
+### Notes
+- 本轮审查对象：`com/dsh/**` + 可达 FCL 遗产 + 脚本/资源；见 `docs/reports/round7-review-and-optimization.md`
+- 验证：`run-compile.sh` BUILD SUCCESSFUL；单测 **23/23**；脚本一致性 **18/18**；未打包
+
+
 ## [Unreleased · 文档：新增经验文档并瘦身 CHANGELOG] - 2026-10-02
 
 ### Added

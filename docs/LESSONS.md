@@ -119,6 +119,42 @@ Android 10+ 对 `targetSdk ≥ 29` 的应用数据目录启用 W^X：
 ## 4. 文档与流程约定
 
 - **`CHANGELOG.md` 只记"改了什么"**（Added/Changed/Fixed/Removed/Optimized/Refactored + 验证结果）；
+  经验、方法论、踩坑写进本文件
+- 文档主副本在 `/workspace/docs`（仓库外工作区），**改动后要同步进仓库 `docs/` 并提交**
+- 代码改完**先不打包**，只跑 `run-compile.sh` / `run-tests.sh`；等明确要求再出 APK
+- 涉及真机运行时行为的结论，**不要只凭机制推理下死判断**——本项目已因此误判两次
+  （"dlopen 也被 W^X 禁"、"targetSdk 必须降到 28"），后被真机数据推翻
+
+---
+
+## 5. WebView / 平台行为
+
+### 5.1 onPageFinished 也会在加载失败后回调
+
+WebView 对**失败页面**同样会回调 `onPageFinished`（常见顺序：`onPageStarted` → `onReceivedError` → `onPageFinished`）。
+所以"在 onPageFinished 里无条件切到正常 UI"会把你刚在 onReceivedError 里显示的错误面板盖掉，
+用户只会看到一片空白。**判据**：用一个 `pageFailed` 标志，在 onReceivedError / HTTP 4xx 置 true、
+onPageStarted 清零，onPageFinished 里先查它再决定显不显示正常内容。
+
+### 5.2 杀死子进程后要等"目录写干净"再删目录
+
+Android 的 `Process.destroy()` / 发 SIGTERM 是**异步**的（还有 KILL 兜底，最长要等几秒）。
+如果你紧接着 `deleteRecursively()` 删它的工作目录（node_modules 动辄 300MB），
+进程还在写时目录删不干净 → 留下占用大量空间且界面无提示的孤儿。**要删就要"停 + 等退出"再删**，
+本项目为此给 `DshRuntime` 加了同步版 `stopAndWait()`（轮询状态离开 Stopping）。
+
+## 6. UI 与 FCL 一致性
+
+### 6.1 "去 Material" 的验收要跑到底
+
+`app-shell.md §2.5` 要求 dsh 布局一律用 fcllibrary 控件。**阶段 2 迁移时只改了一部分页面**，
+`activity_dsh_instances.xml` / `activity_dsh_webview.xml` 两个布局里仍混着 `MaterialButton` / 原生
+`ProgressBar` / `TextView`——正是 §2.5.5 验收命令 `grep -l "com.google.android.material" *dsh*.xml`
+会抓住的地方（改前输出这两行，改后为空）。所以验收命令不只是给别人看的，**每轮动手前先跑一遍**，
+避免"方案里写了、代码没全落地"的漂移。当时 `activity_dsh_webview.xml` 的 `?android:attr/colorBackground`
+也是原生主题引用，不属于 FCL 视觉（FCL 用 `bg_container_white`），一并换掉。
+
+- **`CHANGELOG.md` 只记"改了什么"**（Added/Changed/Fixed/Removed/Optimized/Refactored + 验证结果）；
   **经验、方法论、踩坑写进本文件**
 - 文档主副本在 `/workspace/docs`（仓库外工作区），**改动后要同步进仓库 `docs/` 并提交**
 - 代码改完**先不打包**，只跑 `run-compile.sh` / `run-tests.sh`；等明确要求再出 APK
