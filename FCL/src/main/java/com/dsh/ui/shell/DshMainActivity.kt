@@ -8,6 +8,8 @@ import com.dsh.core.DshInstances
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
 import com.dsh.ui.DshSettingsActivity
+import com.mio.util.ImageUtil
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import com.dsh.ui.DshWebViewActivity
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshMainBinding
@@ -45,6 +47,8 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         super.onCreate(savedInstanceState)
         binding = ActivityDshMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        // FCL 原版的核心视觉：背景图由 ThemeEngine 统一提供，跟随亮暗主题切换。
+        ImageUtil.loadInto(binding.background, ThemeEngine.getInstance().getTheme().getBackground(this))
 
         DshPaths.loadPaths(this)
         DshInstances.init()
