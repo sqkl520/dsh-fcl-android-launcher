@@ -13,6 +13,46 @@
 
 ---
 
+## [Unreleased · 第九轮审查与优化] - 2026-10-02
+
+> 本轮 = 第八轮之后的独立复审。重点：第八轮遗留的\"使用逻辑\"缺口（下载页空实例污染、isReady 与
+> preflight 判据不一致）。完整报告见 `docs/PROJECT_REVIEW_AND_OPTIMIZATION.md`；
+> 速览见 `docs/reports/round9-review-and-optimization.md`。
+> 代码改动：`DshBootstrap.kt` + `DshDownloadViewModel.kt` + 新增 4 个单测（见下）。
+> 验证：编译 BUILD SUCCESSFUL（`run-compile.sh`）；单测 **27/27**（原 23 + 新增 4）；脚本一致性 18/18。
+
+### Changed
+
+**1. `DshBootstrap.isReady()` 补 proot 二进制存在性校验（P2，正确性/一致性）**
+- 问题：原 `isReady()` 只校验版本文件 + `start-dsh.sh` + rootfs 布局，**不校验 proot 是否可解析**；
+  而 `missingSummary()` / `ProotCommand.preflight()` 都把 proot 当作必要条件。于是可同时出现
+  \"`isReady()==true`（bootstrap 横幅隐藏）但一启动就 preflight 报『缺少 proot 可执行文件』\"的自相矛盾。
+- 改动：`isReady()` 增加 `&& DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR).isFile`（jniLibs 优先、assets 回退）。
+- 影响：横幅的\"是否提示准备运行时\"与真实可启动性一致；纯增量校验，对正常就绪设备零行为变化。
+
+**2. `DshBootstrap.install()` proot 分支补\"文件缺失即解压\"兜底（P2，可靠性）**
+- 背景：第八轮只给 scripts 分支加了文件存在性兜底，proot 分支仍只依赖 `isLatest`。一旦
+  `getResourceAsStream` 在该环境不可解析（`isLatest` 恒为 true），assets 方案的 proot 会被
+  **永远跳过解压**，与本轮 `isReady()` 新校验互相印证后会形成一个\"永远不具备\"的空转。
+- 改动：解压条件改为 `!isLatest(...) || prootMissing`，`prootMissing` 用 `resolveProotBin()`（jniLibs 优先）判定，
+  避免 jniLibs 已就位时因 prootDir 无 `libproot.so` 而每次重复解压 assets 副本。
+- 影响：幂等\"缺二进制即补\";jniLibs 主路径不受影响。
+
+### Added
+
+**3. 下载页\"反复点安装\"去重（P2，数据卫生，承接第八轮建议 R8-08）**
+- 问题：`DshDownloadViewModel.installVersion()` 每次点击都 `DshInstances.create()` 新建实例；
+  用户换版本/重复点击会在实例列表积累一堆只有目录、没装 dsh 的**空实例**。
+- 改动：
+  - 新增纯函数 `DshDownloadViewModel.chooseInstanceToInstall(instances, version)`：
+    ① 已 READY 装过同版本 → 复用（不重复触发安装/重新下载依赖树）；
+    ② 否则有 NOT_INSTALLED 空壳 → 复用它（避免累积）；③ 都没有 → 新建。
+  - `installVersion()` 改用该函数。
+- 影响：误点/重复安装不再污染列表；对\"本来就要新建\"的正常路径行为不变。
+- 单测：`DshCoreLogicTest` 新增 4 例（复用同版本 / 不同版本不复用 / 复用空壳 / 无可复用则新建）。
+
+---
+
 ## [Unreleased · 第八轮审查与优化] - 2026-10-02
 
 > 本轮 = 独立复审（第七轮之后），重点核查前七轮可能遗漏的**使用逻辑/资源机制/安全卫生**类问题。

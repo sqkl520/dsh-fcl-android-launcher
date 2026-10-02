@@ -115,11 +115,17 @@ class DshDownloadViewModel(
     }
 
     /**
-     * 安装某版本：新建一个实例并触发安装（不阻塞 UI；进度由实例状态与安装器状态驱动）。
-     * @return 新建的实例（供调用方跳转/提示）
+     * 安装某版本：优先复用已有实例/空壳，避免反复点击在列表里积累一堆空实例；否则新建一个。
+     * @return 用的实例（可能是已有实例；若该版本已装好则不会重复触发安装）
      */
     fun installVersion(item: DshVersionListItem, instanceName: String? = null): DshInstance {
-        val inst = DshInstances.create(instanceName ?: "dsh ${item.version}")
+        val existing = chooseInstanceToInstall(DshInstances.instances.value, item.version)
+        // 已 READY 装过该版本：无需重装，直接复用，避免每次点击都重新下载整棵依赖树
+        if (existing != null && existing.state == DshInstance.State.READY) {
+            DshLogBus.append("[download] ${existing.name} 已安装 dsh ${item.version}，跳过重复安装")
+            return existing
+        }
+        val inst = existing ?: DshInstances.create(instanceName ?: "dsh ${item.version}")
         _installingVersions.value = _installingVersions.value + item.version
         installer.install(inst, item.version)
         return inst
@@ -127,5 +133,24 @@ class DshDownloadViewModel(
 
     companion object {
         const val FETCH_TIMEOUT_MS = 20_000L
+
+        /**
+         * 决定\"装某版本时该用哪个现有实例\"。抽出为纯函数便于单测。
+         * @return 应复用的实例；null 表示应新建
+         */
+        fun chooseInstanceToInstall(
+            instances: List<DshInstance>,
+            version: String
+        ): DshInstance? {
+            // 1) 已经 READY 装过这个精确版本 → 复用（避免同一版本装出 N 个实例）
+            instances.firstOrNull {
+                it.state == DshInstance.State.READY && it.dshVersion == version
+            }?.let { return it }
+            // 2) 已有一个\"空壳\"（NOT_INSTALLED、从未装成，例如上次安装被取消）→ 复用它，
+            //    避免反复点击在实例列表里积累一堆只有目录没有 dsh 的实例
+            return instances.firstOrNull {
+                it.state == DshInstance.State.NOT_INSTALLED && it.dshVersion == null
+            }
+        }
     }
 }

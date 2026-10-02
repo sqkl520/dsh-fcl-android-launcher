@@ -226,6 +226,52 @@ class DshCoreLogicTest {
         assertNull(UrlScanner.findAuthenticatedUrl("http://127.0.0.1:3080/?token="))
     }
 
+    // --- 下载页复用/去重（决定\"反复点安装会不会堆一堆空实例\"） ----------
+
+    /** 已 READY 装过同一版本 → 复用，不新建 */
+    @Test
+    fun reusesReadyInstanceWithSameVersion() {
+        val ready = com.dsh.core.DshInstance(
+            id = "inst-1", name = "a",
+            dshVersion = "0.1.5-rc.2", state = com.dsh.core.DshInstance.State.READY
+        )
+        val chosen = com.dsh.core.DshDownloadViewModel.chooseInstanceToInstall(
+            listOf(ready), "0.1.5-rc.2"
+        )
+        assertEquals("inst-1", chosen?.id)
+    }
+
+    /** 已 READY 但版本不同 → 不当作\"已装同版本\"复用 */
+    @Test
+    fun doesNotReuseReadyInstanceForDifferentVersion() {
+        val ready = com.dsh.core.DshInstance(
+            id = "inst-1", name = "a",
+            dshVersion = "0.1.4", state = com.dsh.core.DshInstance.State.READY
+        )
+        // READY 版本不匹配 → 不会因\"已装同版本\"而选中它；应落到空壳逻辑 → 无空壳 → null(新建)
+        assertNull(com.dsh.core.DshDownloadViewModel.chooseInstanceToInstall(listOf(ready), "0.1.5-rc.2"))
+    }
+
+    /** 有\"空壳\"（NOT_INSTALLED、无版本，例如上次取消）→ 复用，避免积累空实例 */
+    @Test
+    fun reusesEmptyShellInstance() {
+        val shell = com.dsh.core.DshInstance(
+            id = "inst-empty", name = "b", state = com.dsh.core.DshInstance.State.NOT_INSTALLED
+        )
+        val chosen = com.dsh.core.DshDownloadViewModel.chooseInstanceToInstall(listOf(shell), "0.1.5-rc.2")
+        assertEquals("inst-empty", chosen?.id)
+    }
+
+    /** 没有任何可复用的 → 返回 null（调用方新建） */
+    @Test
+    fun createsNewWhenNothingReusable() {
+        val ready = com.dsh.core.DshInstance(
+            id = "inst-1", name = "a",
+            dshVersion = "0.1.4", state = com.dsh.core.DshInstance.State.READY
+        )
+        assertNull(com.dsh.core.DshDownloadViewModel.chooseInstanceToInstall(listOf(ready), "0.1.5-rc.2"))
+    }
+
     // --- 安装单飞闸门（决定"两个 npm 会不会同时写一个 node_modules"） ------
 
     /**
