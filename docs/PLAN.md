@@ -1,5 +1,15 @@
 # DeepSeek Harness 安卓启动器 —— 完整落地方案
 
+> ## ⚠️ 过时声明（2026-10-01）
+> 本文是**早期自研方案的总纲**（自带 proot rootfs + 手拼 proot 命令 + 用户自备大文件）。
+> 2026-10-01 起，**运行时底座决策已改为集成 oonid/pr 的 `:proot-engine`**（`targetSdk` 保持 34，不降级），
+> 因此本文多数章节（架构、proot 启动链、rootfs 准备、真机联调步骤）**已过时，仅供参考**。
+> 请以 **`design/proot-engine-integration.md`**（运行时底座新路线）、**`design/wx-exec-proot-loader.md`**（W^X 原理）、
+> **`ROADMAP.md`**（最新路线）、**`INDEX.md`**（当前状态）为准。
+> 本文**未做全面改写**（保留历史原貌便于追溯决策），仅在本页顶部标注过时；后续重写时再整体更新。
+
+---
+
 > 在未 root 的普通安卓手机上，做一个 DeepSeek Harness（dsh）的启动器/管理器 App。
 > 借鉴 FoldCraftLauncher（FCL）的技术，模型走 DeepSeek 云端 API，手机只跑 dsh 本体与界面。
 >
@@ -308,10 +318,13 @@
 
 ## 8.5 真机联调步骤（在实机上按序执行）
 
+> ⚠️ **本节是旧的自研路径（2026-10-01 前）**，运行时底座已改为集成 `:proot-engine`（targetSdk 34 不降）。
+> 最新路线见 **`design/proot-engine-integration.md`** 与 **`ROADMAP.md` M1**；本节仅保留作历史参考。
+
 前置：一台 arm64 安卓真机（未 root 即可）、可编译 FCL 的开发环境（x86_64 机器最省事，
 或本沙箱这套 arm64+qemu 方案，见 §7.1 注解）。
 
-### 步骤 1：补齐两类平台大文件
+### 步骤 1：补齐两类平台大文件（旧路径，已被 proot-engine 取代）
 1. **proot 二进制（推荐 jniLibs 方案）**：把 arm64 的 proot、proot loader 命名为
    `libproot.so`、`libproot_loader.so`，放入 `FCL/src/main/jniLibs/arm64-v8a/`。
    系统安装时自动解压到 `nativeLibraryDir` 并自带执行位，`DshPaths.resolveProotBin/Loader`

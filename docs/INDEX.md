@@ -56,9 +56,15 @@
 
 ## 当前状态
 
-> ⚠️ **2026-09-30 重大变更**：已完成**移除全部 Minecraft 相关代码与资源**，本项目现在是
-> **纯 dsh 启动器**（只保留 FCL 的 UI 框架与少量通用工具）。**本目录其余文档尚未全面反映此变更。**
+> ⚠️ **2026-10-01 重大变更**：已完成**移除全部 Minecraft 相关代码与资源**，本项目现在是
+> **纯 dsh 启动器**（只保留 FCL 的 UI 框架与少量通用工具）。
 > 变更详情见 **`reports/mc-removal.md`**（供独立审查）。
+>
+> 📌 **2026-10-02 第七轮收尾**：**外壳改造（M0）全部完成**（阶段 0~4，含去 Material 收尾）；
+> 删除实例竞态、WebView 失败面板、安装超时文案、通知状态文案等 4 个 P1/P2 缺陷已修。
+> 详见 **`reports/round7-review-and-optimization.md`**（全文 `PROJECT_REVIEW_AND_OPTIMIZATION.md`）。
+> **运行时底座路线已定：保持 targetSdk 34，集成 oonid/pr 的 `:proot-engine`**（见 `design/proot-engine-integration.md`），
+> 唯一拦路项 = dsh 子进程 spawn 是否能在 patched proot 下工作（需真机先验证）。
 
 - **代码**：全仓库 **494 个源文件 / 71,623 行 / 3.7 MB**
   > **修正（2026-10-01，见 `reports/mc-removal-impact-review.md` §1.4 D-7）**：数字与实测不符。
@@ -80,24 +86,21 @@
   `dsh-launcher-poc/scripts/` 6 个参考/测试脚本
 - **验证**：`sh /workspace/run-compile.sh`（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL，0 error**；
   单测 **23/23**；脚本一致性 **18/18**
-- **入口**：`SplashActivity` → 直接进 `DshInstancesActivity`（**不再有** MC 运行时门禁 / EULA / MC 主界面）
+- **入口**：`SplashActivity` → 直接进 **`DshMainActivity`**（dsh 外壳，五页：实例/管理/下载/日志/设置；
+  **不再有** MC 运行时门禁 / EULA / MC 主界面，也不再有并列的 `DshInstancesActivity` 等旧 Activity）
 - **待办**：
-  1. **【硬性要求】UI 跟 FCL 走**（2026-10-01 新增）：界面布局 / 按钮布局 / 整体主题一律使用 fcllibrary 控件与
-     `ThemeEngine` 主题（当前 8 个 dsh 布局仍**全是 Material 控件、0 个 FCL 控件**，需替换）。
-     要求拆解 + 控件替换表 + FCL 写法范式 + 验收命令见 **`design/app-shell.md` §2.5**；
-     落地时机 = 随外壳改造**阶段 2**（页面从 Activity 改 FCLCommonUI 时一并重写布局，避免改两遍）。
-  2. **同步更新文档**（本目录多份文档仍按旧的"FCL + MC"形态描述）
-     > 部分已完成：2026-10-01 已在 `reports/mc-removal.md` §5.3/§9.4.4/§9.4.6 与
-     > `reports/mc-removal-review-brief.md` §0/§7.B/§7.C/§7.D 加修正批注（共 8 处，D-1~D-8）。
-     > 其余文档（`PLAN.md` / `PACKAGING.md` / `design/*` / `round2~5`）**仍然过时**。
-  3. **决定 R-02**（`targetSdk 34` 禁止 exec 数据目录里的文件）—— 真机点亮的前提：
-     方案 A `targetSdk = 28`（1 行，侧载自用可行）vs 方案 B 改架构。
-     见 `reports/round6-optimization.md` §11.1。
-  4. 外壳改造阶段 1~3（新外壳骨架 / 五页迁移 / 右侧面板），见 `design/app-shell.md`
-  5. 真机端到端：准备 `proot` 二进制 + `rootfs.tar.xz` → 出 APK → 联调（见 `PLAN.md` §8.5）
-     > ⚠️ 这是**最大的空白**：`libproot.so`/`libproot_loader.so` 与 `rootfs.tar.xz` 至今不存在于仓库
-     > （只有 `PLACEHOLDER.txt`），**从未出过 APK、从未上过真机**。
-  6. 可选：清理 `reports/mc-removal.md` §9.1 与 `reports/round6-optimization.md` §11.2 的死代码
+  1. ✅ **【硬性要求】UI 跟 FCL 走**（**第七轮已收尾**）：**8 个 dsh 布局已全部由 Material → fcllibrary 控件**，
+     0 Material 残留；§2.5.5 验收命令 1 输出为空。规格见 **`design/app-shell.md` §2.5**
+     （仅 `MaterialAlertDialogBuilder` 在 `com/dsh` 仍 22 处，作"新代码逐步归零"的 P3 项。）
+  2. **同步更新文档**（部分完成）：已为 `PLAN.md`/`PACKAGING.md` 加过时横幅、更新 `ROADMAP.md`/`INDEX.md`；
+     `design/multi-version.md`、`design/ui-manifest.md`、`design/proot-chain.md`、`reports/round2~5` 仍按旧形态描述（逐步完善）
+  3. ✅ **决定 R-02（targetSdk）**：**已决策保持 targetSdk 34，不降级**，用 `:proot-engine`（PROOT_LOADER）绕过 W^X。
+     见 `design/proot-engine-integration.md` / `design/wx-exec-proot-loader.md`。
+  4. ✅ **外壳改造阶段 1~4**（骨架/五页迁移/横屏右面板/裁剪）**已完成**，见 `design/app-shell.md`、`reports/round7-*`
+  5. 🔴 **真机端到端（最大的空白）**：运行时底座改走 **`:proot-engine`** 后不再需要手工准备 proot/rootfs；
+     **唯一拦路项 = dsh 子进程 spawn 能否在 patched proot 下工作**（需真机先验证，见 `design/proot-engine-integration.md §5`、
+     `ROADMAP.md` M1）。proot/rootfs 仍是 PLACEHOLDER，**从未真机跑通**。
+  6. 可选：清理 `reports/mc-removal.md` §9.1 与 `reports/round6-optimization.md` §11.2 的死代码；重写 `.github/workflows`
 - **已修（2026-10-01，见 `reports/mc-removal-impact-review.md` §11 补丁 A/B）**：
   1. **M-01（P1）** `FCLPath.loadPaths()` 上提到 `FCLApp.onCreate`，并删除 `SplashActivity.kt` 中的重复调用
      —— 消除"必须先经过启动页"的隐式依赖（通知栏 PendingIntent 冷启动会绕过启动页）
@@ -121,19 +124,21 @@
 
 ## 到电脑后的最短路径
 
-1. 准备两个大文件（见 `PACKAGING.md`）：
-   proot 二进制 → 放 `FCL/src/main/jniLibs/arm64-v8a/`（推荐）；
-   `rootfs.tar.xz` → 放 `FCL/src/main/assets/dsh/rootfs/`。
-2. 编译：`./gradlew :FCL:assembleDebug`（需要 Android SDK + NDK + JDK17）。
-3. 装机 → 首启解压（自动）→ 运行时自检 → 下载页装 dsh → 列表页启动 → WebView 出界面。
-4. 逐项对照 `PLAN.md` §8.5 的联调步骤与排查清单。
+> ⚠️ 旧的"准备两个大文件"路径已被 proot-engine 集成取代（targetSdk 34 不降）。
+> 最新路线见 `ROADMAP.md` M1 与 `design/proot-engine-integration.md`。下面保留旧步骤仅作编译参考。
+
+1. 编译：`./gradlew :FCL:assembleDebug`（需要 Android SDK + JDK17；出 APK 用 `sh /workspace/build-apk.sh`）。
+2. 集成 `:proot-engine` 后：`pr-cli install <distro>` 拉发行版（无需手工打包 rootfs），
+   装机 → 运行时就绪 → 下载页装 dsh → 列表页启动 → WebView 出界面。
+3. 若坚持旧自研路径（不推荐）：proot 二进制 → `jniLibs/arm64-v8a/`、`rootfs.tar.xz` → `assets/dsh/rootfs/`，见 `PACKAGING.md`（已标过时）。
+4. 逐项对照 `design/proot-engine-integration.md` / `ROADMAP.md` M1 的验证清单。
 
 > 注意：编译需要 Android SDK / NDK / Gradle 工具链，**手机上是做不了的**，
-> 所以这一步只能等换到电脑。手机上这段时间适合读文档、改代码、准备两个大文件。
+> 所以这一步只能等换到电脑。手机上这段时间适合读文档、改代码、准备真机验证 spawn（M1 阻塞项）。
 
 ---
 
-## 2026-10-01 全面评估（本轮）
+## 2026-10-01 全面评估（第六轮）
 
 | 材料 | 内容 |
 |---|---|
@@ -143,6 +148,15 @@
 | 代码改动 | 提交 **`515270d`**：修 6 项（失效测试源集 / rootfs 解压可执行位 / 解压性能 18.5× / 硬链接解包 / 明文收口 / 备份规则 / 安装竞态 / 失败提示），`git revert 515270d` 可回滚 |
 | **新增硬性要求** | **界面布局 / 按钮布局 / 整体主题一律跟 FCL 走** → 规格见 `design/app-shell.md` §2.5 |
 
-> ⚠️ 本轮把「**真机端到端仍跑不起来**」的头号嫌疑定到了平台层：
-> **targetSdk ≥ 29 时 Android 10+ 禁止 execve 应用数据目录里的文件**——proot 二进制已用 jniLibs 规避，
-> 但 rootfs 内的 `/bin/sh`、`node` 同样受限。决策项与两条可选路线见报告 **§11.1**（需先拍板再真机验证）。
+> ⚠️ 第六轮把「**真机端到端仍跑不起来**」的头号嫌疑定到了平台层：
+> **targetSdk ≥ 29 时 Android 10+ 禁止 execve 应用数据目录里的文件**。
+> → **第七轮前已拍板**：**保持 targetSdk 34，用 `:proot-engine`（PROOT_LOADER）绕过**，不降级。
+
+## 2026-10-02 第七轮评估与优化（最近一轮）
+
+| 材料 | 内容 |
+|---|---|
+| `PROJECT_REVIEW_AND_OPTIMIZATION.md`（全文） + `reports/round7-review-and-optimization.md`（速览） | **第七轮：评估与优化报告**（问题清单 R7-01~R7-13、修复详情、验收清单） |
+| 代码改动 | 提交 **`494f234`**：修 4 个 P1/P2 缺陷（删除竞态 / WebView 失败面板 / 安装超时文案 / 通知状态文案）+ §2.5 去 Material 收尾 + 日志环剪 + 删未引用文案 |
+| 验证 | 编译 BUILD SUCCESSFUL；单测 23/23；脚本 18/18；§2.5.5 验收命令 1 通过；未打包 |
+| 运行时底座 | **已决策：集成 oonid/pr `:proot-engine`，targetSdk 34 不降级**；唯一拦路项 = 子进程 spawn（见 `design/proot-engine-integration.md`） |
