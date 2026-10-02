@@ -1,111 +1,114 @@
 <div align="center">
-    <img width="75" src="/FCL/src/main/res/drawable/img_app.png"></img>
-</div>
 
-<h1 align="center">Fold Craft Launcher</h1>
+# DSHarness-FCL-Launcher
 
-<div align="center">
+**DeepSeek Harness FCL Android Launcher**
 
-[![Android CI](https://github.com/FCL-Team/FoldCraftLauncher/actions/workflows/build.yml/badge.svg)](https://github.com/FCL-Team/FoldCraftLauncher/actions/workflows/build.yml)
-![Downloads](https://img.shields.io/github/downloads/FCL-Team/FoldCraftLauncher/total?style=flat-square&color=f18cb9)
-![Release](https://img.shields.io/github/v/release/FCL-Team/FoldCraftLauncher?style=flat-square&color=f18cb9)
+*dshAndroidLauncher (FCL-based)*
 
-[![Discord](https://img.shields.io/badge/Discord-red?logo=discord&logoColor=white)](https://discord.gg/ffhvuXTwyV)
-[![QQ](https://img.shields.io/badge/QQ-green)](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=LwxydGEvBZJnn09sXOjkQo9tuuLcYwx5&authKey=seyY5pPUCIHMWS5FqVryq926T0G2GarSXetpxxV9DJxBVt%2FPcg1vxN%2F%2FXpsCowyk&noverify=0&group_code=762054349)
-[![Sponsor](https://img.shields.io/badge/sponsor-blue?logo=GitHub-Sponsors)](https://afdian.com/@tungs)
+在**未 root** 的安卓手机上运行 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai) —— 基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) 改造的启动器
+
+![Version](https://img.shields.io/badge/version-0.1.0--SNAPSHOT-orange?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
+![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 </div>
 
-🌍 **语言**  
-简体中文 | [English](./README_EN.md) | [Русский язык](./README_RU.md)
+---
 
-> 你说得对，但是[「FoldCraft Launcher」](https://github.com/FCL-Team/FoldCraftLauncher)是由[FCL-Team](https://github.com/FCL-Team)基于[HMCL](https://github.com/HMCL-dev/HMCL)的核心功能，使用[PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher)后端开发的[Minecraft](https://www.minecraft.net/) [Java](https://baike.baidu.com/item/Java%E5%B9%B3%E5%8F%B0/3793459)版启动器。启动器运行在一个被称作[「安卓」](https://baike.baidu.com/item/android/60243)的系统，在这里，被系统选中的人将被授予「JVM」，导引[Java](https://baike.baidu.com/item/Java%E5%B9%B3%E5%8F%B0/3793459)之力。你将扮演一位名为「小白」的神秘用户，在自由的使用中安装不同版本、各有千秋独特的[模组](https://baike.baidu.com/item/%E6%A8%A1%E7%BB%84/58377440)，和它们一起运行，找出崩溃闪退的原因，同时逐步发掘「xxException:」的真相。
+## 这是什么
 
-> ✨ **项目简介**  
-> 「Fold Craft Launcher」是由FCL团队开发的Android平台Minecraft: Java Edition启动器。基于[HMCL](https://github.com/HMCL-dev/HMCL)的核心功能，使用[Amethyst-Android](https://github.com/AngelAuraMC/Amethyst-Android)后端，让您能在移动设备上畅玩Java版MC，支持模组加载与全版本运行。
+一个安卓 App，让你**不用 root** 就能在手机上跑 dsh（DeepSeek Harness —— 对话 / 编码 agent）。
+界面沿用 FCL 的视觉风格与 GUI 框架（fcllibrary + ThemeEngine），底层用 **proot** 兜一个 Linux 环境来跑 Node.js 版 dsh。
+
+> **项目状态：0.1.0-SNAPSHOT（早期开发中）**
+> 外壳（界面骨架 / 五页 / 横屏右面板）已完成；运行时底座（proot + rootfs）仍在集成中，
+> **端到端尚未在真机跑通**。版本号规则：待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 ---
 
-## 🚀 核心特性
+## 怎么工作的
 
-✅ **全版本支持**  
-- 原生支持 Minecraft 全版本（包括最新快照）
-- 模组加载器支持：Forge/NeoForge/LiteLoader/OptiFine/Fabric/Quilt/Cleanroom...
+```
+Android App (本仓库)
+   └─ proot（无 root 的 Linux 环境模拟，基于 ptrace 系统调用翻译）
+        └─ Linux rootfs（Alpine / Ubuntu 等）
+             └─ Node.js
+                  └─ dsh（DeepSeek Harness）
+                       └─ 通过 HTTPS 调 DeepSeek 云端 API
+```
 
-⚙️ **功能亮点**  
-- 内置多版本 Java 运行时（Java 8/17/21/25）同时支持导入Java
-- 虚拟鼠标与自定义按键映射
-- 支持 FCL/ZalithLauncher2 控制布局互转，导入 ZL2 布局自动转换
-- 光影支持（需VirGL/Zink/MG渲染器）
-- 动态资源管理（模组/整合包/材质/光影/存档）
-- 个性化主题定制（背景/颜色方案）
-- 支持[渲染器插件化](https://github.com/ShirosakiMio/FCLRendererPlugin)
+### 关键设计：W^X 绕过（PROOT_LOADER）
 
----
+Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应用数据目录（`filesDir`）里的文件。
+而 proot 需要在数据目录里执行 rootfs 的 `/bin/sh`、`node`。
 
-## 🎮 使用截图
+**解法**：proot 执行 rootfs 程序时，走的是 proot 自带的 **loader**（`PROOT_LOADER` 机制）。
+把这个 loader 放进 APK 的 `jniLibs`（安装后位于 `nativeLibraryDir`，SELinux 允许执行），
+execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无需把 targetSdk 降到 28**。
 
-<div align="center">
-  <img src="/.github/images/ui_main_light.jpg" width="30%" alt="浅色界面">
-  <img src="/.github/images/ui_main_dark.jpg" width="30%" alt="深色界面">
-  <img src="/.github/images/game.jpg" width="30%" alt="游戏画面">
-</div>
+> 该机制经同类项目 [`oonid/pr`](https://github.com/oonid/pr) 在真机（Android 16 / SDK 36）验证通过。
+> 详见 [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md)。
 
 ---
 
-## 📜 开源协议
+## 当前进度
 
-本项目采用 **[GPL-3.0 License](https://www.gnu.org/licenses/gpl-3.0.html)** 授权
+| 模块 | 状态 |
+|---|---|
+| FCL 改造：移除全部 Minecraft 代码与资源 | ✅ 完成（约 −226k 行，APK 337M → 15M） |
+| 应用外壳：左侧菜单 + ViewPager2 内容区 + 右侧面板 + 动态岛（横屏） | ✅ 完成 |
+| 界面：实例 / 管理 / 下载 / 日志 / 设置 五页 | ✅ 完成 |
+| dsh 版本管理：npm registry 版本列表 + 安装 | ✅ 完成（逻辑） |
+| 运行时底座：proot + rootfs + PROOT_LOADER 集成 | 🚧 进行中 |
+| 真机端到端验证 | ⬜ 待做 |
 
 ---
 
-## 🌍 翻译
+## 构建
 
-欢迎参与翻译！本项目通过 [Weblate](https://hosted.weblate.org/projects/foldcraftlauncher/) 管理本地化，无需安装任何工具，直接在网页上贡献翻译即可。
+**环境要求**：JDK 17、Android SDK 35、NDK 27（仅集成 proot 引擎时需要）
+
+```bash
+# 编译检查（不打包，覆盖 Kotlin + Java + 资源 + Manifest）
+sh run-compile.sh
+
+# 单元测试
+sh run-tests.sh
+
+# 打包 arm64 debug APK → dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk
+./gradlew --no-daemon -Darch=arm64 :FCL:assembleFordebug
+```
 
 ---
 
-## 🤝 贡献与致谢
-### 贡献者墙
-<a href="https://github.com/FCL-Team/FoldCraftLauncher/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=FCL-Team/FoldCraftLauncher" />
-</a>
+## 文档
 
-### 相关项目
-- [HMCL](https://github.com/HMCL-dev/HMCL)：核心功能来源（fclcore 移植自 `org.jackhuang.hmcl`）
-- [Boat 及其相关项目](https://github.com/AOF-Dev/Boat)
-- [Amethyst-Android](https://github.com/AngelAuraMC/Amethyst-Android)（PojavLauncher Android fork）：JVM 启动与渲染后端
-- [authlib-injector](https://github.com/yushijinhun/authlib-injector)
-- [EasyTier](https://github.com/EasyTier/EasyTier)：局域网联机组网底层
-- [Terracotta](https://github.com/burningtnt/Terracotta)：基于 EasyTier 的联机方案（Terracotta 模块 JNI 封装）
-- [TouchController](https://github.com/TouchController/TouchController)：触摸控制器依赖
-- [NG-GL4ES](https://github.com/ShirosakiMio/NG-GL4ES)：gl4es fork 渲染器（构建产物以 aar 随 FCL 发布）
-- [FCLRendererPlugin](https://github.com/ShirosakiMio/FCLRendererPlugin)：渲染器插件扩展
-- [FCLDriverPlugin](https://github.com/FCL-Team/FCLDriverPlugin)：驱动（Turnip 等）插件扩展
+> 完整文档索引见 [`docs/INDEX.md`](docs/INDEX.md)
 
-### 依赖
+| 文档 | 内容 |
+|---|---|
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | 变更日志（按阶段/里程碑记录） |
+| [`docs/PLAN.md`](docs/PLAN.md) | 项目总纲与总体方案 |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | 里程碑规划 M1~M6 |
+| [`docs/PACKAGING.md`](docs/PACKAGING.md) | 打包说明（proot 二进制 / rootfs 准备） |
+| [`docs/design/app-shell.md`](docs/design/app-shell.md) | 应用外壳改造设计（含界面跟 FCL 的硬性规范） |
+| [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md) | W^X 限制与 PROOT_LOADER 绕过方案 |
+| [`docs/design/proot-engine-integration.md`](docs/design/proot-engine-integration.md) | 集成 oonid/pr `:proot-engine` 的架构决策 |
+| [`docs/reports/`](docs/reports/) | 各轮评审与优化报告 |
 
-- [Amethyst-Android](https://github.com/AngelAuraMC/Amethyst-Android)（PojavLauncher Android fork）: [GPL-3.0]
-- Android Support
-  Libraries: [Apache License 2.0](https://android.googlesource.com/platform/prebuilts/maven_repo/android/+/master/NOTICE.txt)
-- [GL4ES](https://github.com/ptitSeb/gl4es): [MIT License](https://github.com/ptitSeb/gl4es/blob/master/LICENSE)
-- [NG-GL4ES](https://github.com/ShirosakiMio/NG-GL4ES)（gl4es fork，Krypton Wrapper 衍生，FCL 以 aar 形式使用预构建产物）
-- [ANGLE](https://chromium.googlesource.com/angle/angle): [BSD-3 License](https://chromium.googlesource.com/angle/angle/+/refs/heads/main/LICENSE)
-- [OpenJDK](https://github.com/AngelAuraMC/openjdk-multiarch-jdk8u): [GNU GPLv2 License](https://openjdk.java.net/legal/gplv2+ce.html)（运行时由 FCL-Team 自建并随版本发布）
-- [LWJGL3](https://github.com/LWJGL/lwjgl3)（官方 jar + Android 源码补丁）: [BSD-3 License](https://github.com/LWJGL/lwjgl3/blob/master/LICENSE.md)
-- [LWJGLX](https://github.com/AngelAuraMC/lwjglx) (LWJGL2 API compatibility layer for LWJGL3):
-  unknown license
-- [Mesa 3D Graphics Library](https://gitlab.freedesktop.org/mesa/mesa): [MIT License](https://docs.mesa3d.org/license.html)
-- [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)（SPIR-V 反射/转换，natives 以 aar 打包）: [Apache License 2.0](https://github.com/KhronosGroup/SPIRV-Cross/blob/master/LICENSE)
-- [bhook](https://github.com/bytedance/bhook) (Used for exit code
-  trapping): [MIT license](https://github.com/bytedance/bhook/blob/main/LICENSE).
-- [libepoxy](https://github.com/anholt/libepoxy): [MIT License](https://github.com/anholt/libepoxy/blob/master/COPYING).
-- [virglrenderer](https://github.com/AngelAuraMC/virglrenderer): [MIT License](https://gitlab.freedesktop.org/virgl/virglrenderer/-/blob/master/COPYING).
-- [OpenAL-Soft](https://github.com/kcat/openal-soft): [GNU LGPLv2.1](https://github.com/kcat/openal-soft/blob/master/COPYING)
-    - [oboe](https://github.com/google/oboe): [Apache License 2.0](https://github.com/google/oboe/blob/main/LICENSE).
-    - [pfffft](https://bitbucket.org/jpommier/pffft/src/master/): [ARR]
-- [EasyTier](https://github.com/EasyTier/EasyTier)（Terracotta 模块内嵌组网底层）: [LGPL-3.0](https://github.com/EasyTier/EasyTier/blob/main/LICENSE)
-- [Terracotta](https://github.com/burningtnt/Terracotta)（`net.burningtnt.terracotta` JNI 封装）: [AGPL-3.0](https://github.com/burningtnt/Terracotta/blob/main/LICENSE)
-- [TouchController](https://github.com/TouchController/TouchController)（触摸控制器）: [LGPL-3.0](https://github.com/TouchController/TouchController/blob/main/LICENSE)
-- [discord-rpc](https://github.com/discord/discord-rpc)（libdiscord-rpc.so）: [MIT License](https://github.com/discord/discord-rpc/blob/master/LICENSE)
-- [control-converter](https://github.com/NingZeStudio/control-converter)（FCL↔ZL2 控制布局转换，以 cc.py 为语义基准的内置纯 Kotlin 实现，不再打包 `libcc.so`）: [MIT License](https://opensource.org/licenses/MIT)
+---
+
+## 许可
+
+本项目基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（**GPL-3.0**）改造，
+因此同样以 **GPL-3.0** 发布。详见 [`LICENSE`](LICENSE)。
+
+集成 `oonid/pr` 的 `:proot-engine` 时需注意：`:proot-engine` 与 `pr-cli` 为 MIT，
+但 patched proot 本体为 GPL-2.0-or-later。本项目已是 GPL 系，不构成新障碍。
+
+## 致谢
+
+- [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) —— 界面框架与改造起点
+- [oonid/pr](https://github.com/oonid/pr) —— targetSdk 35+ 下的 proot 适配方案（PROOT_LOADER / seccomp / CLONE 剥离）
+- [proot](https://github.com/proot-me/proot) / [Termux](https://github.com/termux) —— 无 root 的 Linux 环境
