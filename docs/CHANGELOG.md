@@ -2,11 +2,44 @@
 
 本项目：**DeepSeek Harness (dsh) 安卓启动器** —— 在未 root 的安卓手机上，用 proot 跑 dsh（Node 版编码/对话 agent），基于 FoldCraftLauncher (FCL) 改造。
 
+> **仓库**：<https://github.com/sqkl520/dsh-fcl-android-launcher> ｜ **版本**：`0.1.0-SNAPSHOT`
+
 格式参照 [Keep a Changelog](https://keepachangelog.com/)。由于项目尚未正式发版，各段以**工作阶段/里程碑**划分，并标注对应的 git commit。
 
 > **★ 硬规则（项目约定）**：**任何代码/配置/文档的更改，都必须记入本 CHANGELOG**（在最上方的
 > `[Unreleased]` 段按 Added/Changed/Fixed/Removed/Optimized/Refactored/Notes 分类追加）。
 > 版本号规则：当前为 `0.1.0-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
+
+---
+
+## [Unreleased · 建仓、推送与历史精简] - 2026-10-02
+
+### Added
+- **GitHub 仓库建立并首次推送**：<https://github.com/sqkl520/dsh-fcl-android-launcher>
+  （`main` 分支，7 个提交；推送凭据走 SSH，密钥 `sqkl520-dsh-launcher-sandbox`）
+- 新增项目 `README.md`（项目定位 / 工作原理 / W^X 绕过说明 / 当前进度 / 构建方式 / 文档索引 / 许可与致谢）
+- 将项目文档（`INDEX` / `PLAN` / `ROADMAP` / `PACKAGING` / `design/*` / `reports/*`）纳入仓库 `docs/`
+
+### Removed
+- 移除 FCL 自带的 `README_EN.md` / `README_RU.md` / `docs/weblate.md`（已不适用于本项目）
+- 根 `CHANGELOG.md` 由 FCL 的版本记录替换为本项目变更日志
+
+### Changed
+- **历史精简（rewrite）**：基线提交里含 481MB 已删除的 MC 二进制资产（JRE 压缩包 / jniLibs / aar），
+  导致 `.git` 达 337MB，在受限网络下**多次推送失败**（3 次，均在 ~146MB 处被切断）。
+  遂用 `git filter-branch` 从**全部历史**剔除这 6 个大目录：
+  `Terracotta/`、`LWJGL/`、`FCL/libs/`、`FCL/src/main/jreAssets/`、`FCL/src/main/jniLibs/`、
+  `FCL/src/main/assets/app_runtime/`（约 455MB）
+  - **7 个提交全部保留**（提交信息 / 日期 / 作者不变），源码演化完整，`.git` 337MB → **7.2MB**
+  - 副作用：提交 SHA 全部变更（新仓库、无外部引用，无影响）
+  - 改写前已完整备份到 `/workspace/_review_evidence/git-backup-before-strip/`
+
+### Notes
+- 文档主副本位于 `/workspace/docs`（仓库外工作区），发布时同步到仓库 `docs/`
+- `.github/workflows/` 仍为 FCL 原版（checkstyle / release 流程未适配），留待后续处理
+- 提交 SHA 对照（旧 → 新，因历史精简而变更）：
+  `f4f2624→647919c`、`4aea9e5→5bd0e65`、`a62ed0d→0f7334b`、`515270d→b974b64`、
+  `369d4a4→40a43f3`、`5337f5b→b6bbd7c`、`f723120→c428f78`
 
 ---
 
