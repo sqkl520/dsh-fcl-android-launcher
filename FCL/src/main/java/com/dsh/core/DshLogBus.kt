@@ -113,8 +113,11 @@ object DshLogBus {
             stamped = "${timeFormatter().format(Date())}  $safe"
             buffer += stamped
             pendingForFile += stamped
-            // 环形裁剪：一次砍掉多余部分，避免每行都做 removeAt(0) 的数组搬移
-            if (buffer.size > MAX_LINES) repeat(buffer.size - MAX_LINES) { buffer.removeAt(0) }
+            // 环形裁剪：一次砍掉超出部分（subList().clear() 是单次数组搬移 O(移除数)，不是
+            // 逐个 removeAt(0) 的 O(n²)；2000 行规模下也不会每行都搬移整表）
+            if (buffer.size > MAX_LINES) {
+                buffer.subList(0, buffer.size - MAX_LINES).clear()
+            }
             dirty = true
         }
         scheduleFlush()

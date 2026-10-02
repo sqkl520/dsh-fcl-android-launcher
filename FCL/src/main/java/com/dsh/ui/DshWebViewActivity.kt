@@ -48,6 +48,11 @@ class DshWebViewActivity : FCLActivity() {
     private var loadedUrl: String? = null
     private var retriedWithToken = false
 
+    /** 主 frame 当前页面是否处于\"加载失败\"状态（用 onPageStarted 与错误回调维护）。
+     *  onPageFinished 无条件 showWeb() 会把 onReceivedError 刚显示的错误面板盖掉
+     *  （WebView 对失败页面也会回调 onPageFinished），导致用户看到空白页而非错误信息。 */
+    private var pageFailed = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_dsh_webview)
@@ -135,10 +140,16 @@ class DshWebViewActivity : FCLActivity() {
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                if (isLoopback(url)) showWeb()
+                if (isLoopback(url)) {
+                    pageFailed = false
+                    showWeb()
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
+                // 失败页面也会回调 onPageFinished；若刚收到过主 frame 错误，保持错误面板，
+                // 不要用 showWeb() 把它盖掉（否则用户只看到一片空白，以为 dsh 没起）。
+                if (pageFailed) return
                 showWeb()
                 // 让 token→cookie 的结果立刻落盘，App 重启后免 token 直接进
                 runCatching { CookieManager.getInstance().flush() }
@@ -150,6 +161,7 @@ class DshWebViewActivity : FCLActivity() {
                 error: WebResourceError?
             ) {
                 if (request?.isForMainFrame != true) return
+                pageFailed = true
                 val desc = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                     error?.description?.toString()
                 } else {
@@ -172,12 +184,17 @@ class DshWebViewActivity : FCLActivity() {
                         if (!retriedWithToken && tokenUrl != null) {
                             retriedWithToken = true
                             loadedUrl = tokenUrl
+                            pageFailed = false
                             webView.loadUrl(tokenUrl)
                         } else {
+                            pageFailed = true
                             showError(getString(R.string.dsh_webview_auth_failed))
                         }
                     }
-                    code >= 400 -> showError(getString(R.string.dsh_webview_http_error, code))
+                    code >= 400 -> {
+                        pageFailed = true
+                        showError(getString(R.string.dsh_webview_http_error, code))
+                    }
                 }
             }
         }

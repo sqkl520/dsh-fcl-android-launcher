@@ -25,6 +25,11 @@ class ProotProcessExecutor(
     private val rootfsDir: String = DshPaths.ROOTFS_DIR
 ) : ProotExecutor {
 
+    companion object {
+        /** 看门狗超时后的约定退出码（调用方拿它翻译成\"安装超时\"等可读文案） */
+        const val TIMEOUT_EXIT_CODE = -2
+    }
+
     override fun run(
         script: String,
         env: Map<String, String>,
@@ -93,7 +98,7 @@ class ProotProcessExecutor(
             // 让看门狗线程结束（进程已退出时它自然返回）
             watchdog?.interrupt()
             synchronized(this) { actives.removeAll { it.process === process } }
-            if (timedOut.get()) -2 else code
+            if (timedOut.get()) TIMEOUT_EXIT_CODE else code
         } catch (e: Exception) {
             onLine("[proot] 执行失败: ${e.message}")
             -1

@@ -214,8 +214,15 @@ object DshInstances {
         _deleting.update { it + id }
         saveAsync()
         DshAppScope.scope.launch {
-            // 先停掉可能还在跑的进程（不然删目录会留下活着的 node）
-            if (DshRuntime.runningInstanceId() == id) DshRuntime.stop("实例被删除")
+            // 先停掉可能还在跑的进程（不然删目录会留下活着的 node）。
+            // ★ 必须等进程真正退出再删：stop() 是异步的（TERM→5s→KILL），
+            // 若不等它，node 可能还在往 node_modules 写文件，deleteRecursively 就会留下
+            // 一堆 300MB 级残留且无提示（界面早已把实例从列表里移除）。
+            // stopAndWait 最长等 8s（> TERM+等待），超时也硬删并靠日志提示。
+            val stopped = DshRuntime.stopAndWait("实例被删除")
+            if (!stopped) {
+                DshLogBus.append("[instances] 停止实例 ${inst?.name ?: id} 超时，仍继续删除目录")
+            }
             val ok = runCatching { DshPaths.instanceDir(id).deleteRecursively() }.getOrDefault(false)
             DshLogBus.append("[instances] 删除实例 ${inst?.name ?: id} 目录: ${if (ok) "完成" else "有文件残留"}")
             _deleting.update { it - id }

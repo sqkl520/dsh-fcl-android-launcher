@@ -397,8 +397,8 @@ object DshRuntime {
             // 关键：终止是异步的（最长 5s）。期间用户可能已经启动了新实例，
             // 只有当前状态仍停在这个实例上时才允许置 Idle / 收服务，否则会把新实例的
             // Starting/Running 覆盖掉，并且误杀它的前台通知。
-            // 注意：对"进程句柄"（ProcessHandle）而言，terminate 会触发 onProcessExit，
-            // 那里已把状态落到 Idle；这里主要覆盖"孤儿进程句柄"（PidHandle）没有 onExit 回调的情况。
+            // 注意：对\"进程句柄\"（ProcessHandle）而言，terminate 会触发 onProcessExit，
+            // 那里已把状态落到 Idle；这里主要覆盖\"孤儿进程句柄\"（PidHandle）没有 onExit 回调的情况。
             synchronized(this@DshRuntime) {
                 val cur = _state.value
                 if (cur is State.Stopping && cur.instanceId == instanceId) {
@@ -409,6 +409,40 @@ object DshRuntime {
                 }
             }
         }
+    }
+
+    /**
+     * [stop] 的同步版：等 [DshRuntime] 状态真正离开 Stopping 才返回。
+     *
+     * **为什么需要**：stop() 里进程的终止是异步的（TERM→等 5s→KILL，最长 5s），
+     * stop() 返回时旧进程**可能还没死**。两个场景会踩到：
+     * 1. 删除实例：调用方紧接着 `deleteRecursively()`，旧进程若还在写 node_modules，
+     *    目录删不干净（残留 300MB 且界面无任何提示）。
+     * 2. 启动新实例：旧 proot/node 还没退、新 node 又起来 → 短暂双 300MB 进程 + 端口抢占。
+     *
+     * 本方法轮询 [_state]，直到不再处于\"本实例的 Stopping\"（即进程已退出、状态已被
+     * onProcessExit / stop 协程落到 Idle 或别的新状态）。超时返回 false，调用方自行决定
+     * 是否继续（至少要避免\"删目录时进程还在写\"）。
+     *
+     * @return true 表示已离开 Stopping；false 表示 [timeoutMs] 内仍未停完。
+     */
+    suspend fun stopAndWait(reason: String, timeoutMs: Long = 8_000): Boolean {
+        val instanceId = runningInstanceId()
+        if (instanceId == null) {
+            // 本来就没在跑：确保状态干净
+            _state.value = State.Idle
+            _running.value = null
+            return true
+        }
+        stop(reason)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val cur = _state.value
+            if (cur !is State.Stopping || cur.instanceId != instanceId) return true
+            kotlinx.coroutines.delay(50)
+        }
+        val cur = _state.value
+        return !(cur is State.Stopping && cur.instanceId == instanceId)
     }
 
     /** 只在确实没有实例在启动/运行时才收掉前台服务（避免误杀新实例的保活通知） */

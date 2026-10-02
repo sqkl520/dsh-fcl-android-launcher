@@ -151,7 +151,9 @@ class DshRuntimeService : Service() {
             val status = when (state) {
                 is DshRuntime.State.Starting -> context.getString(R.string.dsh_notify_starting)
                 is DshRuntime.State.Running -> context.getString(R.string.dsh_notify_running)
-                else -> context.getString(R.string.dsh_notify_running)
+                is DshRuntime.State.Stopping -> context.getString(R.string.dsh_notify_stopping)
+                // Idle/Failed/Exited：只会在服务即将自停的极短窗口出现，文案别再误导成"运行中"
+                else -> context.getString(R.string.dsh_notify_stopping)
             }
             val text = if (port != null && port > 0) "$name · 端口 $port · $status" else "$name · $status"
 

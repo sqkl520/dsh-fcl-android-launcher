@@ -26,7 +26,6 @@
         <string name="dsh_action_clear_key">清除密钥</string>
         <string name="dsh_action_close">关闭</string>
         <string name="dsh_action_configure">去配置</string>
-        <string name="dsh_action_configure_key">配置密钥</string>
         <string name="dsh_action_copy">复制</string>
         <string name="dsh_action_delete">删除</string>
         <string name="dsh_action_download">下载</string>
@@ -68,6 +67,7 @@
         <string name="dsh_install_done">已安装 %1$s</string>
         <string name="dsh_install_failed">安装失败：%1$s</string>
         <string name="dsh_install_failed_generic">安装失败（详见日志）</string>
+        <string name="dsh_install_timeout">安装超时（%1$d 分钟）。网络可能较慢或 npm 卡住，请查看日志后重试。</string>
         <string name="dsh_install_incomplete">安装已结束但 dsh 包不完整，请重新安装。</string>
         <string name="dsh_install_started">正在安装 %1$s…</string>
         <string name="dsh_install_started_message">正在后台安装 %1$s，可在实例列表查看进度。</string>
@@ -103,6 +103,7 @@
         <string name="dsh_no_key_title">尚未配置 API Key</string>
         <string name="dsh_notify_running">运行中</string>
         <string name="dsh_notify_starting">启动中…</string>
+        <string name="dsh_notify_stopping">停止中…</string>
         <string name="dsh_port_auto">自动</string>
         <string name="dsh_port_invalid">端口需在 0–65535 之间</string>
         <string name="dsh_reason_exited_early">dsh 进程在就绪前退出（退出码 %1$d）</string>
