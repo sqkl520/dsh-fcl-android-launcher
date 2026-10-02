@@ -65,6 +65,7 @@ object DshBootstrap {
         RuntimeUtils.isLatest(prootDir().absolutePath, "/assets/$ASSET_ROOT/proot") &&
             RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") &&
             RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") &&
+            File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile &&
             DshPaths.rootfsLooksUsable()
     }.getOrDefault(false)
 
@@ -113,7 +114,14 @@ object DshBootstrap {
             }
 
             // 1) 脚本
-            if (!RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts")) {
+            // ★ 判定带\"文件存在性\"兜底：RuntimeUtils.isLatest 用 Class.getResourceAsStream(\"/assets/...\")
+            // 比对版本，与解压用的 context.getAssets().open(\"dsh/...\") 是两套访问机制；一旦前者在任何
+            // 环境解析不到（返回\"已是最新\"），这里仅靠 isLatest 判定就会永远跳过首次解压，导致
+            // scripts/probe.sh、start-dsh.sh 缺失、实例永远起不来。加一道\"目标文件在不在\"的硬校验，
+            // 文件缺失就无条件补解压（幂等，安全）。
+            if (!RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") ||
+                !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile
+            ) {
                 emit(Progress.Stage("解压启动脚本", 0.05))
                 RuntimeUtils.install(
                     context, DshPaths.SCRIPTS_DIR, "$ASSET_ROOT/scripts",

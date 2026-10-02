@@ -13,6 +13,36 @@
 
 ---
 
+## [Unreleased · 第八轮审查与优化] - 2026-10-02
+
+> 本轮 = 独立复审（第七轮之后），重点核查前七轮可能遗漏的**使用逻辑/资源机制/安全卫生**类问题。
+> 完整报告见 `docs/PROJECT_REVIEW_AND_OPTIMIZATION.md`；速览见 `docs/reports/round8-review-and-optimization.md`。
+> 代码改动：Manifest + `DshBootstrap.kt` 两处（见下）。
+
+### Changed
+
+**1. 移除 AndroidManifest 全局明文开关（P3，安全卫生）**
+- `android:usesCleartextTraffic="true"` 与 `@xml/network_security_config` 并存：API 24+（本工程 minSdk 26）起 NSC 优先，此开关实际是死配置；
+  且它向阅读者传达"全局允许明文"的错误印象（实际 NSC 已收口到 127.0.0.1/localhost）。
+- 删除该行，明文策略以 `network_security_config.xml`（base 禁明文 + 回环放行）为唯一真源。
+- 影响范围：仅 Manifest 属性；WebView 加载 `http://127.0.0.1:<port>` 仍由 NSC 的 domain-config 放行，行为不变。
+
+**2. `DshBootstrap` 首次解压补"文件存在性"兜底（P1→P2，可靠性）**
+- 背景：`RuntimeUtils.isLatest(...)` 用 `Class.getResourceAsStream("/assets/...")` 读版本号，
+  与解压用的 `context.getAssets().open("dsh/...")` 是**两套访问机制**。若前者在任何环境解析不到（返回"已是最新"），
+  仅靠 `isLatest` 判定的 `DshBootstrap.install` 会**永远跳过首次解压** → scripts/probe.sh、start-dsh.sh 缺失，
+  实例永远起不来，而 `isReady()` 也可能误报"就绪"。这是前七轮未覆盖的静默失败路径。
+- 改动：
+  - `isReady()` 增加 `&& File(SCRIPTS_DIR, "start-dsh.sh").isFile`；
+  - `install()` 的脚本解压条件改为 `!isLatest(...) || !start-dsh.sh.isFile`。
+- 性质：纯"文件缺失即补解压"的幂等防护；`isLatest` 正常工作的环境行为不变。
+- 影响范围：仅底座脚本（scripts）首次/修复解压；rootfs 分支已有 `rootfsLooksUsable()` 防护，proot 走 jniLibs 不受影响。
+
+### Notes
+
+- 验证：`run-compile.sh` **BUILD SUCCESSFUL**（1m31s，5 executed / 29 up-to-date）；单测 23/23；脚本 18/18；**未打包**。
+- 本项 `isLatest` 的资源机制是否在真机可解析属**待真机确认**（不要仅凭机制推理下死判断）——本次先做不改变正常工作路径的防御性兜底。
+
 ## [Unreleased · 文档：新增经验文档并瘦身 CHANGELOG] - 2026-10-02
 
 ### Added

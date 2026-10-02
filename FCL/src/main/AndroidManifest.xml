@@ -25,7 +25,6 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.FoldCraftLauncher"
-        android:usesCleartextTraffic="true"
         tools:ignore="DiscouragedApi"
         tools:targetApi="33">
 
