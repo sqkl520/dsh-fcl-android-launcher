@@ -106,7 +106,7 @@ class DshInstaller(
         errorTails.remove(instance.id)
         DshInstances.markState(instance.id, DshInstance.State.INSTALLING, error = null)
         updateStatus(
-            InstallStatus(instance.id, version, context.getString(com.tungsten.fcl.R.string.dsh_stage_prepare))
+            InstallStatus(instance.id, version, context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_stage_prepare))
         )
         // start = LAZY：先把 job 登记进 running 再 start()，确保"任务体"不可能先跑完、
         // 再被这里把已经结束的 job 写回表里（那会让 isInstalling 永远为真）。
@@ -136,7 +136,7 @@ class DshInstaller(
                     val resolved = readInstalledVersion(instance)
                     if (resolved == null) {
                         // 退出码 0 但装不完整：明确报损坏，别让用户以为能用了
-                        fail(instance, context.getString(com.tungsten.fcl.R.string.dsh_install_incomplete))
+                        fail(instance, context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_incomplete))
                     } else {
                         DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
                         _progress.value = Progress.Done(resolved)
@@ -191,7 +191,7 @@ class DshInstaller(
         DshInstances.markState(
             instanceId,
             DshInstance.State.NOT_INSTALLED,
-            error = context.getString(com.tungsten.fcl.R.string.dsh_install_cancelled)
+            error = context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_cancelled)
         )
     }
 
@@ -233,7 +233,7 @@ class DshInstaller(
     private fun errorSummary(instanceId: String): String =
         errorSummaries[instanceId]
             ?: errorTails[instanceId]?.takeLast(3)?.joinToString(" | ")?.takeIf { it.isNotBlank() }
-            ?: context.getString(com.tungsten.fcl.R.string.dsh_install_failed_generic)
+            ?: context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_failed_generic)
 
     private fun runInstall(instance: DshInstance, version: String): Boolean {
         errorSummaries.remove(instance.id)
@@ -249,7 +249,7 @@ class DshInstaller(
         updateStatus(
             InstallStatus(
                 instance.id, version,
-                context.getString(com.tungsten.fcl.R.string.dsh_stage_prepare),
+                context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_stage_prepare),
                 fraction = 0.05
             )
         )

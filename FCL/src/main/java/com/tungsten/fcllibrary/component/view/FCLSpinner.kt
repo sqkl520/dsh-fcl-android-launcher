@@ -13,7 +13,7 @@ import android.widget.ArrayAdapter
 import android.widget.ListPopupWindow
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.content.ContextCompat
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import com.tungsten.fcllibrary.util.ConvertUtils
 

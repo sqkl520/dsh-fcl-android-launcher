@@ -9,7 +9,7 @@ import android.os.Environment;
 
 import androidx.annotation.Nullable;
 
-import com.tungsten.fcl.R;
+import com.dsh.fcl.androidlauncher.R;
 import com.tungsten.fcllibrary.browser.options.LibMode;
 import com.tungsten.fcllibrary.browser.options.SelectionMode;
 import com.tungsten.fcllibrary.component.ResultListener;

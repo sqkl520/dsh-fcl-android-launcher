@@ -8,7 +8,7 @@ import android.util.AttributeSet;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.tungsten.fcl.R;
+import com.dsh.fcl.androidlauncher.R;
 import com.tungsten.fcllibrary.component.theme.ThemeEngine;
 
 public class FCLCheckedTextView extends androidx.appcompat.widget.AppCompatCheckedTextView {

@@ -16,7 +16,7 @@ import com.tungsten.fclcore.fakefx.beans.property.BooleanPropertyBase;
 import com.tungsten.fclcore.fakefx.beans.property.StringProperty;
 import com.tungsten.fclcore.fakefx.beans.property.StringPropertyBase;
 import com.tungsten.fclcore.task.Schedulers;
-import com.tungsten.fcl.R;
+import com.dsh.fcl.androidlauncher.R;
 import com.tungsten.fcllibrary.component.theme.ThemeEngine;
 
 public class FCLTextView extends AppCompatTextView {

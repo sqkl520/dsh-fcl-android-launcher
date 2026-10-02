@@ -10,8 +10,8 @@ import com.dsh.core.DshInstance
 import com.dsh.core.DshInstaller
 import com.dsh.core.DshInstances
 import com.dsh.core.DshPaths
-import com.tungsten.fcl.R
-import com.tungsten.fcl.databinding.ItemDshInstanceBinding
+import com.dsh.fcl.androidlauncher.R
+import com.dsh.fcl.androidlauncher.databinding.ItemDshInstanceBinding
 
 /**
  * 实例列表 Adapter。用 viewBinding（FCL 已开启 buildFeatures.viewBinding）。

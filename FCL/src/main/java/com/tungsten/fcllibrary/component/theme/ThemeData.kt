@@ -6,7 +6,7 @@ import android.graphics.drawable.BitmapDrawable
 import androidx.core.graphics.ColorUtils
 import com.mio.util.ImageUtil
 import com.tungsten.fcl.FCLApp
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.util.ConvertUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

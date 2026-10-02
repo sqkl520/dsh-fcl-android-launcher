@@ -11,8 +11,8 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.dsh.ui.DshInstancesActivity
-import com.tungsten.fcl.R
+import com.dsh.ui.shell.DshMainActivity
+import com.dsh.fcl.androidlauncher.R
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -155,7 +155,7 @@ class DshRuntimeService : Service() {
             }
             val text = if (port != null && port > 0) "$name · 端口 $port · $status" else "$name · $status"
 
-            val contentIntent = Intent(context, DshInstancesActivity::class.java).apply {
+            val contentIntent = Intent(context, DshMainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
             val pending = PendingIntent.getActivity(

@@ -31,7 +31,7 @@ import java.util.regex.Pattern;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.tungsten.fcl.FCLApp;
-import com.tungsten.fcl.R;
+import com.dsh.fcl.androidlauncher.R;
 import com.tungsten.fclcore.util.Pair;
 
 public final class NetworkUtils {

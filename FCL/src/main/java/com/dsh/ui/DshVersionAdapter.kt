@@ -6,8 +6,8 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import com.dsh.core.DshVersionListItem
-import com.tungsten.fcl.R
-import com.tungsten.fcl.databinding.ItemDshVersionBinding
+import com.dsh.fcl.androidlauncher.R
+import com.dsh.fcl.androidlauncher.databinding.ItemDshVersionBinding
 
 /**
  * 下载页版本列表 Adapter。已安装的版本显示"已安装"角标、隐藏安装按钮。

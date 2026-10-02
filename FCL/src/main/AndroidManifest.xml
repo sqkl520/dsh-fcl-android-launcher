@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
-        android:name=".FCLApp"
+        android:name="com.tungsten.fcl.FCLApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -30,10 +30,10 @@
         tools:targetApi="33">
 
         <activity
-            android:name=".activity.SplashActivity"
+            android:name="com.tungsten.fcl.activity.SplashActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
             android:exported="true"
-            android:screenOrientation="sensorPortrait"
+            android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.Splash"
             tools:ignore="LockedOrientationActivity">
             <intent-filter>
@@ -42,6 +42,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- DeepSeek Harness (dsh) 启动器主外壳（阶段 1）：左侧菜单 + ViewPager2 五页 -->
+        <activity
+            android:name="com.dsh.ui.shell.DshMainActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
+            android:screenOrientation="sensorLandscape"
+            tools:ignore="LockedOrientationActivity" />
 
         <!-- DeepSeek Harness (dsh) 启动器页面：实例 / 下载 / 日志 / 设置 / WebView -->
         <activity
@@ -62,7 +69,7 @@
         <activity
             android:name="com.dsh.ui.DshSettingsActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorPortrait"
+            android:screenOrientation="sensorLandscape"
             android:windowSoftInputMode="adjustResize"
             tools:ignore="LockedOrientationActivity" />
         <activity

@@ -12,7 +12,7 @@ import androidx.lifecycle.lifecycleScope
 import com.mio.util.showErrorDialog
 import com.tungsten.fclcore.util.Pair.pair
 import com.tungsten.fclcore.util.io.HttpRequest
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.ui.ProgressDialog
 import kotlinx.coroutines.Dispatchers

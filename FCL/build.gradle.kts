@@ -30,7 +30,7 @@ tasks.register<Checkstyle>("checkstyle") {
 }
 
 android {
-    namespace = "com.tungsten.fcl"
+    namespace = "com.dsh.fcl.androidlauncher"
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     var localProperty: Properties? = null
@@ -65,11 +65,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.tungsten.fcl"
+        applicationId = "com.dsh.fcl.androidlauncher"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1333
-        versionName = "1.3.3.3"
+        versionCode = 100
+        versionName = "0.1.0-SNAPSHOT"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -88,8 +88,8 @@ android {
             initWith(getByName("debug"))
             applicationIdSuffix = ".debug"
             signingConfig = signingConfigs.getByName("FCLDebugKey")
-            // 与 FileProvider authority（${applicationId}.provider）保持一致（原 FCLLibrary 模块的 resValue）
-            resValue("string", "file_browser_provider", "com.tungsten.fcl.debug.provider")
+            // 与 FileProvider authority（${applicationId}.provider）保持一致
+            resValue("string", "file_browser_provider", "com.dsh.fcl.androidlauncher.debug.provider")
         }
         configureEach {
             resValue("string", "app_version", defaultConfig.versionName.toString())
@@ -142,7 +142,7 @@ androidComponents {
             if (output is com.android.build.api.variant.impl.VariantOutputImpl) {
                 (output.getFilter(ABI)?.identifier ?: "all").let { abi ->
                     output.outputFileName =
-                        "FCL-${variant.buildType}-${project.android.defaultConfig.versionName}-${abi}.apk"
+                        "dsh-fcl-android-launcher-${project.android.defaultConfig.versionName}-${abi}.apk"
                 }
             }
         }

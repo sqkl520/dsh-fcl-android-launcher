@@ -2,7 +2,7 @@ package com.dsh.core
 
 import android.app.ActivityManager
 import android.content.Context
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fclcore.util.gson.JsonUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
