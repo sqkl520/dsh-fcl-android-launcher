@@ -47,6 +47,7 @@
 | `reports/mc-removal-impact-review.md` | **MC 移除影响审查结果**（1166 行）：八维度影响面分析 + M-01~M-04 + 补丁 A/B/C | 想知道"删 MC 有没有伤到别的地方" |
 | `reports/round6-optimization.md` | **第六轮：项目评估与优化**（26 文件 +175/−73016）：失效测试源集、rootfs 解压正确性/性能（18.5×）、明文收口、备份规则、安装竞态 | 想知道"最新一轮改了什么、**R-02 平台风险**如何决策" |
 | `reports/round7-review-and-optimization.md` | **第七轮：评估与优化**（4 个 P1/P2 修复 + §2.5 去 Material 收尾）；全文 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"去 Material 收尾、删除竞态、WebView 失败面板、超时文案"怎么修的 |
+| `reports/round8-review-and-optimization.md` | **第八轮：独立复审**（命中 `RuntimeUtils.isLatest` 资源机制不一致导致的"首启解压可能被跳过"静默失败 + 首启兜底/明文卫生两处修缮 + 若干建议）；本轮全文即 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"第八轮是否还有新问题、首启解压为什么补文件存在性兜底" |
 | `reports/mc-removal-review-brief.md` | **审查请求书**：送审背景（仓库/版本/技术栈/运行方式/业务目标/已知限制）+ **影响面清单** + 期望审查方回答的问题 | 要送审时先看这份 |
 
 分类规则：**顶层**放长期常读的三份（总纲 / 规划 / 打包）；`design/` 放功能设计；
@@ -60,6 +61,11 @@
 > **纯 dsh 启动器**（只保留 FCL 的 UI 框架与少量通用工具）。
 > 变更详情见 **`reports/mc-removal.md`**（供独立审查）。
 >
+> 📌 **2026-10-02 第八轮独立复审**：命中 `RuntimeUtils.isLatest`（版本比对）与 `RuntimeUtils.install`（解压）的
+> **资源机制不一致**——`Class.getResourceAsStream("/assets/...")` vs `context.getAssets().open("dsh/...")`，
+> 一旦前者解析不到会**永久跳过首次解压**（静默失败，装完像"好了"但一启动就"缺少脚本"）。
+> 本轮已加"文件缺失即补解压"的幂等兜底 + 删除 Manifest 冗余明文开关；详见 `reports/round8-review-and-optimization.md`
+> （本轮全文即 `PROJECT_REVIEW_AND_OPTIMIZATION.md`）。
 > 📌 **2026-10-02 第七轮收尾**：**外壳改造（M0）全部完成**（阶段 0~4，含去 Material 收尾）；
 > 删除实例竞态、WebView 失败面板、安装超时文案、通知状态文案等 4 个 P1/P2 缺陷已修。
 > 详见 **`reports/round7-review-and-optimization.md`**（全文 `PROJECT_REVIEW_AND_OPTIMIZATION.md`）。
