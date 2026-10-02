@@ -60,12 +60,16 @@ object DshBootstrap {
     /** 互斥用：两个界面同时触发解压时，只允许一个真正执行（比读 _busy 再写更可靠） */
     private val busyGuard = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** 底座是否已就绪（三项 version 都最新 + rootfs 内容可信） */
+    /** 底座是否已就绪（三项 version 都最新 + proot 可解析 + rootfs 内容可信） */
     fun isReady(): Boolean = runCatching {
         RuntimeUtils.isLatest(prootDir().absolutePath, "/assets/$ASSET_ROOT/proot") &&
             RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") &&
             RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") &&
             File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile &&
+            // ★ 修正一致性：原实现不校验 proot 二进制，而 missingSummary() / ProotCommand.preflight()
+            // 都把它当作必要条件——于是可能出现"isReady()==true（横幅隐藏）但一启动就报缺少 proot"
+            // 的自相矛盾。这里补上，与 missingSummary() 的口径对齐（jniLibs 优先、assets 回退）。
+            DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).isFile &&
             DshPaths.rootfsLooksUsable()
     }.getOrDefault(false)
 
@@ -131,7 +135,13 @@ object DshBootstrap {
             }
 
             // 2) proot 二进制（jniLibs 优先；assets 作为回退）
-            if (!RuntimeUtils.isLatest(prootDir().absolutePath, "/assets/$ASSET_ROOT/proot")) {
+            // ★ 与 isReady() 对齐：除了版本比对，再加一道"目标二进制缺失即补解压"的文件存在性兜底。
+            // 判据用 resolveProotBin()（jniLibs 优先）而不是 prootDir()，避免 jniLibs 已就位时
+            // 每次都因为"prootDir 下没有 libproot.so"而重复解压 assets 副本。
+            val prootMissing = !DshPaths.resolveProotBin(
+                com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR
+            ).isFile
+            if (!RuntimeUtils.isLatest(prootDir().absolutePath, "/assets/$ASSET_ROOT/proot") || prootMissing) {
                 emit(Progress.Stage("解压 proot 运行时", 0.1))
                 RuntimeUtils.install(
                     context, prootDir().absolutePath, "$ASSET_ROOT/proot",
