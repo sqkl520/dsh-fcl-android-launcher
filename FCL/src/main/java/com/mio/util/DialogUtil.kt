@@ -1,7 +1,7 @@
 package com.mio.util
 
 import android.content.Context
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.dialog.FCLDialog
 

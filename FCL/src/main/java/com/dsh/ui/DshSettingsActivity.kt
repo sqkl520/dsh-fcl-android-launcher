@@ -3,7 +3,6 @@ package com.dsh.ui
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
-import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
 import com.dsh.core.DeepSeekApi
@@ -15,8 +14,8 @@ import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshServices
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.tungsten.fcl.R
-import com.tungsten.fcl.databinding.ActivityDshSettingsBinding
+import com.dsh.fcl.androidlauncher.R
+import com.dsh.fcl.androidlauncher.databinding.ActivityDshSettingsBinding
 import com.tungsten.fcllibrary.component.FCLActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -67,17 +66,11 @@ class DshSettingsActivity : FCLActivity() {
     }
 
     private fun setupModelSpinner() {
-        val items = DshInstance.MODELS
-        binding.modelSpinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, items
-        )
+        binding.modelSpinner.setItems(DshInstance.MODELS)
     }
 
     private fun setupProfileSpinner() {
-        val items = DshInstance.PROFILES
-        binding.profileSpinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, items
-        )
+        binding.profileSpinner.setItems(DshInstance.PROFILES)
     }
 
     private fun bindInstance(inst: DshInstance) {
@@ -110,8 +103,8 @@ class DshSettingsActivity : FCLActivity() {
             DshInstances.updateConfig(
                 inst.id,
                 name = name,
-                model = binding.modelSpinner.selectedItem.toString(),
-                profile = binding.profileSpinner.selectedItem.toString(),
+                model = binding.modelSpinner.getSelectedItem()?.toString() ?: DshInstance.MODELS.first(),
+                profile = binding.profileSpinner.getSelectedItem()?.toString() ?: DshInstance.PROFILES.first(),
                 port = port
             )
             Toast.makeText(this, R.string.dsh_saved, Toast.LENGTH_SHORT).show()

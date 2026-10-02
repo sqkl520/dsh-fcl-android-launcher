@@ -14,7 +14,7 @@ import android.widget.ImageView;
 import androidx.appcompat.widget.LinearLayoutCompat;
 import androidx.core.content.FileProvider;
 
-import com.tungsten.fcl.R;
+import com.dsh.fcl.androidlauncher.R;
 import com.tungsten.fcllibrary.browser.FileBrowser;
 import com.tungsten.fcllibrary.browser.FileOperator;
 import com.tungsten.fcllibrary.browser.options.LibMode;

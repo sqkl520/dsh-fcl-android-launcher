@@ -3,7 +3,7 @@ package com.tungsten.fcllibrary.component.view
 import android.content.Context
 import android.util.AttributeSet
 import android.view.View
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 
 class FCLView @JvmOverloads constructor(

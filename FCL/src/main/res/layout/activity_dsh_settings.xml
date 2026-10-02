@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- dsh 实例设置页（新增）：API Key 录入/校验 + 实例名/模型/profile/端口 + 环境信息与维护操作 -->
+<!-- dsh 实例设置页：API Key 录入/校验 + 实例名/模型/profile/端口 + 环境信息与维护操作。
+     FCL 风格（见 §2.5）：FCLEditText + 上方 FCLTextView 当标签（不用 TextInputLayout），
+     FCLSpinner / FCLButton / FCLTextView 自动跟随主题。 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -12,44 +14,40 @@
         android:orientation="vertical"
         android:padding="12dp">
 
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/dsh_settings_title"
             android:textSize="20sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            app:auto_text_tint="true" />
 
         <!-- ===== API Key ===== -->
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/dsh_settings_section_key"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            app:auto_text_tint="true" />
 
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/key_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:textColor="#666666"
-            android:textSize="13sp" />
+            android:textSize="13sp"
+            app:auto_text_tint="true" />
 
-        <com.google.android.material.textfield.TextInputLayout
+        <com.tungsten.fcllibrary.component.view.FCLEditText
+            android:id="@+id/api_key_input"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:hint="@string/dsh_settings_key_hint"
-            app:endIconMode="password_toggle">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/api_key_input"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textPassword"
-                android:singleLine="true" />
-
-        </com.google.android.material.textfield.TextInputLayout>
+            android:inputType="textPassword"
+            android:singleLine="true"
+            app:auto_edit_tint="true" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -57,175 +55,186 @@
             android:layout_marginTop="4dp"
             android:orientation="horizontal">
 
-            <com.google.android.material.button.MaterialButton
+            <com.tungsten.fcllibrary.component.view.FCLButton
                 android:id="@+id/btn_save_key"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:minWidth="0dp"
-                android:text="@string/dsh_action_save_key" />
+                android:text="@string/dsh_action_save_key"
+                app:ripple="true" />
 
-            <com.google.android.material.button.MaterialButton
+            <com.tungsten.fcllibrary.component.view.FCLButton
                 android:id="@+id/btn_test_key"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:minWidth="0dp"
-                android:text="@string/dsh_action_test_key" />
+                android:text="@string/dsh_action_test_key"
+                app:ripple="true" />
 
-            <com.google.android.material.button.MaterialButton
+            <com.tungsten.fcllibrary.component.view.FCLButton
                 android:id="@+id/btn_clear_key"
-                style="@style/Widget.MaterialComponents.Button.TextButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:minWidth="0dp"
-                android:text="@string/dsh_action_clear_key" />
+                android:text="@string/dsh_action_clear_key"
+                app:ripple="true" />
 
         </LinearLayout>
 
         <!-- ===== 实例配置 ===== -->
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:text="@string/dsh_settings_section_instance"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            app:auto_text_tint="true" />
 
-        <com.google.android.material.textfield.TextInputLayout
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:hint="@string/dsh_settings_name_hint">
+            android:text="@string/dsh_settings_name_hint"
+            android:textSize="13sp"
+            app:auto_text_tint="true" />
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/name_input"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="text"
-                android:singleLine="true" />
+        <com.tungsten.fcllibrary.component.view.FCLEditText
+            android:id="@+id/name_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:inputType="text"
+            android:singleLine="true"
+            app:auto_edit_tint="true" />
 
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:text="@string/dsh_settings_model"
-            android:textSize="13sp" />
+            android:textSize="13sp"
+            app:auto_text_tint="true" />
 
-        <Spinner
+        <com.tungsten.fcllibrary.component.view.FCLSpinner
             android:id="@+id/model_spinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
 
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:text="@string/dsh_settings_profile"
-            android:textSize="13sp" />
+            android:textSize="13sp"
+            app:auto_text_tint="true" />
 
-        <Spinner
+        <com.tungsten.fcllibrary.component.view.FCLSpinner
             android:id="@+id/profile_spinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
 
-        <com.google.android.material.textfield.TextInputLayout
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:hint="@string/dsh_settings_port_hint">
+            android:text="@string/dsh_settings_port_hint"
+            android:textSize="13sp"
+            app:auto_text_tint="true" />
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/port_input"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="number"
-                android:singleLine="true" />
+        <com.tungsten.fcllibrary.component.view.FCLEditText
+            android:id="@+id/port_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:inputType="number"
+            android:singleLine="true"
+            app:auto_edit_tint="true" />
 
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <com.google.android.material.button.MaterialButton
+        <com.tungsten.fcllibrary.component.view.FCLButton
             android:id="@+id/btn_save"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="@string/dsh_action_save" />
+            android:text="@string/dsh_action_save"
+            app:ripple="true" />
 
         <!-- ===== 运行环境信息 ===== -->
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:text="@string/dsh_settings_section_env"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            app:auto_text_tint="true" />
 
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/version_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:textColor="#666666"
-            android:textSize="13sp" />
+            android:textSize="13sp"
+            app:auto_text_tint="true" />
 
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/disk_usage"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:textColor="#666666"
-            android:textSize="13sp" />
+            android:textSize="13sp"
+            app:auto_text_tint="true" />
 
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/instance_path"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:textColor="#666666"
             android:textIsSelectable="true"
-            android:textSize="12sp" />
+            android:textSize="12sp"
+            app:auto_text_tint="true" />
 
         <!-- ===== 维护操作 ===== -->
-        <TextView
+        <com.tungsten.fcllibrary.component.view.FCLTextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:text="@string/dsh_settings_section_maintain"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            app:auto_text_tint="true" />
 
-        <com.google.android.material.button.MaterialButton
+        <com.tungsten.fcllibrary.component.view.FCLButton
             android:id="@+id/btn_verify_runtime"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="@string/dsh_action_verify_runtime" />
+            android:text="@string/dsh_action_verify_runtime"
+            app:ripple="true" />
 
-        <com.google.android.material.button.MaterialButton
+        <com.tungsten.fcllibrary.component.view.FCLButton
             android:id="@+id/btn_reinstall"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="@string/dsh_action_reinstall" />
+            android:text="@string/dsh_action_reinstall"
+            app:ripple="true" />
 
-        <com.google.android.material.button.MaterialButton
+        <com.tungsten.fcllibrary.component.view.FCLButton
             android:id="@+id/btn_logs"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="@string/dsh_action_logs" />
+            android:text="@string/dsh_action_logs"
+            app:ripple="true" />
 
-        <com.google.android.material.button.MaterialButton
+        <com.tungsten.fcllibrary.component.view.FCLButton
             android:id="@+id/btn_delete"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:text="@string/dsh_action_delete"
-            android:textColor="#CC4444" />
+            android:textColor="#CC4444"
+            app:ripple="true" />
 
     </LinearLayout>
 </ScrollView>

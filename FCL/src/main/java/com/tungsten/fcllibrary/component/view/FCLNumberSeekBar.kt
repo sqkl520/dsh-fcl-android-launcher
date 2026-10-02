@@ -16,7 +16,7 @@ import android.widget.SeekBar
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.AppCompatSeekBar
 import androidx.core.content.withStyledAttributes
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fclcore.fakefx.beans.property.BooleanProperty
 import com.tungsten.fclcore.fakefx.beans.property.BooleanPropertyBase
 import com.tungsten.fclcore.fakefx.beans.property.IntegerProperty

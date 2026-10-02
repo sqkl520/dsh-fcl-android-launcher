@@ -13,7 +13,7 @@ import android.view.inputmethod.InputMethodManager
 import androidx.appcompat.widget.AppCompatEditText
 import androidx.core.content.getSystemService
 import androidx.core.content.withStyledAttributes
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fclcore.fakefx.beans.property.BooleanProperty
 import com.tungsten.fclcore.fakefx.beans.property.BooleanPropertyBase
 import com.tungsten.fclcore.fakefx.beans.property.StringProperty

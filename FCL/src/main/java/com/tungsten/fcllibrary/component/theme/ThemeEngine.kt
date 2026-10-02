@@ -11,7 +11,7 @@ import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import com.mio.util.ImageUtil
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fclauncher.utils.FCLPath
 import com.tungsten.fcllibrary.component.theme.ThemeEngine.registerEvent
 import com.tungsten.fcllibrary.util.ConvertUtils

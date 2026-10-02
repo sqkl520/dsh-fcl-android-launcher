@@ -23,7 +23,7 @@
     <string name="file_browser_share_title">分享文件</string>
     <string name="file_browser_share_message">你确定要分享此文件吗？</string>
     <string name="crash_reporter_title">崩溃报告</string>
-    <string name="crash_reporter_hint">Fold Craft Launcher 遇到了无法解决的错误，请向开发者或他人求助。</string>
+    <string name="crash_reporter_hint">DSHarness-FCL-Launcher 遇到了无法解决的错误，请向开发者或他人求助。</string>
     <string name="crash_reporter_restart">重启软件</string>
     <string name="crash_reporter_close">退出软件</string>
     <string name="crash_reporter_share">分享日志</string>
@@ -166,4 +166,15 @@
         <string name="dsh_webview_starting">正在启动 dsh，首次启动会比较慢…</string>
         <string name="dsh_webview_stopped">dsh 未在运行。返回后启动实例。</string>
         <string name="dsh_webview_stopping">正在停止 dsh…</string>
-    </resources>
+        <string name="dsh_tab_instances">实例</string>
+    <string name="dsh_tab_manage">管理</string>
+    <string name="dsh_tab_download">下载</string>
+    <string name="dsh_tab_logs">日志</string>
+    <string name="dsh_tab_settings">设置</string>
+    <string name="dsh_manage_title">管理</string>
+    <string name="dsh_manage_placeholder">插件管理功能即将推出。</string>
+    <string name="dsh_settings_no_instance">还没有实例，请先到"下载"页创建一个。</string>
+    <string name="dsh_right_current_instance">当前实例</string>
+    <string name="dsh_right_no_instance">暂无实例</string>
+    <string name="dsh_action_open_webui">打开界面</string>
+</resources>

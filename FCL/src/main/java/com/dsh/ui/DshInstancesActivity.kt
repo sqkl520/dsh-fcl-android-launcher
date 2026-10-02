@@ -20,8 +20,8 @@ import com.dsh.core.DshRuntime
 import com.dsh.core.DshRuntimeService
 import com.dsh.core.DshServices
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.tungsten.fcl.R
-import com.tungsten.fcl.databinding.ActivityDshInstancesBinding
+import com.dsh.fcl.androidlauncher.R
+import com.dsh.fcl.androidlauncher.databinding.ActivityDshInstancesBinding
 import com.tungsten.fcllibrary.component.FCLActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine

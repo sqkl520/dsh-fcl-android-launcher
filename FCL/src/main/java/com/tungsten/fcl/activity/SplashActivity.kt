@@ -7,7 +7,7 @@ import androidx.core.app.ActivityOptionsCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.mio.util.ImageUtil
-import com.tungsten.fcl.databinding.ActivitySplashBinding
+import com.dsh.fcl.androidlauncher.databinding.ActivitySplashBinding
 import com.tungsten.fclauncher.utils.FCLPath
 import com.tungsten.fclcore.util.Logging
 import com.tungsten.fcllibrary.component.FCLActivity
@@ -64,10 +64,10 @@ class SplashActivity : FCLActivity() {
         }
     }
 
-    /** 进入 dsh 启动器界面。不做任何 MC 单例初始化（渲染器 / Java / 控制器 / 配置）。 */
+    /** 进入 dsh 启动器主外壳。不做任何 MC 单例初始化（渲染器 / Java / 控制器 / 配置）。 */
     private fun enterDsh() {
         startActivity(
-            Intent(this@SplashActivity, com.dsh.ui.DshInstancesActivity::class.java),
+            Intent(this@SplashActivity, com.dsh.ui.shell.DshMainActivity::class.java),
             ActivityOptionsCompat.makeCustomAnimation(this@SplashActivity, 0, 0).toBundle()
         )
         finish()

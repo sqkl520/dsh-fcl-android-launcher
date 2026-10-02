@@ -11,7 +11,7 @@ import android.view.WindowManager;
 import androidx.annotation.Nullable;
 import androidx.core.content.FileProvider;
 
-import com.tungsten.fcl.R;
+import com.dsh.fcl.androidlauncher.R;
 import com.tungsten.fcllibrary.component.FCLActivity;
 import com.tungsten.fcllibrary.component.theme.ThemeEngine;
 import com.tungsten.fcllibrary.component.view.FCLButton;

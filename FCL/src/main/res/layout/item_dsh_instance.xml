@@ -1,117 +1,115 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 实例列表的一行：名称 + 版本/端口/状态 + 体积 + 失败原因 + 安装进度 + 启动/更多 -->
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- 实例列表的一行：名称 + 版本/端口/状态 + 体积 + 失败原因 + 安装进度 + 启动/更多。
+     FCL 风格：容器用 FCLConstraintLayout + bg_container_white + auto_tint（替代 MaterialCardView），
+     文字/按钮/进度条用 fcllibrary 控件自动跟随主题（见 docs/design/app-shell.md §2.5）。 -->
+<com.tungsten.fcllibrary.component.view.FCLConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="8dp"
-    app:cardCornerRadius="10dp"
-    app:cardElevation="2dp">
+    android:background="@drawable/bg_container_white"
+    android:padding="12dp"
+    app:auto_tint="true">
 
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:layout_width="match_parent"
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/name"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:padding="12dp">
+        android:ellipsize="end"
+        android:singleLine="true"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        app:auto_text_tint="true"
+        app:layout_constraintEnd_toStartOf="@id/btn_start"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:text="dsh 0.1.5-rc.2" />
 
-        <TextView
-            android:id="@+id/name"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:singleLine="true"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            app:layout_constraintEnd_toStartOf="@id/btn_start"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            tools:text="dsh 0.1.5-rc.2" />
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/subtitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="13sp"
+        app:auto_text_tint="true"
+        app:layout_constraintEnd_toStartOf="@id/btn_start"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/name"
+        tools:text="版本 0.1.5-rc.2 · 端口 3080 · 就绪" />
 
-        <TextView
-            android:id="@+id/subtitle"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="#888888"
-            android:textSize="13sp"
-            app:layout_constraintEnd_toStartOf="@id/btn_start"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/name"
-            tools:text="版本 0.1.5-rc.2 · 端口 3080 · 就绪" />
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/size"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textSize="12sp"
+        app:auto_text_tint="true"
+        app:layout_constraintEnd_toStartOf="@id/btn_start"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/subtitle"
+        tools:text="312.4 MB" />
 
-        <TextView
-            android:id="@+id/size"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:textColor="#888888"
-            android:textSize="12sp"
-            app:layout_constraintEnd_toStartOf="@id/btn_start"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/subtitle"
-            tools:text="312.4 MB" />
+    <!-- 安装阶段文案（仅安装中可见） -->
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/install_stage"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textSize="12sp"
+        android:visibility="gone"
+        app:auto_text_tint="true"
+        app:layout_constraintEnd_toStartOf="@id/btn_start"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/size"
+        tools:text="安装 @deepseek-ai/dsh@0.1.5-rc.2…" />
 
-        <!-- 安装阶段文案（仅安装中可见） -->
-        <TextView
-            android:id="@+id/install_stage"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:textColor="#1976D2"
-            android:textSize="12sp"
-            android:visibility="gone"
-            app:layout_constraintEnd_toStartOf="@id/btn_start"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/size"
-            tools:text="安装 @deepseek-ai/dsh@0.1.5-rc.2…" />
+    <com.tungsten.fcllibrary.component.view.FCLProgressBar
+        android:id="@+id/install_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:max="100"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/install_stage" />
 
-        <ProgressBar
-            android:id="@+id/install_progress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:max="100"
-            android:visibility="gone"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/install_stage" />
+    <!-- 失败原因（BROKEN 时可见） -->
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/error_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textColor="#CC4444"
+        android:textSize="12sp"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/install_progress"
+        tools:text="npm install 失败：ETIMEDOUT" />
 
-        <!-- 失败原因（BROKEN 时可见） -->
-        <TextView
-            android:id="@+id/error_text"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="#CC4444"
-            android:textSize="12sp"
-            android:visibility="gone"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/install_progress"
-            tools:text="npm install 失败：ETIMEDOUT" />
+    <com.tungsten.fcllibrary.component.view.FCLButton
+        android:id="@+id/btn_start"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="0dp"
+        android:text="@string/dsh_action_start"
+        app:ripple="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/btn_more"
+        app:layout_constraintTop_toTopOf="parent" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_start"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:text="@string/dsh_action_start"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@id/btn_more"
-            app:layout_constraintTop_toTopOf="parent" />
+    <com.tungsten.fcllibrary.component.view.FCLButton
+        android:id="@+id/btn_more"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="0dp"
+        android:text="@string/dsh_action_more"
+        app:ripple="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_more"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:text="@string/dsh_action_more"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
-    </androidx.constraintlayout.widget.ConstraintLayout>
-</com.google.android.material.card.MaterialCardView>
+</com.tungsten.fcllibrary.component.view.FCLConstraintLayout>

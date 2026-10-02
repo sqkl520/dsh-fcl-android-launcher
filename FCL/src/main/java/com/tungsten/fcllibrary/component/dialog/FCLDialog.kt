@@ -2,7 +2,7 @@ package com.tungsten.fcllibrary.component.dialog
 
 import android.content.Context
 import androidx.appcompat.app.AppCompatDialog
-import com.tungsten.fcl.R
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 
 open class FCLDialog(context: Context) : AppCompatDialog(context) {

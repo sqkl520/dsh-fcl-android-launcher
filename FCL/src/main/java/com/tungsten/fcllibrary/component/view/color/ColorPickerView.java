@@ -27,7 +27,7 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 
-import com.tungsten.fcl.R;
+import com.dsh.fcl.androidlauncher.R;
 import com.tungsten.fcllibrary.util.ConvertUtils;
 
 /**

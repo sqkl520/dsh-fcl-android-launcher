@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  阶段 1 外壳的占位页。阶段 2 会把它换成真正的 dsh 页面
+  （实例/管理/下载/日志/设置，由现有 Activity 迁移为 FCLCommonUI）。
+  用 fcllibrary 控件 + ThemeEngine 自动着色（见 docs/design/app-shell.md §2.5）。
+-->
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_container_white"
+        android:padding="20dp"
+        app:auto_tint="true"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/placeholder_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            app:auto_text_tint="true"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/placeholder_desc"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            app:auto_text_tint="true"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/placeholder_title" />
+
+    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
