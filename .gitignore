@@ -8,14 +8,10 @@ local.properties
 # Log/OS Files
 *.log
 
-# Android Studio generated files and folders
-captures/
-.externalNativeBuild/
-.cxx/
-release
-*.apk
-output.json
-android-ndk-r26d/
+# APK 归档默认不提交二进制，但保留归档说明与校验文件
+apk-archive/**/*.apk
+!apk-archive/**/SHA256SUMS
+!apk-archive/README.md
 
 # IntelliJ
 *.iml
