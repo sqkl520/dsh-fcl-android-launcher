@@ -13,6 +13,22 @@
 
 ---
 
+## [Unreleased · 阶段 B：Debian arm64 rootfs 与 Node/dsh 基线] - 2026-10-03
+
+### Changed
+- 选择并固定第一版运行时组合：Debian arm64 slim + glibc + 官方 Node.js 22.23.3 + npm 10.9.9 + bash/coreutils/ca-certificates/procps
+- 使用预打包 rootfs 基线，安装 `@deepseek-ai/dsh@0.1.6-alpha.2`
+- `ProotCommand.DEFAULT_PATH` 增加 `/opt/dsh/node/bin`，为 rootfs 内官方 Node 提供稳定 PATH
+- 移除 rootfs PLACEHOLDER 标记，更新 rootfs version 元数据；实际 `rootfs.tar.xz` 作为本地 APK 打包输入，不提交 Git
+
+### Notes
+- rootfs 本地归档：279MB；SHA-256=`16badbfc94112218a98c684ac88734c96303ff4b50cf4260f7e83204b98e1e77`
+- 基础验证：Node/npm/bash、`child_process.execSync`、`child_process.spawnSync('/bin/bash')`、`dsh --help` 均通过
+- 尚未在 patched proot + Android 真机上验证；`.node`、插件、npm、shell tool 仍是下一步验收项
+- 验证：源码编译已通过；本轮未打包
+
+---
+
 ## [Unreleased · 阶段 A：接入 proot 底座（jniLibs + PTY）] - 2026-10-03
 
 ### Added

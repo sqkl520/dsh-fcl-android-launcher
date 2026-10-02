@@ -31,3 +31,5 @@ AGENTS.md
 /.zcode/
 .kotlin/
 .zcodeignore
+# 本地预打包 Debian rootfs（约 279MB），用于 APK 打包，不提交 Git
+FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz

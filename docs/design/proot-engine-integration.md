@@ -34,7 +34,24 @@ W^X、PROOT_LOADER、seccomp、API、License、rootfs 与子进程风险见本�
 4. 先在沙箱中完成源码静态审查和 arm64 构建可行性检查。
 5. **本阶段不改 dsh 业务代码、不打包 APK。**
 
-### 阶段 B：制作可复现 Debian rootfs
+### 阶段 B：制作可复现 Debian rootfs（进行中）
+
+已完成第一版 rootfs 构建：
+
+```text
+Debian 12.15 arm64
+Node.js v22.23.3 / npm 10.9.9
+bash 5.2 / coreutils / ca-certificates / curl / xz / procps
+@deepseek-ai/dsh 0.1.6-alpha.2
+14 个 .node 原生模块存在
+rootfs.tar.xz：279MB
+sha256：16badbfc94112218a98c684ac88734c96303ff4b50cf4260f7e83204b98e1e77
+```
+
+基础验证已通过：`node --version`、`npm --version`、`bash --version`、`child_process.execSync`、
+`child_process.spawnSync('/bin/bash')`、`dsh --help`。
+
+后续仍需在 patched proot + Android 真机环境复验 `.node` 加载和 dsh web。
 
 1. 选择 Debian arm64 slim，固定发行版快照/版本。
 2. 安装 bash、npm、ca-certificates、coreutils、tar、xz、procps 等基础工具。

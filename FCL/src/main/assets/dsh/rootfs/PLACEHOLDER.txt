@@ -1,1 +1,0 @@
-把 arm64 rootfs.tar.xz 放这里(建议内置 Node 22/24)。详见 README.md。
