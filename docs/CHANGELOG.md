@@ -9,6 +9,19 @@
 > **★ 硬规则（项目约定）**：**任何代码/配置/文档的更改，都必须记入本 CHANGELOG**（在最上方的
 > `[Unreleased]` 段按 Added/Changed/Fixed/Removed/Optimized/Refactored/Notes 分类追加）。
 > 版本号规则：当前为 `0.1.0-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
+> **本文件只记"改了什么"**；经验 / 方法论 / 踩坑请写进 `LESSONS.md`，不要写在这里。
+
+---
+
+## [Unreleased · 文档：新增经验文档并瘦身 CHANGELOG] - 2026-10-02
+
+### Added
+- 新增 `docs/LESSONS.md`：经验与踩坑记录（沙箱/网络约束、死代码清理方法论与 Kotlin 假死陷阱、
+  Android/FCL 平台经验、文档与流程约定）
+
+### Changed
+- `CHANGELOG.md` 中的方法论与踩坑内容移出（改指向 `LESSONS.md`），本文件此后**只记变更事实**
+- 文件头「硬规则」补充说明：经验/方法论写 `LESSONS.md`
 
 ---
 
@@ -40,11 +53,8 @@
 
 ### Notes
 - 合计 **44 个文件删除 + 9 个修改**
-- 判据：**全仓 0 引用 + 传递闭包确认**（逐个核验，未照单全删）
-  - 期间纠正两处误判：`DialogUtil`（被 `showErrorDialog` 扩展函数使用）、
-    `ProgressDialog`（被 `LogSharingUtils` 使用）——均属"Kotlin 顶层函数/`Kt` 后缀"导致的假死，已恢复
-  - `OperatingSystem` 被活着的 `IOUtils` 引用，保留
 - 验证：`run-compile.sh` BUILD SUCCESSFUL；**未打包**
+- 清理的判定依据与踩坑记录见 `LESSONS.md` §2
 
 ---
 
@@ -62,7 +72,7 @@
 
 ### Changed
 - **历史精简（rewrite）**：基线提交里含 481MB 已删除的 MC 二进制资产（JRE 压缩包 / jniLibs / aar），
-  导致 `.git` 达 337MB，在受限网络下**多次推送失败**（3 次，均在 ~146MB 处被切断）。
+  导致 `.git` 达 337MB，在受限网络下**多次推送失败**。
   遂用 `git filter-branch` 从**全部历史**剔除这 6 个大目录：
   `Terracotta/`、`LWJGL/`、`FCL/libs/`、`FCL/src/main/jreAssets/`、`FCL/src/main/jniLibs/`、
   `FCL/src/main/assets/app_runtime/`（约 455MB）
@@ -124,7 +134,7 @@
   `EditDialog`（被 `browser/FileBrowserActivity` 引用）
 
 ### Notes
-- 判据：仅删"全仓（`java/` + `res/`）0 引用、且其依赖的布局/资源也只被自己用"的文件
+- 判据说明与踩坑记录见 `LESSONS.md` §2（**注意 Kotlin 顶层函数 / `Kt` 后缀的假死陷阱**）
 - 验证：`run-compile.sh` BUILD SUCCESSFUL；**未打包**
 
 ---

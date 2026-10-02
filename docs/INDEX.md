@@ -23,6 +23,7 @@
 | `ROADMAP.md` | **未来路线规划**：M1~M6 里程碑（真机点亮→稳定→体验→工程化→分发→扩展） | 想知道"接下来往哪走、按什么顺序" |
 | `PACKAGING.md` | **打包说明**：proot 二进制 + rootfs.tar.xz 怎么准备与放置 | 准备出 APK 之前必读 |
 | `CHANGELOG.md` | **变更日志**：按阶段/里程碑记录（Added/Changed/Fixed/Removed/Optimized），标注对应 commit | 想快速了解"每一步改了什么" |
+| `LESSONS.md` | **经验与踩坑记录**：沙箱/网络约束、死代码清理方法论（Kotlin 假死陷阱）、Android/FCL 平台经验、流程约定 | 动手前避坑、接手项目时先读 |
 
 ### `design/` — 设计文档（各功能怎么设计的，相对稳定）
 | 文件 | 内容 | 什么时候看 |
