@@ -199,6 +199,26 @@
 
 ---
 
+## [Unreleased · FCL 风格设置页第一批实现] - 2026-10-03
+
+### Added
+- 新增 `ui_dsh_launcher_settings.xml`：FCL 风格全局设置列表容器
+- 新增 `item_dsh_setting.xml`：FCL 风格分组/操作行
+- 新增 `DshLauncherSettingAdapter`：RecyclerView 分组行模型
+
+### Changed
+- `DshSettingsUI` 从实例详情表单改为全局启动器设置列表
+- 设置页接入运行时自检、日志、dsh 版本管理、实例管理、日志复制、关于页
+- 实例级 API Key / 模型 / profile / 端口继续由 `DshSettingsActivity` 独立承载
+- `DshUIManager` 设置页工厂改为传入 `DshShellHost`
+
+### Notes
+- 本批次接入 FCL 设置页结构和 dsh 功能入口；主题模式、主题色、背景图、动画速度等 ThemeEngine 可编辑项待下一批实现
+- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
+- FCL 原版设置结构与后续还原清单见 `docs/design/fcl-ui-restoration.md`
+
+---
+
 ## [Unreleased · FCL 原汁原味 UI 还原审查] - 2026-10-03
 
 ### Added
