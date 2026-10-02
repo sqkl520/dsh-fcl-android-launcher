@@ -179,6 +179,19 @@
 - 新增/删除依赖：**无**。
 - 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
 
+## [Unreleased · APK 归档] - 2026-10-03
+
+### Added
+- 新增 `apk-archive/` 版本归档目录，按版本号分文件夹保存 APK 与 `SHA256SUMS`
+- 归档当前版本 APK：`apk-archive/0.1.0-SNAPSHOT/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+- `build-apk.sh` 改为每次打包后自动复制 APK 并更新对应版本校验文件
+- `.gitignore` 默认排除 APK 二进制，仅保留归档说明与 SHA-256 校验文件
+
+### Notes
+- 当前 APK 仍保存在工作区，默认不提交到 Git，避免仓库被二进制膨胀
+
+---
+
 ## [Unreleased · 打包脚本适配与 APK 产出] - 2026-10-03
 
 ### Fixed
