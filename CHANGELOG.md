@@ -13,6 +13,102 @@
 
 ---
 
+## [Unreleased · 阶段 A：接入 proot 底座（jniLibs + PTY）] - 2026-10-03
+
+### Added
+- 接入 `oonid/pr` 固定 commit `fcf25cb` 的原生产物到 `FCL/src/main/jniLibs/arm64-v8a/`：
+  `libproot.so`、`libproot-loader.so`、`libbusybox.so`（sha256 记录在 `design/proot-engine-integration.md §13`）
+- 新增 `src/main/cpp/ptyjni/`（`ptyjni.c` + `CMakeLists.txt`）：PTY 原生桥接（MIT，来自 `:proot-engine`）
+- 新增 `com/dsh/core/PtyNative.kt`：PTY 原生接口（forkPty / read / write / resize / waitPid / close）
+- `DshPaths.resolveBusybox()`：解析 jniLibs 的 `libbusybox.so`
+- `FCL/build.gradle.kts` 增加 `externalNativeBuild` 指向 `src/main/cpp/ptyjni/CMakeLists.txt`
+
+### Changed
+- `DshPaths.resolveProotLoader()` 回退文件名修正为 `libproot-loader.so`
+- `DshBootstrap.isReady()` / `missingSummary()`：proot 与 loader 一律以 **jniLibs** 为准，
+  不再要求 assets 中存在 proot 副本与版本文件
+- `DshBootstrap.install()`：删除"从 assets 解压 proot"的分支，改为校验 jniLibs 里的
+  `libproot.so` / `libproot-loader.so` 是否齐备；缺失时明确报出缺哪个文件（属打包问题）
+- `run-compile.sh`：新增原生 `ptyjni` 编译检查步骤
+
+### Notes
+- 本批次**未接入** `libpr-cli.so`（第一版 rootfs 预打包、沿用现有 `DshInstaller`，不需要 pr-cli 的发行版/OCI 管理）
+- 修复构建环境问题：NDK 工具链被 qemu **双重包装**（38 个工具），已还原（判据与修复方法记入 `LESSONS.md §1.3`）
+- 验证：`run-compile.sh` BUILD SUCCESSFUL + `libptyjni.so` 36440 B；**未打包**
+- rootfs 仍是 PLACEHOLDER，运行时尚未真机跑通
+
+---
+
+## [Unreleased · FCL 风格启动器设置页第一批实现] - 2026-10-03
+
+### Added
+- 新增 FCL 风格全局设置页布局 `ui_dsh_launcher_settings.xml`
+- 新增设置行布局 `item_dsh_setting.xml`
+- 新增 `DshLauncherSettingAdapter`：使用 RecyclerView 分组行组织通用 / 运行环境 / dsh 设置
+
+### Changed
+- `DshSettingsUI` 从实例详情表单改为全局启动器设置页
+- 设置页接入真实入口：运行时自检、日志、dsh 版本管理、实例管理、复制日志、关于页
+- 实例级配置继续由独立 `DshSettingsActivity` 承载，职责与全局启动器设置分离
+- `DshUIManager` 设置页工厂改为传入 `DshShellHost`
+
+### Notes
+- 本批次只实现 FCL 设置页的结构、分组和 dsh 入口；ThemeEngine 的语言/主题色/背景/动画等可编辑设置将在下一批接入
+- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
+- FCL 原版对应关系与后续还原清单见 `docs/design/fcl-ui-restoration.md`
+
+---
+
+## [Unreleased · FCL 原汁原味 UI 还原审查] - 2026-10-03
+
+### Added
+- 新增 `docs/design/fcl-ui-restoration.md`：记录 FCL 启动器设置页的原版结构、dsh 映射、保留/删除/替换清单、设置分组草案与验收标准
+
+### Notes
+- 本轮先完成 FCL 基线对照，尚未改设置页代码；后续按文档逐步将全局设置改成 FCL 风格 RecyclerView 分组设置
+- MC 专属设置不恢复，改成 dsh runtime / API Key / 模型 / profile / 实例管理等对应功能
+
+---
+
+## [Unreleased · UI 优化：恢复 FCL 主题背景] - 2026-10-03
+
+### Changed
+- `DshMainActivity` 接入 FCL `ThemeEngine` 主题背景：使用 `background_light.jpg` / `background_dark.jpg`
+  设置主外壳背景，跟随系统亮暗模式切换
+- 保持当前 dsh 三栏结构不变：左侧菜单 / 中间 ViewPager2 / 右侧实例面板；只补回 FCL 原版背景层，避免重新引入 MC UI
+
+### Notes
+- FCL 上游完整仓库因大体积网络传输限制未重新 clone；本次使用本地 FCL 基线提交中的原版 UI 模板作对照
+- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
+
+---
+
+## [Unreleased · APK 归档] - 2026-10-03
+
+### Added
+- 新增 `apk-archive/` 版本归档目录，按版本号分文件夹保存 APK 与 `SHA256SUMS`
+- 归档当前版本 APK：`apk-archive/0.1.0-SNAPSHOT/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+- `build-apk.sh` 改为每次打包后自动复制 APK 并更新对应版本校验文件
+- `.gitignore` 默认排除 APK 二进制，仅保留归档说明与 SHA-256 校验文件
+
+### Notes
+- 当前 APK 仍保存在工作区，默认不提交到 Git，避免仓库被二进制膨胀
+
+---
+
+## [Unreleased · 打包脚本适配与 APK 产出] - 2026-10-03
+
+### Fixed
+- 修正 `build-apk.sh`：移除已删除的旧 native CMake 配置流程（不再访问 `FCL/src/main/jni`），改为当前无 native 工程的 Gradle arm64 打包流程
+- 打包脚本统一复制并校验最终 APK，输出固定为 `dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+
+### Notes
+- APK 已成功产出：`/workspace/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
+- SHA-256：`12520a91df56245c4ee33de54186a3fde29b482df4d94dd190d8b8eb241d1013`
+- 文件大小约 11MB；本轮是首次实际打包，尚未真机安装验证
+
+---
+
 ## [Unreleased · 第九轮审查与优化] - 2026-10-02
 
 > 本轮 = 第八轮之后的独立复审。重点：第八轮遗留的\"使用逻辑\"缺口（下载页空实例污染、isReady 与
@@ -178,96 +274,6 @@
 - 验证：`run-compile.sh` **BUILD SUCCESSFUL**；`run-tests.sh` **23/23**；`test-scripts-posix.sh` **18/18**；**未打包**。
 - 新增/删除依赖：**无**。
 - 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
-
-## [Unreleased · FCL 风格启动器设置页第一批实现] - 2026-10-03
-
-### Added
-- 新增 FCL 风格全局设置页布局 `ui_dsh_launcher_settings.xml`
-- 新增设置行布局 `item_dsh_setting.xml`
-- 新增 `DshLauncherSettingAdapter`：使用 RecyclerView 分组行组织通用 / 运行环境 / dsh 设置
-
-### Changed
-- `DshSettingsUI` 从实例详情表单改为全局启动器设置页
-- 设置页接入真实入口：运行时自检、日志、dsh 版本管理、实例管理、复制日志、关于页
-- 实例级配置继续由独立 `DshSettingsActivity` 承载，职责与全局启动器设置分离
-- `DshUIManager` 设置页工厂改为传入 `DshShellHost`
-
-### Notes
-- 本批次只实现 FCL 设置页的结构、分组和 dsh 入口；ThemeEngine 的语言/主题色/背景/动画等可编辑设置将在下一批接入
-- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
-- FCL 原版对应关系与后续还原清单见 `docs/design/fcl-ui-restoration.md`
-
----
-
-## [Unreleased · FCL 风格设置页第一批实现] - 2026-10-03
-
-### Added
-- 新增 `ui_dsh_launcher_settings.xml`：FCL 风格全局设置列表容器
-- 新增 `item_dsh_setting.xml`：FCL 风格分组/操作行
-- 新增 `DshLauncherSettingAdapter`：RecyclerView 分组行模型
-
-### Changed
-- `DshSettingsUI` 从实例详情表单改为全局启动器设置列表
-- 设置页接入运行时自检、日志、dsh 版本管理、实例管理、日志复制、关于页
-- 实例级 API Key / 模型 / profile / 端口继续由 `DshSettingsActivity` 独立承载
-- `DshUIManager` 设置页工厂改为传入 `DshShellHost`
-
-### Notes
-- 本批次接入 FCL 设置页结构和 dsh 功能入口；主题模式、主题色、背景图、动画速度等 ThemeEngine 可编辑项待下一批实现
-- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
-- FCL 原版设置结构与后续还原清单见 `docs/design/fcl-ui-restoration.md`
-
----
-
-## [Unreleased · FCL 原汁原味 UI 还原审查] - 2026-10-03
-
-### Added
-- 新增 `docs/design/fcl-ui-restoration.md`：记录 FCL 启动器设置页的原版结构、dsh 映射、保留/删除/替换清单、设置分组草案与验收标准
-
-### Notes
-- 本轮先完成 FCL 基线对照，尚未改设置页代码；后续按文档逐步将全局设置改成 FCL 风格 RecyclerView 分组设置
-- MC 专属设置不恢复，改成 dsh runtime / API Key / 模型 / profile / 实例管理等对应功能
-
----
-
-## [Unreleased · UI 优化：恢复 FCL 主题背景] - 2026-10-03
-
-### Changed
-- `DshMainActivity` 接入 FCL `ThemeEngine` 主题背景：使用 `background_light.jpg` / `background_dark.jpg`
-  设置主外壳背景，跟随系统亮暗模式切换
-- 保持当前 dsh 三栏结构不变：左侧菜单 / 中间 ViewPager2 / 右侧实例面板；只补回 FCL 原版背景层，避免重新引入 MC UI
-
-### Notes
-- FCL 上游完整仓库因大体积网络传输限制未重新 clone；本次使用本地 FCL 基线提交中的原版 UI 模板作对照
-- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
-
----
-
-## [Unreleased · APK 归档] - 2026-10-03
-
-### Added
-- 新增 `apk-archive/` 版本归档目录，按版本号分文件夹保存 APK 与 `SHA256SUMS`
-- 归档当前版本 APK：`apk-archive/0.1.0-SNAPSHOT/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
-- `build-apk.sh` 改为每次打包后自动复制 APK 并更新对应版本校验文件
-- `.gitignore` 默认排除 APK 二进制，仅保留归档说明与 SHA-256 校验文件
-
-### Notes
-- 当前 APK 仍保存在工作区，默认不提交到 Git，避免仓库被二进制膨胀
-
----
-
-## [Unreleased · 打包脚本适配与 APK 产出] - 2026-10-03
-
-### Fixed
-- 修正 `build-apk.sh`：移除已删除的旧 native CMake 配置流程（不再访问 `FCL/src/main/jni`），改为当前无 native 工程的 Gradle arm64 打包流程
-- 打包脚本统一复制并校验最终 APK，输出固定为 `dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
-
-### Notes
-- APK 已成功产出：`/workspace/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`
-- SHA-256：`12520a91df56245c4ee33de54186a3fde29b482df4d94dd190d8b8eb241d1013`
-- 文件大小约 11MB；本轮是首次实际打包，尚未真机安装验证
-
----
 
 ## [Unreleased · 文档：新增经验文档并瘦身 CHANGELOG] - 2026-10-02
 

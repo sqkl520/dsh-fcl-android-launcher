@@ -162,10 +162,22 @@ object DshPaths {
     /** proot loader 路径，规则同 [resolveProotBin] */
     fun resolveProotLoader(nativeLibDir: String?): File {
         if (!nativeLibDir.isNullOrEmpty()) {
-            val inJni = File(nativeLibDir, "libproot_loader.so")
+            val inJni = File(nativeLibDir, "libproot-loader.so")
             if (inJni.isFile) return inJni
         }
         return File(prootDir(), "libproot_loader.so")
+    }
+
+    /**
+     * busybox 路径：jniLibs 的 `libbusybox.so`（nativeLibraryDir 有执行位，可在 W^X 下 execve）。
+     * rootfs 内的 `/bin/busybox` 通常是指向它的软链（由 DshBootstrap 建立）。
+     */
+    fun resolveBusybox(nativeLibDir: String?): File {
+        if (!nativeLibDir.isNullOrEmpty()) {
+            val inJni = File(nativeLibDir, "libbusybox.so")
+            if (inJni.isFile) return inJni
+        }
+        return File(prootDir(), "libbusybox.so")
     }
 
     /** rootfs 是否看起来可引导（必须有 /bin/sh 或 /usr/bin/env） */
