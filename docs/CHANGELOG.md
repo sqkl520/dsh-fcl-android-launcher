@@ -179,6 +179,17 @@
 - 新增/删除依赖：**无**。
 - 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
 
+## [Unreleased · FCL 原汁原味 UI 还原审查] - 2026-10-03
+
+### Added
+- 新增 `docs/design/fcl-ui-restoration.md`：记录 FCL 启动器设置页的原版结构、dsh 映射、保留/删除/替换清单、设置分组草案与验收标准
+
+### Notes
+- 本轮先完成 FCL 基线对照，尚未改设置页代码；后续按文档逐步将全局设置改成 FCL 风格 RecyclerView 分组设置
+- MC 专属设置不恢复，改成 dsh runtime / API Key / 模型 / profile / 实例管理等对应功能
+
+---
+
 ## [Unreleased · UI 优化：恢复 FCL 主题背景] - 2026-10-03
 
 ### Changed

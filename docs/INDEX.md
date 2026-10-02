@@ -24,6 +24,7 @@
 | `PACKAGING.md` | **打包说明**：proot 二进制 + rootfs.tar.xz 怎么准备与放置 | 准备出 APK 之前必读 |
 | `CHANGELOG.md` | **变更日志**：按阶段/里程碑记录（Added/Changed/Fixed/Removed/Optimized），标注对应 commit | 想快速了解"每一步改了什么" |
 | `LESSONS.md` | **经验与踩坑记录**：沙箱/网络约束、死代码清理方法论（Kotlin 假死陷阱）、Android/FCL 平台经验、流程约定 | 动手前避坑、接手项目时先读 |
+| `design/fcl-ui-restoration.md` | **FCL 原汁原味 UI 还原方案**：FCL 设置结构、dsh 映射、保留/删除/替换清单、实施顺序与验收标准 | 做 UI 还原前必读 |
 
 ### `design/` — 设计文档（各功能怎么设计的，相对稳定）
 | 文件 | 内容 | 什么时候看 |
