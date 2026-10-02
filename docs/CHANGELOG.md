@@ -179,6 +179,19 @@
 - 新增/删除依赖：**无**。
 - 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
 
+## [Unreleased · UI 优化：恢复 FCL 主题背景] - 2026-10-03
+
+### Changed
+- `DshMainActivity` 接入 FCL `ThemeEngine` 主题背景：使用 `background_light.jpg` / `background_dark.jpg`
+  设置主外壳背景，跟随系统亮暗模式切换
+- 保持当前 dsh 三栏结构不变：左侧菜单 / 中间 ViewPager2 / 右侧实例面板；只补回 FCL 原版背景层，避免重新引入 MC UI
+
+### Notes
+- FCL 上游完整仓库因大体积网络传输限制未重新 clone；本次使用本地 FCL 基线提交中的原版 UI 模板作对照
+- 验证：`run-compile.sh` BUILD SUCCESSFUL；未打包
+
+---
+
 ## [Unreleased · APK 归档] - 2026-10-03
 
 ### Added
