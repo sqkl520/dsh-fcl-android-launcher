@@ -15,35 +15,99 @@
 
 ## [Unreleased · 第七轮审查与优化] - 2026-10-02
 
+> 本轮 = 评估 + 修复，审查对象：`com/dsh/**`（全部核心 + UI）+ 可达 FCL 遗产 + 脚本/资源/Manifest/Gradle。
+> 完整报告见 `docs/PROJECT_REVIEW_AND_OPTIMIZATION.md`；速览见 `docs/reports/round7-review-and-optimization.md`。
+> 全部改动已提交 `494f234`（`git revert 494f234` 可整体回滚）。
+
 ### Fixed
-- **实例删除竞态**：`DshInstances.delete()` 删除目录前先 `DshRuntime.stopAndWait()`（新增）等进程**真正退出**，
-  避免 `node` 还在写 `node_modules` 时删目录留下 ~300MB 残留；超时仍硬删并记日志
-- **WebView 失败面板被盖掉**：`DshWebViewActivity` 增加 `pageFailed` 标志，`onReceivedError`/HTTP 4xx 后
-  `onPageFinished` 不再无条件 `showWeb()`（失败页面也会回调 onPageFinished，原实现会让用户只见空白页而非错误信息）
-- **安装超时无文案**：`DshInstaller` 对 `ProotProcessExecutor` 超时退出码（新增常量 `TIMEOUT_EXIT_CODE = -2`）
-  转为可读文案 `@string/dsh_install_timeout`（含分钟数），不再落到泛化的"安装失败"
-- **通知误报"运行中"**：`DshRuntimeService.buildNotification` 对 `Stopping/Idle/Failed/Exited` 状态改用
-  `@string/dsh_notify_stopping`（新增），不再显示 `Running`
+
+**1. 实例删除竞态：删除目录前先等进程真正退出（P1）**
+- **现象**：`DshInstances.delete()` 里先调 `DshRuntime.stop("实例被删除")`，紧接着 `deleteRecursively()`。
+  但 `stop()` 内部是 `scope.launch { h?.terminate(5000) }` —— **异步**的，返回时旧进程可能还活着（TERM 后最多 5s 才 KILL）。
+  若 node 仍在往 `node_modules` 写文件，`deleteRecursively` 就删不干净，留下 ~300MB 残留，
+  而界面早已把实例从列表移除，**用户完全看不到提示**。
+- **改动**：
+  - `DshRuntime.kt`：新增 `suspend fun stopAndWait(reason, timeoutMs = 8s)` —— 先 `stop()`，
+    再轮询 `_state` 直到离开"本实例的 Stopping"（即进程已退出、状态被 onProcessExit/stop 协程落到 Idle 或别的新状态）。
+  - `DshInstances.kt`：`delete()` 协程里把 `DshRuntime.stop(...)` 换成 `DshRuntime.stopAndWait("实例被删除")`，
+    超时（8s）仍继续硬删，并在日志总线留一行"停止超时"以便事后追查。
+- **影响范围**：仅"删除实例"路径；其它 `stop()` 调用点（用户手动停、切实例、通知栏停）不受影响，语义不变。
+- **兼容性**：`stopAndWait` 是新增 API，未改 `stop()` 签名；`delete()` 在 `DshAppScope`（IO）协程内调用，可安全 suspend。
+- **验证**：编译 BUILD SUCCESSFUL；单测 23/23。（删目录的并发行为需真机复现确认，沙箱无法实测。）
+
+**2. WebView 失败面板被 `onPageFinished` 盖成空白（P1）**
+- **现象**：`DshWebViewActivity` 里 `onReceivedError` / `onReceivedHttpError`(4xx) 调 `showError()` 显示错误面板，
+  但 **WebView 对"失败页面"同样会回调 `onPageFinished`**（常见顺序：onPageStarted → onReceivedError → onPageFinished），
+  而原来的 `onPageFinished` 无条件 `showWeb()` —— 于是错误面板瞬间被盖上，用户只见一片空白 WebView，
+  像 dsh 卡死，且"重试/看日志/停止/返回"这些出口全部不可见。
+- **改动**：`DshWebViewActivity.kt` 新增 `private var pageFailed = false`：
+  - `onPageStarted`（且 URL 是回环）→ `pageFailed = false` + `showWeb()`
+  - `onReceivedError`（主 frame）→ `pageFailed = true` + `showError(...)`
+  - `onReceivedHttpError`：401 走重载前清标志；401 无 token 或其它 ≥400 → `pageFailed = true` + `showError(...)`
+  - `onPageFinished` → **先查 `pageFailed`，为真则不 `showWeb()`**（保留错误面板）
+- **影响范围**：仅 WebView 页；对正常加载无行为变化（onPageStarted 已清标志）。
+- **验证**：编译通过。真机上需确认各厂商 WebView 回调顺序一致（尤其 401 重载后成功时标志确实被清）。
+
+**3. 安装看门狗超时无可读文案（P2）**
+- **现象**：`ProotProcessExecutor` 在 `timeoutMs` 超时后返回 `-2`（魔法数），`DshInstaller.runInstall`
+  `return exit == 0` → false → `errorSummary` 落到泛化的 `dsh_install_failed_generic`（"Install failed"），
+  用户完全不知道是 npm 卡死/超时。
+- **改动**：
+  - `ProotProcessExecutor.kt`：抽命名常量 `companion object { const val TIMEOUT_EXIT_CODE = -2 }`，返回处用常量替代 `-2`。
+  - `DshInstaller.kt`：`runInstall` 里 `if (exit == ProotProcessExecutor.TIMEOUT_EXIT_CODE)` →
+    `errorSummaries[id] = context.getString(R.string.dsh_install_timeout, INSTALL_TIMEOUT_MS / 60_000)`。
+  - `strings.xml` / `strings-zh.xml`：新增 `dsh_install_timeout`（中英，带 `%1$d` 分钟数）。
+- **影响范围**：仅安装失败时的原因文案；退出码语义不变。
+- **配套**：`DshResourceFormatTest` 的 `callSites` 登记 `dsh_install_timeout`（否则"带占位符文案必须登记"契约测试会红）。
+- **验证**：编译通过；单测 23/23（含占位符契约）。
+
+**4. 通知状态在非运行态误报"运行中"（P2）**
+- **现象**：`DshRuntimeService.buildNotification` 的 `status` 分支里，`Stopping` / `Idle` / `Failed` / `Exited`
+  全部落到 `else -> dsh_notify_running`（"运行中"），在服务即将自停的极短窗口里会误导用户。
+- **改动**：
+  - `DshRuntimeService.kt`：`status` 增加 `is DshRuntime.State.Stopping -> dsh_notify_stopping`，
+    `else`（Idle/Failed/Exited）也改用 `dsh_notify_stopping`（不再误标 Running）。
+  - `strings.xml` / `strings-zh.xml`：新增 `dsh_notify_stopping`（"停止中…"）。
+- **影响范围**：仅通知文案；服务仍会在非 Running/Starting 时自停（行为不变）。
+- **验证**：编译通过。
 
 ### Changed
-- **实例/日志页去 Material（§2.5 硬性要求落地收尾）**：`activity_dsh_instances.xml`、`activity_dsh_webview.xml`
-  由 `MaterialButton`/原生 `ProgressBar`/`TextView` 全部换为 `FCLButton`/`FCLProgressBar`/`FCLTextView`；
-  实例页标题、空态提示改用 `FCLTextView + auto_text_tint`（随主题换色），WebView 状态面板背景改 `bg_container_white`
-  —— 至此 **8 个 dsh 布局 0 Material 控件**，`app-shell.md §2.5.5` 验收命令 1 输出为空
+
+**§2.5 硬性要求收尾：实例页 / WebView 页去 Material（P2，UI 一致性）**
+- **背景**：`app-shell.md §2.5` 要求所有 dsh 布局一律用 fcllibrary 控件 + ThemeEngine 主题。
+  阶段 2 已把 6 个布局换成 FCL 控件，但 `activity_dsh_instances.xml` 与 `activity_dsh_webview.xml`
+  仍混着 `MaterialButton` / 原生 `ProgressBar` / `TextView` —— 正是 §2.5.5 验收命令
+  `grep -l "com.google.android.material" *dsh*.xml` 会抓住的地方（改前这两行有输出）。
+- **改动**：
+  - `activity_dsh_instances.xml`：2 个 `MaterialButton`（btn_logs/btn_download）→ `FCLButton`（`app:ripple`）；
+    `title` / `empty_hint` 原生 `TextView` → `FCLTextView`（`app:auto_text_tint` 随主题换色），去掉写死的 `#888888`。
+  - `activity_dsh_webview.xml`：4 个 `MaterialButton`（btn_retry/logs/stop/back）→ `FCLButton`；
+    2 个原生 `ProgressBar` → `FCLProgressBar`；`state_text` 原生 `TextView` → `FCLTextView`；
+    状态面板背景 `?android:attr/colorBackground` → `@drawable/bg_container_white`（FCL 容器风格）。
+- **影响范围**：仅这两个布局；所有 `@+id` 不变，viewBinding 字段名未变 → 无编译/逻辑破坏。
+- **验收**：**8 个 dsh 布局 0 Material 控件**，`grep -l com.google.android.material *dsh*.xml` 输出为空（命令 1 通过）。
+- **遗留**：代码里 `MaterialAlertDialogBuilder` 在 `com/dsh` 仍有 22 处（§2.5 允许"新代码统一 FCLAlertDialog，逐步归零"），
+  作 P3 项，本轮未大范围替换（避免一次性改动面过大）。
 
 ### Removed
-- 未引用的文案 `dsh_action_configure_key`（中英）—— 全仓 0 引用（R-17）
+
+- **未引用文案 `dsh_action_configure_key`（中英）**：全仓 0 引用（grep 确认），删除（R-17）。
 
 ### Optimized
-- `DshLogBus` 环形裁剪由 `removeAt(0)` 循环（O(n²) 数组搬移）改为 `subList().clear()`（单次搬移），并修正注释
+
+- **`DshLogBus` 环形裁剪 O(n²) → O(n)**：原来 `repeat(buffer.size - MAX_LINES) { removeAt(0) }` 是逐行
+  `removeAt(0)`（ArrayList 头删 = 数组搬移），且注释自称"避免每行搬移"与实际不符。改为
+  `buffer.subList(0, buffer.size - MAX_LINES).clear()`（单次搬移）+ 修正注释。
 
 ### Refactored
-- `ProotProcessExecutor` 超时退出码抽为命名常量 `TIMEOUT_EXIT_CODE`（替代魔法数 `-2`）
+
+- **`ProotProcessExecutor` 超时退出码抽为命名常量** `TIMEOUT_EXIT_CODE = -2`（替代魔法数）。
 
 ### Notes
-- 本轮审查对象：`com/dsh/**` + 可达 FCL 遗产 + 脚本/资源；见 `docs/reports/round7-review-and-optimization.md`
-- 验证：`run-compile.sh` BUILD SUCCESSFUL；单测 **23/23**；脚本一致性 **18/18**；未打包
 
+- 验证：`run-compile.sh` **BUILD SUCCESSFUL**；`run-tests.sh` **23/23**；`test-scripts-posix.sh` **18/18**；**未打包**。
+- 新增/删除依赖：**无**。
+- 涉及真机运行时行为的结论（删除并发、WebView 回调顺序）标注「待真机确认」，未伪造运行结果。
 
 ## [Unreleased · 文档：新增经验文档并瘦身 CHANGELOG] - 2026-10-02
 

@@ -1,5 +1,14 @@
 # 打包说明（运行时底座 + 出 APK）
 
+> ## ⚠️ 过时声明（2026-10-01）
+> 本文"**运行时底座**"部分（自备 `libproot.so` + `rootfs.tar.xz` 并手工打包）**已被新决策取代**：
+> 运行时底座改走 **oonid/pr 的 `:proot-engine`**（`targetSdk` 保持 34，不降级）。
+> 详见 **`design/proot-engine-integration.md`**（决策/API/License/落地步骤）与 **`design/wx-exec-proot-loader.md`**（W^X 绕过原理）。
+> 集成后：proot 二进制由 proot-engine 的 jniLibs 提供、rootfs 由 pr-cli 从 OCI 镜像拉取——**不再需要你手工准备大文件**。
+> 因此本文"运行时底座"章节仅作**历史参考**；仅"**在 arm64 上出完整 APK**"一节（qemu 转发工具链）仍适用。
+>
+> ---
+
 > 本文分两部分：
 > 1. **运行时底座**：APK 里要打包的两类平台大文件（proot 二进制、rootfs 压缩包）怎么准备、放在哪、
 >    以及首启之后会发生什么。
