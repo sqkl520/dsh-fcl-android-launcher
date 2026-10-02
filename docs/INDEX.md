@@ -1,14 +1,13 @@
 # dsh 安卓启动器 —— 文档总览
 
-> ## ⚠️ 工作区保护（最高操作风险）—— 2026-10-01 已解除
-> 本目录文档描述的变更**送审时未提交**：`/workspace/FCL` 有 **11 项 untracked 条目**，
-> 包含整个 `com/dsh` 主体（25 源文件 + 10 assets + 8 布局 + 2 测试）。
-> **任何** `git clean -fd`、`git checkout -- .`、`git reset --hard`、IDE 的"revert"
-> 都会**不可恢复地**删除它们。
-> **✅ 已于 2026-10-01 固化：`git add -A && git commit` → `4aea9e5`**（基线 `f4f2624`），
-> 工作区已干净，回滚变为一条 `git revert 4aea9e5`。改动前另已备份 45 个 untracked 文件到
-> `/workspace/_review_evidence/untracked_backup/`。
-> **合并/发布前请保持"提交后再改"的习惯**，不要长时间把成果留在 untracked 状态。
+> ## 📦 仓库
+> **GitHub**：<https://github.com/sqkl520/dsh-fcl-android-launcher>
+> 本地仓库：`/workspace/FCL`（基线为 FCL 上游 `f4f2624`）
+> 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
+> 同样以 GPL-3.0 发布。
+>
+> **当前版本：`0.1.0-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+
 
 > DeepSeek Harness（dsh）在**未 root 安卓手机**上的启动器/管理器。
 > 本目录是这个项目唯一的文档根目录。文档**按类别组织**，不再用阅读顺序编号。
