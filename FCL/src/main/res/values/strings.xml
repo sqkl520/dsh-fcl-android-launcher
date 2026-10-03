@@ -218,4 +218,6 @@ Version %1$s</string>
     <string name="dsh_about_link_fcl">Based on FoldCraftLauncher</string>
     <string name="dsh_about_link_proot">proot engine (oonid/pr)</string>
     <string name="dsh_about_link_license">License: GPL-3.0</string>
+    <string name="dsh_settings_tab_launcher">Launcher</string>
+    <string name="dsh_about_tab">About</string>
 </resources>

@@ -214,4 +214,6 @@
     <string name="dsh_about_link_fcl">基于 FoldCraftLauncher</string>
     <string name="dsh_about_link_proot">proot 引擎（oonid/pr）</string>
     <string name="dsh_about_link_license">许可证：GPL-3.0</string>
+    <string name="dsh_settings_tab_launcher">启动器设置</string>
+    <string name="dsh_about_tab">关于</string>
 </resources>

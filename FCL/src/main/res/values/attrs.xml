@@ -59,4 +59,8 @@
         <attr name="text_use_theme_color" />
     </declare-styleable>
 
+    <declare-styleable name="FCLAppBarLayout">
+        <attr name="auto_tint" />
+    </declare-styleable>
+
 </resources>
