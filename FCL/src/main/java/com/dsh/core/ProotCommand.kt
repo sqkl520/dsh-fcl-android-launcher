@@ -27,7 +27,7 @@ object ProotCommand {
     /** rootfs 内挂载点 */
     const val GUEST_ROOT = "/opt/dsh"
 
-    const val DEFAULT_PATH = "/opt/dsh/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    const val DEFAULT_PATH = "/opt/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
     /** 一次 proot 调用的完整描述 */
     data class Spec(

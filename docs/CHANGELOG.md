@@ -13,6 +13,36 @@
 
 ---
 
+## [Unreleased · 阶段 D-1：脚本与预装 dsh 对齐 + 运行时自检] - 2026-10-03
+
+### Added
+- `probe.sh` 重写为**真实运行时自检**（9 项，逐项打印 `dsh-probe: <项> = ok|FAIL`）：
+  rootfs 布局、node 版本（^22.19 || >=24）、bash、`child_process.execSync`、
+  `spawnSync(/bin/bash)`、`spawnSync(/bin/sh)`、npm、预装 dsh、原生模块 `dlopen`；
+  全部通过时输出 `dsh-probe-ok`
+
+### Changed
+- **guest 内布局调整**（避免被 bind 遮蔽）：rootfs 内 Node 移到 `/opt/node22`，
+  预装 dsh 移到 `/opt/dsh-preinstalled`。原因：`ProotCommand` 会把 `filesDir/dsh` 绑定到 guest 的
+  `/opt/dsh`，原先把 node/dsh 放在 `/opt/dsh/` 下会在设备上被挂载点遮蔽而"消失"
+- `ProotCommand.DEFAULT_PATH`：`/opt/dsh/node/bin` → `/opt/node22/bin`
+- `start-dsh.sh`：dsh 入口按 **实例 → 预装 → node 解析** 三级解析，并打印 `dsh src=` / `dsh ver=`；
+  PATH 前缀改为 `/opt/node22/bin`；**禁用原生模块加载器的硬链接缓存**（`NARB_DISABLE_NATIVE_CACHE=1`）
+- `setup-node-dsh.sh`：请求版本与预装一致（或 `latest`）且实例无 `node_modules` 时，
+  **直接采用预装版本并跳过下载**（打印 `DONE ... source=preinstalled`），版本不同才装到实例目录
+- `scripts/version` 2 → 3（使设备重新解压脚本）
+- rootfs 重新打包：300MB；SHA-256=`5d762c30b9117830518571bc4eeadf593182cc56d1f472024ba4490aa90682a7`；rootfs version 标记为 `layout2`
+
+### Notes
+- 关键修复：dsh 启动报 `No usable native binding found for node-addon-require-builtin-linux-arm64-gnu`，
+  根因是加载器把 `.node` **硬链接**到 `os.tmpdir()` 缓存时失败（`EINVAL ... readlink`）；
+  关闭该缓存后正常
+- 实测（chroot 内，等价 Linux 用户态）：`probe.sh` 9/9 通过；`setup-node-dsh.sh` 三种分支判定正确；
+  `start-dsh.sh` 端到端拉起 dsh web 并输出 `READY url=http://127.0.0.1:3080/?token=...`
+- 验证：`run-compile.sh` BUILD SUCCESSFUL + ptyjni OK；本轮未打包
+
+---
+
 ## [Unreleased · 阶段 C：宿主侧最小运行链验证] - 2026-10-03
 
 ### Added

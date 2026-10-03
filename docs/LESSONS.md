@@ -122,6 +122,42 @@ guest 内的绝对路径软链（如 `/usr/local/bin/node -> /opt/dsh/node/bin/n
 这是**沙箱的嵌套伪影，不是 rootfs 或设备的问题**。要验证 rootfs 内容，改用 `chroot <rootfs> ...`
 （本项目在 chroot 下验证了 node/npm/bash/dsh/`.node`/child_process 全部正常）。
 
+### bind 挂载点会遮蔽 rootfs 里的同名目录
+
+`ProotCommand` 会把宿主 `filesDir/dsh` 绑定到 guest 的 `/opt/dsh`。
+**绑定是整目录替换**：rootfs 镜像里 `/opt/dsh/` 下原有的东西会全部看不见。
+
+- 实测教训：曾把官方 Node 放在 `/opt/dsh/node`、预装 dsh 放在 `/opt/dsh/app`，
+  设备上这两个会"消失"（只有宿主 `filesDir/dsh` 的内容可见）
+- 正确做法：**rootfs 自带的东西放 bind 目标之外**（本项目最终为 `/opt/node22` 与
+  `/opt/dsh-preinstalled`），`/opt/dsh` 只用于宿主数据（scripts/instances/npm-cache）
+
+### node-addon 加载器的硬链接缓存会误伤（重要）
+
+dsh 启动时若报：
+
+```
+No usable native binding found for node-addon-require-builtin-linux-arm64-gnu (auto)
+```
+
+深挖 `error.attempts[].attempts[]` 可见真正原因：
+
+```
+EINVAL: invalid argument, readlink '.../native-cache/node-addon-require-builtin-linux-arm64-gnu/0.1.7/.../linux-arm64-gnu-napi-v9.node'
+```
+
+即 `node-addon-native-custom-loader` 会先把 `.node` **硬链接**到
+`os.tmpdir()/node-addon-native-custom-loader-<uid>/native-cache/...` 再 `require`；
+某些文件系统/沙箱上该硬链接不成立，于是一路失败。
+
+**对策**：设 `NARB_DISABLE_NATIVE_CACHE=1`（本项目已在 `start-dsh.sh` / `probe.sh` 默认开启），
+让加载器直接从包目录 `require` 原始 `.node`。
+
+### 其他
+
+- web profile 的 HMR 插件要求 `--expose-internals`（不能放进 `NODE_OPTIONS`，只能直接传给 node）；
+  缺了它 dsh 仍能起，但会打印 `hmr ...: Error: --expose-internals is required for HMR service`
+
 ### 后台任务活不过一次工具调用
 
 `nohup ... &` 起的后台进程会在本次 `workspace_shell` 调用结束时被 SIGTERM 杀掉
