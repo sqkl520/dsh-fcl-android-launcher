@@ -2,13 +2,16 @@ package com.dsh.ui.shell
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaPlayer
 import android.os.Bundle
+import android.view.View
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
 import com.dsh.ui.DshSettingsActivity
 import com.mio.util.ImageUtil
+import com.tungsten.fclauncher.utils.FCLPath
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import com.dsh.ui.DshWebViewActivity
 import com.dsh.fcl.androidlauncher.R
@@ -21,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * dsh 启动器主外壳（阶段 3，横屏 + 右侧面板）。
@@ -41,6 +45,10 @@ class DshMainActivity : FCLActivity(), DshShellHost {
     /** 右面板当前展示的实例（供启动按钮回调使用） */
     private var panelInstance: DshInstance? = null
 
+    /** 动态壁纸（FCL 同款：filesDir 下有 live.mp4 才启用） */
+    private var mediaPlayer: MediaPlayer? = null
+    private var videoPosition = 0
+
     override val activity: FCLActivity get() = this
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,7 +56,9 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         binding = ActivityDshMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         // FCL 原版的核心视觉：背景图由 ThemeEngine 统一提供，跟随亮暗主题切换。
-        ImageUtil.loadInto(binding.background, ThemeEngine.getInstance().getTheme().getBackground(this))
+        loadBackground()
+        ThemeEngine.getInstance().addRefreshListener(themeRefreshListener)
+        setupLiveBackground()
 
         DshPaths.loadPaths(this)
         DshInstances.init()
@@ -66,6 +76,8 @@ class DshMainActivity : FCLActivity(), DshShellHost {
                 menus.forEach { if (it !== selected && it.isSelected) it.setSelected(false) }
             }
         }
+        // FCL 的返回项：交给本 Activity 的返回逻辑（非实例页 → 回实例页；否则退出）
+        binding.back.setOnClickListener { onBackPressedDispatcher.onBackPressed() }
 
         uiManager.pageSelectedListener = { pos ->
             binding.title.setTextWithAnim(getString(uiManager.titles[pos]))
@@ -79,6 +91,50 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         intent?.getIntExtra(EXTRA_OPEN_TAB, -1)?.takeIf { it >= 0 }?.let { openTab(it) }
 
         setupRightPanel()
+    }
+
+    /**
+     * 按当前亮暗模式加载主界面背景（FCL 同款）。
+     * ThemeEngine 的刷新回调是全局异步排队，Activity 销毁后仍未执行的回调无法通过 onDestroy
+     * 注销取消，因此这里防 Glide 对已销毁 Activity 加载崩溃。
+     */
+    private fun loadBackground() {
+        if (isDestroyed || isFinishing) return
+        ImageUtil.loadInto(
+            binding.background,
+            ThemeEngine.getInstance().getTheme().getBackground(this)
+        )
+    }
+
+    /** 主题刷新时重新加载背景（onDestroy 注销，防止持有已销毁实例） */
+    private val themeRefreshListener = Runnable { loadBackground() }
+
+    // --- 动态壁纸（照搬 FCL MainActivity 的最小实现） -------------------------
+
+    private fun shouldPlayVideo(): Boolean = File(FCLPath.LIVE_BACKGROUND_PATH).exists()
+
+    private fun setupLiveBackground() {
+        if (shouldPlayVideo()) {
+            binding.videoView.visibility = View.VISIBLE
+            binding.videoView.setVideoPath(FCLPath.LIVE_BACKGROUND_PATH)
+            binding.videoView.setOnPreparedListener {
+                mediaPlayer = it
+                it.isLooping = true
+                binding.videoView.start()
+            }
+            binding.videoView.setOnCompletionListener {
+                binding.videoView.seekTo(0)
+                binding.videoView.start()
+            }
+            binding.videoView.setOnErrorListener { _, _, _ ->
+                mediaPlayer = null
+                true
+            }
+        } else {
+            mediaPlayer = null
+            binding.videoView.visibility = View.GONE
+            runCatching { binding.videoView.stopPlayback() }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -190,7 +246,29 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         }
     }
 
+    /** 动态壁纸跟随界面暂停/恢复（FCL 同款） */
+    override fun onPause() {
+        super.onPause()
+        if (shouldPlayVideo() && binding.videoView.isPlaying) {
+            videoPosition = binding.videoView.currentPosition
+            binding.videoView.pause()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (shouldPlayVideo() && !binding.videoView.isPlaying) {
+            binding.videoView.seekTo(videoPosition)
+            binding.videoView.start()
+        }
+    }
+
     override fun onDestroy() {
+        ThemeEngine.getInstance().removeRefreshListener(themeRefreshListener)
+        if (shouldPlayVideo()) {
+            mediaPlayer = null
+            runCatching { binding.videoView.stopPlayback() }
+        }
         scope.cancel()
         super.onDestroy()
     }

@@ -50,6 +50,8 @@
 | `reports/round7-review-and-optimization.md` | **第七轮：评估与优化**（4 个 P1/P2 修复 + §2.5 去 Material 收尾）；全文 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"去 Material 收尾、删除竞态、WebView 失败面板、超时文案"怎么修的 |
 | `reports/round8-review-and-optimization.md` | **第八轮：独立复审**（命中 `RuntimeUtils.isLatest` 资源机制不一致导致的"首启解压可能被跳过"静默失败 + 首启兜底/明文卫生两处修缮 + 若干建议）；本轮全文即 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"第八轮是否还有新问题、首启解压为什么补文件存在性兜底" |
 | `reports/round9-review-and-optimization.md` | **第九轮：复审**（命中 `isReady()`/`preflight()` 对 proot 判据不一致导致的"假就绪" + 下载页空实例累积；修 2 处 + 新增 4 单测）；本轮全文即 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"第九轮改了啥：就绪判据统一 + 下载去重" |
+| `reports/round10-review-and-optimization.md` | **第十轮：评估与优化**（6 文件 +163/−42）：资源契约测试红→绿、`isLatest` 非数字版本号加固、删除实例归属校验、JNI 符号名对齐、就绪判据补执行位、rootfs 升级可回滚、空间门槛按实测值；本轮全文即 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"第十轮改了啥、`MIN_FREE_BYTES` 为什么从 1.5G 提到 2.2G" |
+| `reports/round11-review-and-optimization.md` | **第十一轮：评估与优化**（13 文件 +283/−31）：**2 个真机阻塞级 P1** —— ① rootfs 符号链接目标被改写成宿主路径 → `/opt/node22/bin/npm` 断链 → 底座永远不就绪；② 预装 dsh 判定口径未同步 → 装完必判 BROKEN。另修 2 个 P3；单测 27/27→**32/32**；本轮全文即 `PROJECT_REVIEW_AND_OPTIMIZATION.md` | 想知道"第十一轮改了啥、为什么 npm 断链会让底座永远不就绪" |
 | `reports/mc-removal-review-brief.md` | **审查请求书**：送审背景（仓库/版本/技术栈/运行方式/业务目标/已知限制）+ **影响面清单** + 期望审查方回答的问题 | 要送审时先看这份 |
 
 分类规则：**顶层**放长期常读的三份（总纲 / 规划 / 打包）；`design/` 放功能设计；
@@ -63,6 +65,34 @@
 > **纯 dsh 启动器**（只保留 FCL 的 UI 框架与少量通用工具）。
 > 变更详情见 **`reports/mc-removal.md`**（供独立审查）。
 >
+> 📌 **2026-10-03 第十一轮评估与优化**：命中**两个真机阻塞级 P1**（都是阶段 D-1 引入的链）——
+> ① **rootfs 解压把符号链接目标里的 `..` 改写成宿主路径**：`opt/node22/bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js`
+> 被写成 `<rootfs>/lib/node_modules/npm/bin/npm-cli.js`（实测**不存在**），真机首启后 `npm` 断链 →
+> `probe.sh` 的 npm 项 FAIL → **底座永远不就绪**；改为**原样保留链接目标**（策略抽到 `TarLinkPolicy` + 单测）。
+> ② **「命中预装 dsh 即跳过下载」改变了产物形态，但 Kotlin 三处判定仍只看实例内 `node_modules`** →
+> 装完即判 `dsh_install_incomplete` → **BROKEN**、重装重复同一结果、永远起不来；新增
+> `DshPaths.effectiveDshDir`（实例优先 → rootfs 预装回退）统一三处口径。另修 2 个 P3
+> （安装文案与事实对齐 / `preflight` 判据与入参一致）。单测 27/27 → **32/32**。详见
+> **`reports/round11-review-and-optimization.md`**（全文 `PROJECT_REVIEW_AND_OPTIMIZATION.md`）。
+>
+> 📌 **2026-10-03 第十一轮附加：UI 与 FCL 一致性还原**：把 dsh 界面**逐部件对照 FCL 原版布局**
+> （从 git 历史取出 `activity_main.xml` / `item_profile.xml` / `item_version.xml` /
+> `item_launcher_setting_button.xml` / `page_setting_list.xml` / `LauncherSettingPage` 作真蓝本）后对齐 ——
+> 根因是**阶段 4 裁剪把 FCL 的通用 UI chrome 资产一并删了**（`bg_game_menu` / `bg_right_menu` /
+> `bg_item_rounded` / `bg_container_transparent_clickable` / `bg_progress*`），已恢复；
+> 外壳补回左侧菜单背景+抬升、`back` 项、`video_view`、右侧面板 25% 半透明形态，
+> **动态岛回到 FCL 原位（底部居中）**；列表行/设置行按 FCL 范式重写（含 `anim_scale` 按压反馈、
+> `SpacingItemDecoration` 的组内 1dp 分割线）；页内去掉重复大标题、动作改图标按钮；
+> **16 处 `MaterialAlertDialogBuilder` 全部换成 `FCLAlertDialog`（归零）**。
+> 见 `CHANGELOG.md`「第十一轮附加」与 `LESSONS.md §14/§15`。
+>
+> 📌 **2026-10-03 第十轮评估与优化**：阶段 A~D 落地后新引入的缺陷被清掉 —— ① **单测门禁原本是红的**
+> （`DshSettingsUI` 新增的 `dsh_about_version` 未登记进资源契约测试的 `callSites`，26/27）；② `RuntimeUtils.isLatest`
+> 对**非数字版本号**做 `Long.parseLong`（rootfs 的 version 已是 `debian-...-layout2`），一旦 classpath 资源可解析
+> 就会抛 `NumberFormatException`（已用 JVM harness 复现）；另修 4 个 P2：**删除实例会误杀别的运行中实例**、
+> **JNI 符号名与 `com.dsh.core.PtyNative` 不匹配**（潜伏 `UnsatisfiedLinkError`）、**就绪判据漏查执行位**、
+> **rootfs 升级失败会连旧的都丢**；并把空间门槛从 1500 MiB（比 rootfs 实测 1.50 GiB 还小）改成按实测值计算。
+> 单测恢复 **27/27**。详见 **`reports/round10-review-and-optimization.md`**。
 > 📌 **2026-10-02 第九轮复审**：命中 `DshBootstrap.isReady()` 与 `ProotCommand.preflight()` 对 proot 的
 > **判据不一致**——`isReady()` 漏校验 proot 二进制，会出现"横幅隐藏（以为就绪）但一启动就报缺 proot"的
 > **假就绪**；并补上了 proot 分支的"缺二进制即补解压"兜底。另修 `DshDownloadViewModel` 下载页
@@ -98,13 +128,15 @@
 - **脚本**：`FCL/src/main/assets/dsh/scripts/` 3 个（严格 POSIX sh）；
   `dsh-launcher-poc/scripts/` 6 个参考/测试脚本
 - **验证**：`sh /workspace/run-compile.sh`（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL，0 error**；
-  单测 **23/23**；脚本一致性 **18/18**
+  单测 **27/27**；脚本一致性 **18/18**
 - **入口**：`SplashActivity` → 直接进 **`DshMainActivity`**（dsh 外壳，五页：实例/管理/下载/日志/设置；
   **不再有** MC 运行时门禁 / EULA / MC 主界面，也不再有并列的 `DshInstancesActivity` 等旧 Activity）
 - **待办**：
   1. ✅ **【硬性要求】UI 跟 FCL 走**（**第七轮已收尾**）：**8 个 dsh 布局已全部由 Material → fcllibrary 控件**，
      0 Material 残留；§2.5.5 验收命令 1 输出为空。规格见 **`design/app-shell.md` §2.5**
-     （仅 `MaterialAlertDialogBuilder` 在 `com/dsh` 仍 22 处，作"新代码逐步归零"的 P3 项。）
+     （仅 `MaterialAlertDialogBuilder` 在 `com/dsh` 仍 **21** 处，作"新代码逐步归零"的 P3 项；
+     实测 2026-10-03：`grep -rn "MaterialAlertDialogBuilder" FCL/src/main/java/com/dsh | wc -l` = 21，
+     8 个 dsh 布局里 `com.google.android.material` 出现 **0** 次）。
   2. **同步更新文档**（部分完成）：已为 `PLAN.md`/`PACKAGING.md` 加过时横幅、更新 `ROADMAP.md`/`INDEX.md`；
      `design/multi-version.md`、`design/ui-manifest.md`、`design/proot-chain.md`、`reports/round2~5` 仍按旧形态描述（逐步完善）
   3. ✅ **决定 R-02（targetSdk）**：**已决策保持 targetSdk 34，不降级**，用 `:proot-engine`（PROOT_LOADER）绕过 W^X。

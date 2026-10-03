@@ -73,6 +73,7 @@
         <string name="dsh_install_started_message">正在后台安装 %1$s，可在实例列表查看进度。</string>
         <string name="dsh_install_started_title">已开始安装</string>
         <string name="dsh_installed">已安装</string>
+        <string name="dsh_install_skipped">%1$s 已安装，可直接启动</string>
         <string name="dsh_instance_gone">实例已不存在</string>
         <string name="dsh_instance_subtitle">版本 %1$s · 端口 %2$s · %3$s</string>
         <string name="dsh_instances_empty">还没有实例。\n点击"下载"安装一个 dsh 版本。</string>

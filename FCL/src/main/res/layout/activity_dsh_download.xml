@@ -1,41 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- dsh 版本下载页：标题 + 刷新 + "显示预览版"开关 + 版本列表 + 加载/错误态。FCL 风格（见 §2.5）。 -->
+<!--
+  dsh 版本下载页。FCL 范式（见 §2.5）：页内不放大标题（页名由外壳动态岛显示），
+  动作按钮用 FCLImageButton（use_theme_color + no_padding + anim_scale_large）。
+  内容：顶部刷新按钮 + "显示预览版"开关 + 版本列表 + 加载/错误态。
+-->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="12dp">
+    android:paddingStart="12dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="12dp">
 
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/title"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:text="@string/dsh_download_title"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        app:auto_text_tint="true"
-        app:layout_constraintEnd_toStartOf="@id/btn_refresh"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <com.tungsten.fcllibrary.component.view.FCLButton
+    <com.tungsten.fcllibrary.component.view.FCLImageButton
         android:id="@+id/btn_refresh"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:minWidth="0dp"
-        android:text="@string/dsh_action_refresh"
-        app:ripple="true"
-        app:layout_constraintBottom_toBottomOf="@id/title"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:src="@drawable/ic_baseline_refresh_24"
+        android:stateListAnimator="@xml/anim_scale_large"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="@id/title" />
+        app:layout_constraintTop_toTopOf="parent"
+        app:no_padding="true"
+        app:use_theme_color="true" />
 
     <com.tungsten.fcllibrary.component.view.FCLSwitch
         android:id="@+id/switch_prerelease"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
         android:checked="true"
         android:text="@string/dsh_download_show_prerelease"
-        app:layout_constraintEnd_toEndOf="parent"
+        android:textSize="13sp"
+        app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/btn_refresh" />
 
     <androidx.recyclerview.widget.RecyclerView
@@ -58,7 +54,7 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/title" />
+        app:layout_constraintTop_toTopOf="parent" />
 
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/error_hint"
@@ -71,6 +67,6 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/title" />
+        app:layout_constraintTop_toBottomOf="@id/switch_prerelease" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -12,7 +12,9 @@ import com.dsh.core.DshPaths
 import com.dsh.fcl.androidlauncher.BuildConfig
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.UiDshLauncherSettingsBinding
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.mio.ui.adapter.SpacingItemDecoration
+import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -35,6 +37,23 @@ class DshSettingsUI(
         DshInstances.init()
         adapter = DshLauncherSettingAdapter(::onAction)
         binding.settingList.layoutManager = LinearLayoutManager(context)
+        // 行间距与组内分割线：照搬 FCL LauncherSettingPage 的 SpacingItemDecoration 用法 ——
+        // 同组相邻行之间 1dp 分割线（用主题色绘制），跨组 8dp 间距，首行上方 10dp。
+        val density = context.resources.displayMetrics.density
+        val rowSpacing = (8 * density).toInt()
+        val groupDivider = (1 * density).toInt()
+        binding.settingList.addItemDecoration(
+            SpacingItemDecoration(
+                rowSpacing,
+                { _, position -> if (adapter.isNextInSameGroup(position)) groupDivider else rowSpacing },
+                true,
+                { ThemeEngine.getInstance().getTheme().getColor() }
+            )
+        )
+        // 主题切换时重绘分割线颜色（FCL 同款）
+        ThemeEngine.getInstance().registerEvent(binding.settingList) {
+            binding.settingList.invalidate()
+        }
         binding.settingList.adapter = adapter
         adapter.rebuild()
     }
@@ -55,23 +74,30 @@ class DshSettingsUI(
     private fun verifyRuntime() {
         scope.launch {
             val report = withContext(Dispatchers.IO) { DshBootstrap.verify(context) }
-            MaterialAlertDialogBuilder(host.activity)
-                .setTitle(R.string.dsh_verify_title)
+            FCLAlertDialog.Builder(host.activity)
+                .setAlertLevel(
+                    if (report.ok) FCLAlertDialog.AlertLevel.INFO else FCLAlertDialog.AlertLevel.ALERT
+                )
+                .setTitle(context.getString(R.string.dsh_verify_title))
                 .setMessage(report.detail)
-                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(context.getString(R.string.dialog_positive), null)
+                .create()
                 .show()
         }
     }
 
     private fun showAbout() {
-        MaterialAlertDialogBuilder(host.activity)
-            .setTitle(R.string.dsh_about_full_name)
+        FCLAlertDialog.Builder(host.activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+            .setTitle(context.getString(R.string.dsh_about_full_name))
             .setMessage(
                 context.getString(R.string.dsh_about_subtitle) + "\n" +
                     context.getString(R.string.dsh_about_version, BuildConfig.VERSION_NAME) + "\n" +
                     "https://github.com/sqkl520/dsh-fcl-android-launcher"
             )
-            .setPositiveButton(android.R.string.ok, null)
+            .useAutoLink()
+            .setNegativeButton(context.getString(R.string.dialog_positive), null)
+            .create()
             .show()
     }
 

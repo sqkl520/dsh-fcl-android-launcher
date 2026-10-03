@@ -188,9 +188,11 @@ object DshRuntime {
             return StartOutcome.NotReady(reason)
         }
 
-        // 真正校验\"装好了\"：状态字段可能是过期的，以磁盘为准
-        val pkg = DshPaths.instanceDshPackageJson(instance.id)
-        val binJs = DshPaths.instanceDshBinJs(instance.id)
+        // 真正校验\"装好了\"：状态字段可能是过期的，以磁盘为准。
+        // ★ 第十一轮：用 effectiveDsh* —— 命中 rootfs 预装版本时实例目录没有 node_modules，
+        // 真正的包在 rootfs 的 /opt/dsh-preinstalled 下（阶段 D-1 的跳过下载优化）。
+        val pkg = DshPaths.effectiveDshPackageJson(instance.id)
+        val binJs = DshPaths.effectiveDshBinJs(instance.id)
         if (!pkg.isFile) {
             val reason = context.getString(R.string.dsh_reason_not_installed)
             if (noSeccomp) failRetry(instance, reason)

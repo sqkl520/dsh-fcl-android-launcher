@@ -13,7 +13,7 @@ import com.dsh.core.DshVersionListItem
 import com.dsh.ui.DshVersionAdapter
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshDownloadBinding
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -102,18 +102,27 @@ class DshDownloadUI(
                 val proceed = prepareRuntime()
                 if (!proceed) return@launch
             }
-            val inst = viewModel.installVersion(item)
-            toast(context.getString(R.string.dsh_install_started, item.version))
+            val dispatch = viewModel.installVersion(item)
+            val inst = dispatch.instance
+            if (dispatch.started) {
+                toast(context.getString(R.string.dsh_install_started, item.version))
+            } else {
+                // 没有真的发起安装（该版本已装好 / 已有安装在跑）：别再说「正在安装」
+                toast(context.getString(R.string.dsh_install_skipped, item.version))
+            }
             askOpenInstances(inst.name)
         }
     }
 
     private suspend fun prepareRuntime(): Boolean {
-        val dialog = MaterialAlertDialogBuilder(host.activity)
-            .setTitle(R.string.dsh_action_prepare_runtime)
+        val dialog = FCLAlertDialog.Builder(host.activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+            .setTitle(context.getString(R.string.dsh_action_prepare_runtime))
             .setMessage(context.getString(R.string.dsh_bootstrap_extracting))
             .setCancelable(false)
-            .show()
+            .setNegativeButton(context.getString(R.string.dialog_negative), null)
+            .create()
+        dialog.show()
         val failure = withContext(Dispatchers.IO) {
             var fail: String? = null
             DshBootstrap.install(context) { p ->
@@ -132,10 +141,12 @@ class DshDownloadUI(
         }
         dialog.dismiss()
         if (failure != null) {
-            MaterialAlertDialogBuilder(host.activity)
-                .setTitle(R.string.dsh_bootstrap_failed_title)
+            FCLAlertDialog.Builder(host.activity)
+                .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                .setTitle(context.getString(R.string.dsh_bootstrap_failed_title))
                 .setMessage(failure)
-                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(context.getString(R.string.dialog_positive), null)
+                .create()
                 .show()
             return false
         }
@@ -143,11 +154,15 @@ class DshDownloadUI(
     }
 
     private fun askOpenInstances(instanceName: String) {
-        MaterialAlertDialogBuilder(host.activity)
-            .setTitle(R.string.dsh_install_started_title)
+        FCLAlertDialog.Builder(host.activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+            .setTitle(context.getString(R.string.dsh_install_started_title))
             .setMessage(context.getString(R.string.dsh_install_started_message, instanceName))
-            .setPositiveButton(R.string.dsh_action_go_instances) { _, _ -> host.switchTab(DshShellHost.TAB_INSTANCES) }
-            .setNegativeButton(R.string.dsh_action_stay, null)
+            .setPositiveButton(context.getString(R.string.dsh_action_go_instances)) {
+                host.switchTab(DshShellHost.TAB_INSTANCES)
+            }
+            .setNegativeButton(context.getString(R.string.dsh_action_stay), null)
+            .create()
             .show()
     }
 

@@ -1,13 +1,17 @@
 package com.dsh
 
+import com.dsh.core.DshInstaller
 import com.dsh.core.DshLogBus
+import com.dsh.core.DshPaths
 import com.dsh.core.DshRegistry
 import com.dsh.core.DshVersionListItem
+import com.dsh.core.TarLinkPolicy
 import com.dsh.core.UrlScanner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * dsh 启动器核心逻辑的 JVM 单元测试（不需要真机/Android）。
@@ -311,5 +315,122 @@ class DshCoreLogicTest {
         start.countDown()
         workers.forEach { it.join() }
         assertEquals("并发占坑只应有一个赢家", 1, winners.get())
+    }
+
+    // --- rootfs 预装 dsh 的解析（第十一轮 P1：决定"装好了没 / 能不能启动"） ------
+    //
+    // 阶段 D-1 起，`setup-node-dsh.sh` 命中 rootfs 预装版本时会打印
+    // `DONE version=... source=preinstalled` 并**跳过下载** —— 此时实例目录里根本没有
+    // node_modules（真正的包在 rootfs 的 /opt/dsh-preinstalled）。若判定只看实例路径，
+    // 「刚刚装成功」的实例会被判成 BROKEN，且重装重复同一结果、实例永远无法启动。
+
+    /** 实例内有 dsh → 用实例的（多版本隔离优先） */
+    @Test
+    fun prefersInstanceDshOverPreinstalled() {
+        val tmp = java.nio.file.Files.createTempDirectory("dsh-eff").toFile()
+        try {
+            val inst = File(tmp, "instances/inst-1").apply { mkdirs() }
+            val rootfs = File(tmp, "rootfs").apply { mkdirs() }
+            writeFakeDshPackage(File(inst, "node_modules/@deepseek-ai/dsh"), "0.1.5-rc.2")
+            writeFakeDshPackage(File(rootfs, DshPaths.PREINSTALLED_DSH_REL), "0.1.6-alpha.2")
+
+            val dir = DshPaths.effectiveDshDir(inst, rootfs)
+            assertEquals(File(inst, "node_modules/@deepseek-ai/dsh"), dir)
+            assertEquals(
+                "0.1.5-rc.2",
+                DshInstaller.readVersionFromPackageJson(File(dir, "package.json"))
+            )
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    /** 实例内没有 dsh（命中预装、跳过下载）→ 回退到 rootfs 预装，而不是判成未安装 */
+    @Test
+    fun fallsBackToPreinstalledDsh() {
+        val tmp = java.nio.file.Files.createTempDirectory("dsh-eff").toFile()
+        try {
+            val inst = File(tmp, "instances/inst-1").apply { mkdirs() }
+            val rootfs = File(tmp, "rootfs").apply { mkdirs() }
+            writeFakeDshPackage(File(rootfs, DshPaths.PREINSTALLED_DSH_REL), "0.1.6-alpha.2")
+
+            val dir = DshPaths.effectiveDshDir(inst, rootfs)
+            assertEquals(File(rootfs, DshPaths.PREINSTALLED_DSH_REL), dir)
+            // 版本必须能读出来，否则 DshInstaller 仍会判 dsh_install_incomplete
+            assertEquals(
+                "0.1.6-alpha.2",
+                DshInstaller.readVersionFromPackageJson(File(dir, "package.json"))
+            )
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    /** 两处都没有 → 返回实例内预期路径（错误信息/日志据此定位） */
+    @Test
+    fun returnsInstancePathWhenNothingInstalled() {
+        val tmp = java.nio.file.Files.createTempDirectory("dsh-eff").toFile()
+        try {
+            val inst = File(tmp, "instances/inst-1").apply { mkdirs() }
+            val rootfs = File(tmp, "rootfs").apply { mkdirs() }
+            assertEquals(
+                File(inst, "node_modules/@deepseek-ai/dsh"),
+                DshPaths.effectiveDshDir(inst, rootfs)
+            )
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    /** 预装目录存在但**没有** package.json（半成品）时不回退，避免把坏包当可用 */
+    @Test
+    fun doesNotFallBackToIncompletePreinstalled() {
+        val tmp = java.nio.file.Files.createTempDirectory("dsh-eff").toFile()
+        try {
+            val inst = File(tmp, "instances/inst-1").apply { mkdirs() }
+            val rootfs = File(tmp, "rootfs").apply { mkdirs() }
+            File(rootfs, DshPaths.PREINSTALLED_DSH_REL).mkdirs() // 只有空目录
+
+            assertEquals(
+                File(inst, "node_modules/@deepseek-ai/dsh"),
+                DshPaths.effectiveDshDir(inst, rootfs)
+            )
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // --- tar 符号链接目标策略（第十一轮 P1：防止再次把 `..` 改写成宿主路径） ----
+
+    /**
+     * 链接目标必须原样保留。
+     *
+     * 旧实现是 `linkName.replace("..", dest.getAbsolutePath())`，会把
+     * `opt/node22/bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js` 写成
+     * `<rootfs>/lib/node_modules/npm/bin/npm-cli.js`（实测不存在）→ npm 断链 →
+     * probe.sh 的 npm 项 FAIL → 底座永远不就绪。
+     */
+    @Test
+    fun symlinkTargetsAreKeptVerbatim() {
+        val npm = "../lib/node_modules/npm/bin/npm-cli.js"
+        assertEquals(npm, TarLinkPolicy.symlinkTarget(npm))
+        // 绝不能把宿主解压目录拼进去
+        assertTrue(
+            "链接目标被改写成宿主路径: ${TarLinkPolicy.symlinkTarget(npm)}",
+            !TarLinkPolicy.symlinkTarget(npm).contains("/data/")
+        )
+        // 绝对目标同样原样保留（由 proot 在 guest 内翻译）
+        assertEquals("/usr/bin/env", TarLinkPolicy.symlinkTarget("/usr/bin/env"))
+        // 多级 `..` 也不能被改写
+        val multi = "../../../git-core/contrib/hooks"
+        assertEquals(multi, TarLinkPolicy.symlinkTarget(multi))
+    }
+
+    /** 造一个「能被 readVersionFromPackageJson 读出真实版本」的最小 dsh 包 */
+    private fun writeFakeDshPackage(dir: File, version: String) {
+        dir.mkdirs()
+        File(dir, "package.json").writeText("{\"name\":\"@deepseek-ai/dsh\",\"version\":\"$version\"}")
+        File(dir, "lib").mkdirs()
+        File(dir, "lib/bin.js").writeText("// fake entry\n")
     }
 }

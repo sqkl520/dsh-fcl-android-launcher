@@ -13,12 +13,12 @@ import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshServices
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshSettingsBinding
+import com.tungsten.fcllibrary.component.FCLActivity
+import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.dsh.ui.shell.DshMainActivity
 import com.dsh.ui.shell.DshShellHost
-import com.tungsten.fcllibrary.component.FCLActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -163,14 +163,16 @@ class DshSettingsActivity : FCLActivity() {
         }
 
         binding.btnClearKey.setOnClickListener {
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.dsh_key_clear_title)
-                .setMessage(R.string.dsh_key_clear_message)
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(R.string.dsh_action_clear) { _, _ ->
+            FCLAlertDialog.Builder(this)
+                .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                .setTitle(getString(R.string.dsh_key_clear_title))
+                .setMessage(getString(R.string.dsh_key_clear_message))
+                .setPositiveButton(getString(R.string.dsh_action_clear)) {
                     DshCredentials.clear(this, inst.id)
                     refreshCredentialStatus(inst)
                 }
+                .setNegativeButton(getString(R.string.dialog_negative), null)
+                .create()
                 .show()
         }
 
@@ -180,10 +182,14 @@ class DshSettingsActivity : FCLActivity() {
             lifecycleScope.launch {
                 val report = withContext(Dispatchers.IO) { DshBootstrap.verify(this@DshSettingsActivity) }
                 binding.btnVerifyRuntime.isEnabled = true
-                MaterialAlertDialogBuilder(this@DshSettingsActivity)
-                    .setTitle(R.string.dsh_verify_title)
+                FCLAlertDialog.Builder(this@DshSettingsActivity)
+                    .setAlertLevel(
+                        if (report.ok) FCLAlertDialog.AlertLevel.INFO else FCLAlertDialog.AlertLevel.ALERT
+                    )
+                    .setTitle(getString(R.string.dsh_verify_title))
                     .setMessage(report.detail)
-                    .setPositiveButton(android.R.string.ok, null)
+                    .setNegativeButton(getString(R.string.dialog_positive), null)
+                    .create()
                     .show()
             }
         }
@@ -204,15 +210,17 @@ class DshSettingsActivity : FCLActivity() {
         }
 
         binding.btnDelete.setOnClickListener {
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.dsh_delete_title)
+            FCLAlertDialog.Builder(this)
+                .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                .setTitle(getString(R.string.dsh_delete_title))
                 .setMessage(getString(R.string.dsh_delete_message, inst.name))
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(R.string.dsh_action_delete) { _, _ ->
+                .setPositiveButton(getString(R.string.dsh_action_delete)) {
                     DshCredentials.clear(this, inst.id)
                     DshInstances.delete(inst.id)
                     finish()
                 }
+                .setNegativeButton(getString(R.string.dialog_negative), null)
+                .create()
                 .show()
         }
     }

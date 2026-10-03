@@ -38,8 +38,24 @@ object DshBootstrap {
 
     private const val ASSET_ROOT = "dsh"
 
-    /** 解压前要求的最小可用空间（大致覆盖 rootfs + 一个实例的 node_modules） */
-    const val MIN_FREE_BYTES = 1500L * 1024 * 1024
+    /**
+     * rootfs 解压后的**实测**体积（Debian bookworm arm64 + 官方 Node 22 + 预装 dsh）。
+     * 压缩包 `rootfs.tar.xz` 314 MB → 解压后 1,607,908,864 B（≈1.50 GiB，膨胀约 5.1×）。
+     * 这里取 1.65 GiB 留一点余量。
+     */
+    private const val ROOTFS_EXTRACTED_BYTES = 1650L * 1024 * 1024
+
+    /** 一个实例的 dsh 依赖树（node_modules）大致占用，实测 300~500 MB，取 600 MB 留余量 */
+    private const val INSTANCE_NODE_MODULES_BYTES = 600L * 1024 * 1024
+
+    /**
+     * 首装需要的最小可用空间：rootfs 一份 + 一个实例的 node_modules。
+     *
+     * ★ 本轮修正：原值是 `1500 MiB`（=1,572,864,000 B），而**光 rootfs 解压后就已
+     * 1,607,908,864 B** —— 门槛比它要保护的对象还小，于是"空间检查通过"之后照样会在解压中途
+     * 写满磁盘，留下半成品（还带着一个误导性的"空间够用"结论）。现在按实测值给。
+     */
+    const val MIN_FREE_BYTES = ROOTFS_EXTRACTED_BYTES + INSTANCE_NODE_MODULES_BYTES
 
     sealed class Progress {
         data class Stage(val text: String, val fraction: Double? = null) : Progress()
@@ -70,21 +86,36 @@ object DshBootstrap {
         RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") &&
             RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") &&
             File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile &&
-            DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).isFile &&
-            DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).isFile &&
+            prootBinReady() &&
+            prootLoaderReady() &&
             DshPaths.rootfsLooksUsable()
     }.getOrDefault(false)
+
+    /**
+     * proot 主程序是否\"可用\"。
+     * ★ 与 [ProotCommand.preflight] 的口径对齐：preflight 要求 `exists() && canExecute()`，
+     * 这里原来只要求 `isFile` —— 若二进制存在但没有执行位，就会出现\"横幅隐藏（以为就绪）
+     * 但一启动就报『proot 二进制没有执行权限』\"的假就绪（第九轮修的是同一类问题，
+     * 只是当时漏了执行位这一维）。判据必须**不弱于**真正会失败的那个入口。
+     */
+    private fun prootBinReady(): Boolean =
+        DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
+            .let { it.isFile && it.canExecute() }
+
+    private fun prootLoaderReady(): Boolean =
+        DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).isFile
 
     /** 一句话描述当前缺口（界面提示用） */
     fun missingSummary(): String? {
         if (isReady()) return null
+        val prootBin = DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
+        val prootLoader = DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
         return when {
             !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile -> "缺少启动脚本"
             !File(DshPaths.ROOTFS_DIR).isDirectory || !DshPaths.rootfsLooksUsable() -> "rootfs 未就绪"
-            !DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).exists() ->
-                "缺少 proot 可执行文件（jniLibs）"
-            !DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).exists() ->
-                "缺少 proot loader（jniLibs）"
+            !prootBin.isFile -> "缺少 proot 可执行文件（jniLibs）"
+            !prootBin.canExecute() -> "proot 可执行文件没有执行权限（jniLibs 打包异常）"
+            !prootLoader.isFile -> "缺少 proot loader（jniLibs）"
             else -> "运行时底座需要更新"
         }
     }
@@ -110,16 +141,10 @@ object DshBootstrap {
                 return
             }
 
-            // 0) 磁盘空间（rootfs + 一个实例的 node_modules）
-            val free = DshPaths.freeSpaceBytes()
-            if (free in 0 until MIN_FREE_BYTES) {
-                fail(
-                    emit,
-                    "可用空间不足：需要约 ${DshPaths.formatSize(MIN_FREE_BYTES)}，" +
-                        "当前 ${DshPaths.formatSize(free)}"
-                )
-                return
-            }
+            // 0) 磁盘空间检查**移到了真正要解压 rootfs 的分支里**（见第 3 步）。
+            // 原实现把它放在这里，无论是否需要解压都会先卡一道门槛：rootfs 已经就绪、本次只是
+            // 补脚本的场景，也会被"空间不足"直接判失败（假失败）。而且门槛值本身偏小（见
+            // [MIN_FREE_BYTES] 的注释）。
 
             // 1) 脚本
             // ★ 判定带\"文件存在性\"兜底：RuntimeUtils.isLatest 用 Class.getResourceAsStream(\"/assets/...\")
@@ -143,10 +168,11 @@ object DshBootstrap {
             val nativeLibDir = com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR
             val prootBin = DshPaths.resolveProotBin(nativeLibDir)
             val prootLoader = DshPaths.resolveProotLoader(nativeLibDir)
-            if (!prootBin.isFile || !prootLoader.isFile) {
+            if (!prootBin.isFile || !prootBin.canExecute() || !prootLoader.isFile) {
                 // 明确报出缺哪个，并给出可操作指引（这是打包问题，不是运行环境问题）
                 val missing = buildList {
                     if (!prootBin.isFile) add("libproot.so")
+                    else if (!prootBin.canExecute()) add("libproot.so（无执行位）")
                     if (!prootLoader.isFile) add("libproot-loader.so")
                 }.joinToString("、")
                 fail(
@@ -162,6 +188,24 @@ object DshBootstrap {
             if (!RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") ||
                 !DshPaths.rootfsLooksUsable()
             ) {
+                // 解压前才做空间检查，且按"这次到底要不要留两份"来算：
+                // - 首装：解到 .tmp 一份，rename 上位 → 峰值 ≈ 1 份 rootfs
+                // - 升级：旧 rootfs 仍在，新内容要同时存在 → 峰值 ≈ 2 份 rootfs
+                // 另外还要给后面 npm install 留出 node_modules 的空间。
+                val replacing = DshPaths.rootfsLooksUsable()
+                val need = INSTANCE_NODE_MODULES_BYTES +
+                    ROOTFS_EXTRACTED_BYTES * (if (replacing) 2L else 1L)
+                val free = DshPaths.freeSpaceBytes()
+                if (free in 0 until need) {
+                    fail(
+                        emit,
+                        "可用空间不足：${if (replacing) "升级" else "解压"} rootfs 需要约 " +
+                            "${DshPaths.formatSize(need)}" +
+                            (if (replacing) "（升级期间新旧两份 rootfs 会同时存在）" else "") +
+                            "，当前 ${DshPaths.formatSize(free)}"
+                    )
+                    return
+                }
                 emit(Progress.Stage("解压 Linux rootfs（较大，请稍候）", 0.2))
                 extractRootfs(context, emit)
             }
@@ -253,13 +297,33 @@ object DshBootstrap {
             .bufferedReader().use { it.readText().trim() }
         File(tmpDir, "version").writeText(version)
 
-        // 原子替换
-        if (destDir.exists()) destDir.deleteRecursively()
+        // 原子替换（★ 本轮加固）：先把旧 rootfs 挪到 .old 再让新内容上位。
+        // 原实现是 \"先 deleteRecursively 旧目录，再 rename 新目录\"——删除与 rename 之间若失败
+        // （磁盘满 / 被系统杀 / rename 异常），用户会**同时失去新旧两份 rootfs**：升级失败 = 底座全没了。
+        // 现在失败可回滚到旧的（至少还能用），成功后再删备份。
+        val backupDir = File("${DshPaths.ROOTFS_DIR}.old")
+        if (backupDir.exists()) backupDir.deleteRecursively()
+        val hadOld = destDir.exists()
+        if (hadOld && !destDir.renameTo(backupDir)) {
+            // 挪不动旧目录（少见）：退化为原行为，但记一行日志便于排查
+            DshLogBus.append("[bootstrap] 旧 rootfs 无法改名备份，退化为直接覆盖")
+            destDir.deleteRecursively()
+        }
         if (!tmpDir.renameTo(destDir)) {
             // 某些文件系统上跨目录 rename 失败：退化为移动内容
             destDir.mkdirs()
             tmpDir.listFiles()?.forEach { f -> f.renameTo(File(destDir, f.name)) }
             tmpDir.deleteRecursively()
+        }
+        if (backupDir.exists()) {
+            if (looksUsable(destDir)) {
+                backupDir.deleteRecursively()
+            } else {
+                // 新内容不可用 → 回滚旧的，别让用户连旧底座都没了
+                DshLogBus.append("[bootstrap] 新 rootfs 不可用，回滚到备份")
+                destDir.deleteRecursively()
+                backupDir.renameTo(destDir)
+            }
         }
         DshPaths.loadPaths(context) // 重建目录（rootfs 被换过）
     }
@@ -286,8 +350,6 @@ object DshBootstrap {
     private fun markExecutableShellScripts(dir: File) {
         dir.listFiles()?.forEach { if (it.isFile && it.name.endsWith(".sh")) it.setExecutable(true, false) }
     }
-
-    private fun prootDir(): File = File(DshPaths.ROOT_DIR, "proot")
 
     /**
      * 解压进度回调 → [Progress.Detail]。

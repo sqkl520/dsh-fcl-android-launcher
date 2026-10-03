@@ -8,8 +8,8 @@ import com.dsh.core.DshInstance
 import com.dsh.core.DshRuntime
 import com.dsh.core.DshRuntimeService
 import com.dsh.fcl.androidlauncher.R
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.tungsten.fcllibrary.component.FCLActivity
+import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -44,21 +44,29 @@ object DshLauncher {
             val status = withContext(Dispatchers.IO) { DshCredentials.status(activity, inst.id) }
             when (status) {
                 is DshCredentials.Status.None -> {
-                    MaterialAlertDialogBuilder(activity)
-                        .setTitle(R.string.dsh_no_key_title)
-                        .setMessage(R.string.dsh_no_key_hint)
-                        .setPositiveButton(R.string.dsh_action_configure) { _, _ -> onOpenSettings(inst) }
-                        .setNegativeButton(R.string.dsh_action_start_anyway) { _, _ ->
+                    FCLAlertDialog.Builder(activity)
+                        .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+                        .setTitle(activity.getString(R.string.dsh_no_key_title))
+                        .setMessage(activity.getString(R.string.dsh_no_key_hint))
+                        .setPositiveButton(activity.getString(R.string.dsh_action_configure)) {
+                            onOpenSettings(inst)
+                        }
+                        .setNegativeButton(activity.getString(R.string.dsh_action_start_anyway)) {
                             doStart(activity, inst, scope, onOpenLogs, onPrepareRuntime, onStarted)
                         }
+                        .create()
                         .show()
                 }
                 is DshCredentials.Status.Unreadable -> {
-                    MaterialAlertDialogBuilder(activity)
-                        .setTitle(R.string.dsh_key_unreadable_title)
-                        .setMessage(R.string.dsh_key_unreadable_hint)
-                        .setPositiveButton(R.string.dsh_action_configure) { _, _ -> onOpenSettings(inst) }
-                        .setNegativeButton(android.R.string.cancel, null)
+                    FCLAlertDialog.Builder(activity)
+                        .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                        .setTitle(activity.getString(R.string.dsh_key_unreadable_title))
+                        .setMessage(activity.getString(R.string.dsh_key_unreadable_hint))
+                        .setPositiveButton(activity.getString(R.string.dsh_action_configure)) {
+                            onOpenSettings(inst)
+                        }
+                        .setNegativeButton(activity.getString(R.string.dialog_negative), null)
+                        .create()
                         .show()
                 }
                 is DshCredentials.Status.Ok -> doStart(activity, inst, scope, onOpenLogs, onPrepareRuntime, onStarted)
@@ -101,12 +109,14 @@ object DshLauncher {
         onOpenLogs: () -> Unit,
         onPrepareRuntime: () -> Unit,
     ) {
-        MaterialAlertDialogBuilder(activity)
+        FCLAlertDialog.Builder(activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
             .setTitle(title)
             .setMessage(reason)
-            .setPositiveButton(R.string.dsh_action_view_logs) { _, _ -> onOpenLogs() }
-            .setNeutralButton(R.string.dsh_action_prepare_runtime) { _, _ -> onPrepareRuntime() }
-            .setNegativeButton(android.R.string.ok, null)
+            .setPositiveButton(activity.getString(R.string.dsh_action_view_logs)) { onOpenLogs() }
+            .setNeutralButton(activity.getString(R.string.dsh_action_prepare_runtime)) { onPrepareRuntime() }
+            .setNegativeButton(activity.getString(R.string.dialog_positive), null)
+            .create()
             .show()
     }
 
@@ -127,12 +137,14 @@ object DshLauncher {
         scope: CoroutineScope,
         onDone: (ready: Boolean) -> Unit,
     ) {
-        val dialog = MaterialAlertDialogBuilder(activity)
-            .setTitle(R.string.dsh_action_prepare_runtime)
+        val dialog = FCLAlertDialog.Builder(activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+            .setTitle(activity.getString(R.string.dsh_action_prepare_runtime))
             .setMessage(activity.getString(R.string.dsh_bootstrap_extracting))
             .setCancelable(false)
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .setNegativeButton(activity.getString(R.string.dialog_negative), null)
+            .create()
+        dialog.show()
         scope.launch {
             val failure = withContext(Dispatchers.IO) {
                 var fail: String? = null
@@ -152,10 +164,12 @@ object DshLauncher {
             }
             dialog.dismiss()
             if (failure != null) {
-                MaterialAlertDialogBuilder(activity)
-                    .setTitle(R.string.dsh_bootstrap_failed_title)
+                FCLAlertDialog.Builder(activity)
+                    .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                    .setTitle(activity.getString(R.string.dsh_bootstrap_failed_title))
                     .setMessage(failure)
-                    .setPositiveButton(android.R.string.ok, null)
+                    .setNegativeButton(activity.getString(R.string.dialog_positive), null)
+                    .create()
                     .show()
             }
             val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }

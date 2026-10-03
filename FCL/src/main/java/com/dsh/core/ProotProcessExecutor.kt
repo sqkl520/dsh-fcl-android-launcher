@@ -68,40 +68,51 @@ class ProotProcessExecutor(
             procEnv = secretEnv,
             rootfsDir = rootfsDir
         )
+        // process 提到 try 外，便于 finally 里做\"登记表\"清理（见下）
+        var process: Process? = null
         return try {
-            val process = spec.toProcessBuilder().start()
-            synchronized(this) { actives += Active(tag, process) }
+            val p = spec.toProcessBuilder().start()
+            process = p
+            synchronized(this) { actives += Active(tag, p) }
             // 跨线程可见：看门狗线程写、当前线程读，必须用 Atomic/volatile，否则可能读到旧值把超时误判为正常退出。
             val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
             val watchdog = if (timeoutMs > 0) {
                 Thread {
                     try {
-                        if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+                        if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
                             timedOut.set(true)
                             onLine("[proot] 超时 ${timeoutMs / 1000}s，终止任务")
-                            process.destroy()
+                            p.destroy()
                             Thread.sleep(3000)
-                            if (process.isAlive) process.destroyForcibly()
+                            if (p.isAlive) p.destroyForcibly()
                         }
                     } catch (_: InterruptedException) {
                     }
                 }.apply { isDaemon = true; name = "dsh-proot-watchdog"; start() }
             } else null
 
-            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+            BufferedReader(InputStreamReader(p.inputStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
                     onLine(line!!)
                 }
             }
-            val code = process.waitFor()
+            val code = p.waitFor()
             // 让看门狗线程结束（进程已退出时它自然返回）
             watchdog?.interrupt()
-            synchronized(this) { actives.removeAll { it.process === process } }
             if (timedOut.get()) TIMEOUT_EXIT_CODE else code
         } catch (e: Exception) {
             onLine("[proot] 执行失败: ${e.message}")
             -1
+        } finally {
+            // ★ 原来只在正常路径清理 actives：读输出时抛异常（例如进程被外部杀掉、管道断裂）
+            // 会在 actives 里永久留下一条死进程记录（后续 destroyActive 遍历它纯属空转）。
+            // 这里在 finally 里补一次清理，但**只清已经退出的** —— 还活着的进程必须留在表里，
+            // 否则\"取消安装\"就再也找不到它（那才是真正的孤儿 npm）。
+            val p = process
+            if (p != null && !runCatching { p.isAlive }.getOrDefault(false)) {
+                synchronized(this) { actives.removeAll { it.process === p } }
+            }
         }
     }
 

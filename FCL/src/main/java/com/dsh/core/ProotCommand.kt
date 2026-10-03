@@ -77,7 +77,7 @@ object ProotCommand {
         if (!File(rootfsDir).isDirectory) {
             return Preflight(false, "rootfs 未就绪（未解压或解压不完整）")
         }
-        if (!DshPaths.rootfsLooksUsable()) {
+        if (!DshPaths.rootfsLooksUsable(File(rootfsDir))) {
             return Preflight(
                 false,
                 "rootfs 内容不完整（找不到 /bin/sh 或 /usr/bin/env）——" +
