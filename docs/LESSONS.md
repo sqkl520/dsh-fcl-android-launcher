@@ -93,6 +93,43 @@ ssh://git@ssh.github.com:443/<owner>/<repo>.git
 
 ---
 
+## 2.5 rootfs 构建与 l2s 机制（重要）
+
+### `.l2s.*` 不是垃圾
+
+本沙箱的 proot 层会把**某些条目实现为 `.l2s.*` 形式的链接/背衬文件**（形如
+`/usr/bin/.l2s.perl.dpkg-new0001`、`/var/lib/dpkg/.l2s.status0001`）。
+
+- **不要**把它们当临时文件删掉——删了会让对应的正式条目（如 `/usr/bin/perl`）变成坏条目，
+  之后连 `dpkg` 都报 `unable to stat './usr/bin/perl' ... Operation not permitted`，`apt-get` 也随之失败
+- 正确做法：**打包时排除**，例如 `tar --exclude='.l2s.*' -cf rootfs.tar -C rootfs .`
+- 若确实出现**悬空**的 `.l2s` 链接（`readlink` 结果含 `.l2s.` 且目标不存在），才可以删；
+  恢复被删的包用 `chroot <rootfs> apt-get install -y --reinstall <pkg>`
+
+### rootfs 里"看起来断了"的软链可能是正常的
+
+guest 内的绝对路径软链（如 `/usr/local/bin/node -> /opt/dsh/node/bin/node`）在**宿主**上会被判为断链。
+按"清理断链"批量删除会**误删 guest 的正常软链**（本项目第一次就误删了 `/usr/local/bin/{node,npm,npx}`）。
+判据：只删除 `readlink` 结果里含 `.l2s.` 且目标不存在的链接。
+
+### 嵌套 proot 会破坏内层 rootfs 的 stat
+
+沙箱自身就是 proot；在其内部再跑 proot（`proot -r <rootfs>`）时：
+
+- `execve`、`open`、`access` 正常（程序能跑、`cat` 能读、`fs.existsSync` 返回 true）
+- 但 **`stat`/`statx` 会失败并报 ENOENT**（`ls`、`stat`、`node` 的模块路径解析都会中招）
+
+这是**沙箱的嵌套伪影，不是 rootfs 或设备的问题**。要验证 rootfs 内容，改用 `chroot <rootfs> ...`
+（本项目在 chroot 下验证了 node/npm/bash/dsh/`.node`/child_process 全部正常）。
+
+### 后台任务活不过一次工具调用
+
+`nohup ... &` 起的后台进程会在本次 `workspace_shell` 调用结束时被 SIGTERM 杀掉
+（debootstrap 就是这样中断的）。长任务必须**在单次调用内跑完**，或拆成多步
+（例如先 `tar -cf`，再单独 `xz`，避免 tar+xz 一次超时）。
+
+---
+
 ## 3. Android / FCL 平台经验
 
 ### 3.1 改 `namespace` 的连锁影响

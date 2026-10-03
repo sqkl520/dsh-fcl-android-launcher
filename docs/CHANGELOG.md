@@ -13,6 +13,30 @@
 
 ---
 
+## [Unreleased · 阶段 C：宿主侧最小运行链验证] - 2026-10-03
+
+### Added
+- rootfs 内恢复 `perl` / `perl-base` / `bzip2`（此前清理时误删），guest 内 `apt-get` / `dpkg` 恢复正常
+
+### Changed
+- 重新制作 `rootfs.tar.xz`（打包时排除沙箱的 `.l2s.*` 条目），更新 `assets/dsh/rootfs/version`
+- rootfs 归档更新为 300MB；SHA-256=`ee54ddff773395c0c388871388af010d9b11241ae04650a9848488eee2affbfb`（本地文件，不提交 Git）
+
+### Notes
+- **关键验证（沙箱内实测，patched proot 为静态 aarch64 可执行文件）**：
+  - `proot -r <rootfs>` 可正常执行 rootfs 的 `/bin/sh`
+  - `PROOT_LOADER=<外部 loader>` 机制生效（`-0` 伪 root 得到 uid=0）
+  - proot 内 `node --version` / `bash --version` 正常
+  - **proot 内 `child_process` 全部通过**：`execSync`、`spawnSync('/bin/bash')`、`spawnSync('/bin/sh')`
+    —— 即此前判定的"头号拦路项（子进程 spawn）"在 proot 下可用
+  - guest 内 `npm install` 可用，含需要编译工具链的原生模块（`node-pty` 安装成功）
+  - tar 完整性：解压后 chroot 实跑 `node --version` / `npm --version` / `dsh --version`（=0.1.6-alpha.2）均正常
+- **尚未验证**：真机（Android targetSdk 34 + SELinux）下 proot 内的 npm/dsh 运行
+  —— 沙箱的双层 proot 会让内层 `stat` 返回 ENOENT，无法在此环境验证该环节
+- 验证：源码编译通过；本轮未打包
+
+---
+
 ## [Unreleased · 阶段 B：Debian arm64 rootfs 与 Node/dsh 基线] - 2026-10-03
 
 ### Changed
