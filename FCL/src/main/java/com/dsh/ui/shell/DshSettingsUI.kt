@@ -105,7 +105,6 @@ class DshSettingsUI(
             else -> Unit
         }
     }
-
     private fun onSwitch(row: DshLauncherSettingAdapter.Row.Switch, checked: Boolean) {
         when (row.action) {
             // FCL：SWITCH_IGNORE_NOTCH → applyAndSave + 重新应用 FLAG_LAYOUT_IN_SCREEN
@@ -187,18 +186,13 @@ class DshSettingsUI(
         }
     }
 
+    /** 关于：打开 FCL 风格的「关于页」（说明行 + 链接组），而非简单弹窗 */
     private fun showAbout() {
-        FCLAlertDialog.Builder(host.activity)
-            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
-            .setTitle(context.getString(R.string.dsh_about_full_name))
-            .setMessage(
-                context.getString(R.string.dsh_about_subtitle) + "\n" +
-                    context.getString(R.string.dsh_about_version, BuildConfig.VERSION_NAME) + "\n" +
-                    "https://github.com/sqkl520/dsh-fcl-android-launcher"
-            )
-            .setNegativeButton(context.getString(R.string.dialog_positive), null)
-            .create()
-            .show()
+        DshFullPageDialog(
+            activity = host.activity,
+            page = DshAboutUI(host.activity),
+            title = context.getString(R.string.dsh_about_full_name),
+        ).show()
     }
 
     private fun exportLogs() {
