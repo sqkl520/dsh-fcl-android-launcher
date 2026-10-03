@@ -276,6 +276,31 @@ class DshCoreLogicTest {
         assertNull(com.dsh.core.DshDownloadViewModel.chooseInstanceToInstall(listOf(ready), "0.1.5-rc.2"))
     }
 
+    /**
+     * 同版本但**安装失败（BROKEN）** → 复用同一个实例重试，而不是新建。
+     * 真机实测：DNS 不通时每次安装都失败，原来只认 READY/空壳 → 连点几次就堆出一排"损坏"实例。
+     */
+    @Test
+    fun reusesBrokenInstanceForSameVersion() {
+        val broken = com.dsh.core.DshInstance(
+            id = "inst-broken", name = "dsh 0.1.5-rc.2",
+            dshVersion = "0.1.5-rc.2", state = com.dsh.core.DshInstance.State.BROKEN
+        )
+        val chosen = com.dsh.core.DshDownloadViewModel.chooseInstanceToInstall(listOf(broken), "0.1.5-rc.2")
+        assertEquals("inst-broken", chosen?.id)
+    }
+
+    /** 同版本仍在安装中（INSTALLING）→ 也复用，避免"再点一次又开一个实例" */
+    @Test
+    fun reusesInstallingInstanceForSameVersion() {
+        val installing = com.dsh.core.DshInstance(
+            id = "inst-run", name = "dsh 0.1.5-rc.2",
+            dshVersion = "0.1.5-rc.2", state = com.dsh.core.DshInstance.State.INSTALLING
+        )
+        val chosen = com.dsh.core.DshDownloadViewModel.chooseInstanceToInstall(listOf(installing), "0.1.5-rc.2")
+        assertEquals("inst-run", chosen?.id)
+    }
+
     // --- 安装单飞闸门（决定"两个 npm 会不会同时写一个 node_modules"） ------
 
     /**

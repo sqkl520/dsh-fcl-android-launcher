@@ -19,6 +19,7 @@ import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.UiDshLauncherSettingsBinding
 import com.mio.ui.adapter.SpacingItemDecoration
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
+import com.mio.dialog.ItemSelectionDialog
 import com.tungsten.fcllibrary.component.dialog.FCLColorPickerDialog
 import com.tungsten.fcllibrary.component.theme.ThemeData
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
@@ -351,8 +352,15 @@ class DshLauncherSettingsPage(
             context.getString(R.string.dsh_lang_en),
         )
         val current = LocaleUtils.getLanguage(context)
-        DshOptionDialog(context, context.getString(R.string.dsh_setting_language), labels, current) { pos ->
-            if (pos == current) return@DshOptionDialog
+        // FCL 的选项对话框（条目高亮主题色、条目多时自动滚动）
+        ItemSelectionDialog(
+            context,
+            context.getString(R.string.dsh_setting_language),
+            labels,
+            true,
+            current
+        ) { pos, _ ->
+            if (pos == current) return@ItemSelectionDialog
             LocaleUtils.changeLanguage(context, pos)
             host.activity.recreate()
         }.show()
@@ -366,8 +374,14 @@ class DshLauncherSettingsPage(
             context.getString(R.string.dsh_theme_mode_dark),
         )
         val current = prefs.getInt("themeMode", 0)
-        DshOptionDialog(context, context.getString(R.string.dsh_setting_theme_mode), labels, current) { pos ->
-            if (pos == current) return@DshOptionDialog
+        ItemSelectionDialog(
+            context,
+            context.getString(R.string.dsh_setting_theme_mode),
+            labels,
+            true,
+            current
+        ) { pos, _ ->
+            if (pos == current) return@ItemSelectionDialog
             prefs.edit().putInt("themeMode", pos).apply()
             AppCompatDelegate.setDefaultNightMode(
                 when (pos) {

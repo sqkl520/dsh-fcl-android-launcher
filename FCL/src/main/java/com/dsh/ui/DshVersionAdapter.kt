@@ -62,22 +62,38 @@ class DshVersionAdapter(
             b.tag.visibility = View.GONE
         }
 
-        // 体积文本：tarball 解压大小 + 提示实际安装约 300MB（含依赖）
-        b.size.text = ctx.getString(R.string.dsh_version_size, item.sizeText)
+        // 体积文本：tarball 大小。是否另注明"安装后占用"取决于**这个版本要不要下载**：
+        // 命中 rootfs 预装版本时点安装不下载任何东西，写"安装后约 500MB"会误导。
+        val sizeLine = if (item.preinstalled) {
+            ctx.getString(
+                R.string.dsh_version_size, item.sizeText
+            ) + " · " + ctx.getString(R.string.dsh_version_bundled)
+        } else {
+            ctx.getString(
+                R.string.dsh_version_size, item.sizeText
+            ) + " · " + ctx.getString(R.string.dsh_version_after_install)
+        }
+        b.size.text = sizeLine
 
         val installing = installingVersions.contains(item.version)
+        // ★ 每次绑定都先清掉旧监听：RecyclerView 复用 ViewHolder 时，若不清理，
+        //   点到的可能是**上一个 item 的版本**（错位安装）
+        b.btnInstall.setOnClickListener(null)
         when {
             installing -> {
                 b.installedBadge.visibility = View.VISIBLE
                 b.installedBadge.text = ctx.getString(R.string.dsh_state_installing)
                 b.installedBadge.setTextColor(0xFF888888.toInt())
+                // 安装中：按钮禁用而不是仅隐藏（隐藏后若列表刷新出错会又冒出来）
                 b.btnInstall.visibility = View.GONE
+                b.btnInstall.isEnabled = false
             }
             item.installed -> {
                 b.installedBadge.visibility = View.VISIBLE
                 b.installedBadge.text = ctx.getString(R.string.dsh_installed)
                 b.installedBadge.setTextColor(0xFF4CAF50.toInt())
                 b.btnInstall.visibility = View.GONE
+                b.btnInstall.isEnabled = false
             }
             else -> {
                 b.installedBadge.visibility = View.GONE

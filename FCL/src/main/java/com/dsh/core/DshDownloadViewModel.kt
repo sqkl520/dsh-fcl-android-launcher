@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.io.File
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -54,7 +55,9 @@ class DshDownloadViewModel(
                 .collect { p ->
                     when (p) {
                         is DshInstaller.Progress.Done -> _installingVersions.value -= p.version
-                        is DshInstaller.Progress.Failed -> _installingVersions.value = emptySet()
+                        // ★ 只移除**本次失败的那个版本**：原来清空整个集合，会让其它仍在跑的
+                        // 安装也"解除安装中"，按钮重新可点 → 用户连点 → 并发 npm + 堆实例
+                        is DshInstaller.Progress.Failed -> p.version?.let { v -> _installingVersions.value -= v }
                         else -> {}
                     }
                     rebuild()
@@ -108,9 +111,13 @@ class DshDownloadViewModel(
     private fun rebuild() {
         if (allEntries.isEmpty()) return
         val installed = DshInstances.instances.value.mapNotNull { it.dshVersion }.toSet()
+        // rootfs 里预装的版本：命中它时安装不会下载任何东西（脚本直接 DONE source=preinstalled）
+        val preinstalled = DshInstaller.readVersionFromPackageJson(
+            File(File(DshPaths.ROOTFS_DIR, DshPaths.PREINSTALLED_DSH_REL), "package.json")
+        )
         val items = allEntries
             .filter { showPrerelease || !it.isPrerelease }
-            .map { DshVersionListItem.from(it, installed) }
+            .map { DshVersionListItem.from(it, installed, preinstalled) }
         _uiState.value = UiState.Loaded(items, showPrerelease, lastWarning)
     }
 
@@ -119,13 +126,21 @@ class DshDownloadViewModel(
      * [started] = false 表示**没有**发起安装（该版本已装好，直接复用），
      * 界面据此选择文案，避免「明明没开始安装却说安装已开始」（R10-16）。
      */
-    data class InstallDispatch(val instance: DshInstance, val started: Boolean)
+    data class InstallDispatch(val instance: DshInstance?, val started: Boolean)
 
     /**
      * 安装某版本：优先复用已有实例/空壳，避免反复点击在列表里积累一堆空实例；否则新建一个。
      * @return 派发结果（实例 + 是否真的发起了安装）
      */
     fun installVersion(item: DshVersionListItem, instanceName: String? = null): InstallDispatch {
+        // ★ 同一版本已在安装：直接拒绝。
+        //   原来不检查，用户连点同一版本会走完整流程 N 次 → 每次都可能新建实例 + 弹一次
+        //   「已开始安装」对话框（真机表现为"疯狂跳窗 + 一排损坏实例"）。
+        if (_installingVersions.value.contains(item.version)) {
+            DshLogBus.append("[download] ${item.version} 正在安装中，忽略重复请求")
+            val running = DshInstances.instances.value.firstOrNull { it.dshVersion == item.version }
+            return InstallDispatch(running, started = false)
+        }
         val existing = chooseInstanceToInstall(DshInstances.instances.value, item.version)
         // 已 READY 装过该版本：无需重装，直接复用，避免每次点击都重新下载整棵依赖树
         if (existing != null && existing.state == DshInstance.State.READY) {
@@ -154,8 +169,12 @@ class DshDownloadViewModel(
             instances.firstOrNull {
                 it.state == DshInstance.State.READY && it.dshVersion == version
             }?.let { return it }
-            // 2) 已有一个\"空壳\"（NOT_INSTALLED、从未装成，例如上次安装被取消）→ 复用它，
-            //    避免反复点击在实例列表里积累一堆只有目录没有 dsh 的实例
+            // 2) 同版本但**没装成功**（BROKEN / INSTALLING / 中断）→ 复用同一个实例**重试**。
+            //    ★ 真机实测：安装失败（例如 DNS 不通）后实例会变成 BROKEN，而原来只认 READY 与
+            //    空壳，于是"再点一次安装"会**新建实例** → 连点几次就堆出一排"损坏"实例。
+            //    现在只要目标版本相同就复用，重试是幂等的。
+            instances.firstOrNull { it.dshVersion == version }?.let { return it }
+            // 3) 空壳（NOT_INSTALLED、从未装过任何版本，例如上次被取消）→ 复用它
             return instances.firstOrNull {
                 it.state == DshInstance.State.NOT_INSTALLED && it.dshVersion == null
             }

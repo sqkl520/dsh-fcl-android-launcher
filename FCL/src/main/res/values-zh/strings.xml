@@ -141,7 +141,7 @@
         <string name="dsh_state_stopping">%1$s 停止中…</string>
         <string name="dsh_verify_running">正在自检…</string>
         <string name="dsh_verify_title">自检结果</string>
-        <string name="dsh_version_size">%1$s · 安装后约 300MB</string>
+        <string name="dsh_version_size">%1$s</string>
         <string name="dsh_webview_auth_failed">会话已失效：本地 cookie 不再有效，请重启实例以获取新 token。</string>
         <string name="dsh_webview_error">页面加载失败：%1$s</string>
         <string name="dsh_webview_http_error">服务端返回 HTTP %1$d</string>
@@ -232,4 +232,7 @@
     <string name="dsh_background_pick_failed">无法读取所选图片</string>
     <string name="dsh_background_applied">背景已更新</string>
     <string name="dsh_background_no_image">没有可取样色的自定义背景</string>
+    <string name="dsh_version_after_install">安装后约 500MB（含依赖）</string>
+    <string name="dsh_version_bundled">运行时已内置，无需下载</string>
+    <string name="dsh_installed_broken">安装失败</string>
 </resources>

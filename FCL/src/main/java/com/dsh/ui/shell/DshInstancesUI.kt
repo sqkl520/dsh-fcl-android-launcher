@@ -126,17 +126,29 @@ class DshInstancesUI(
         }
     }
 
-    /** 就绪时隐藏横幅，否则显示缺口说明 */
+    /** 就绪时隐藏横幅；未就绪时显示缺口说明；**失败时显示真实原因**（而不是笼统的"未就绪"） */
     private fun refreshBootstrapBanner() {
         scope.launch {
             val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
             val banner = binding.bootstrapBanner
             banner.root.visibility = if (ready) View.GONE else View.VISIBLE
-            if (!ready) {
+            if (ready) return@launch
+
+            val p = DshBootstrap.currentProgress()
+            if (p is DshBootstrap.Progress.Failed) {
+                // ★ 真机踩过：任务一结束（busy=false）这里就无条件写"未就绪"，
+                //   把 Progress.Failed 里的**真实失败原因**覆盖掉了 —— 用户永远看不到为什么失败。
+                banner.bannerText.text = context.getString(R.string.dsh_bootstrap_failed_title)
+                banner.bannerDetail.visibility = View.VISIBLE
+                banner.bannerDetail.text = p.reason
+            } else {
                 banner.bannerText.text =
                     context.getString(R.string.dsh_bootstrap_missing, DshBootstrap.missingSummary() ?: "")
-                banner.bannerProgress.visibility = View.GONE
+                // ★ 明细行显示的是"最后处理的文件名"，必须清掉，否则残留下来会被误当成错误信息
+                banner.bannerDetail.text = ""
+                banner.bannerDetail.visibility = View.GONE
             }
+            banner.bannerProgress.visibility = View.GONE
         }
     }
 

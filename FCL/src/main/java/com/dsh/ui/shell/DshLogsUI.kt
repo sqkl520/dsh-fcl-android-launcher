@@ -13,6 +13,7 @@ import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshLogsBinding
+import com.mio.dialog.ItemSelectionDialog
 import kotlinx.coroutines.launch
 
 /**
@@ -21,7 +22,7 @@ import kotlinx.coroutines.launch
  * 设计（参考常见日志查看器）：
  * - **按级别着色**：ERROR 红 / WARN 琥珀 / OK 绿 / 普通浅灰，`[tag]` 前缀用青色，
  *   一眼能扫出问题行；
- * - **级别筛选**：全部 / 警告及以上 / 仅错误（[DshOptionDialog] 选择）；
+ * - **级别筛选**：全部 / 警告及以上 / 仅错误（[ItemSelectionDialog] 选择）；
  * - **自动滚动**：贴底时自动跟随；向上翻看时不被抢走滚动位置，并出现「回到底部」；
  * - **信息行**：显示当前展示行数 / 总行数与落盘路径（进程崩了也能事后取）。
  *
@@ -87,12 +88,13 @@ class DshLogsUI(context: Context) : DshPageUI(context, R.layout.activity_dsh_log
             context.getString(R.string.dsh_logs_filter_warn),
             context.getString(R.string.dsh_logs_filter_error),
         )
-        DshOptionDialog(
-            context, context.getString(R.string.dsh_logs_filter_title), labels, filter.ordinal
-        ) { pos ->
+        ItemSelectionDialog(
+            context, context.getString(R.string.dsh_logs_filter_title), labels, true, filter.ordinal
+        ) { pos, _ ->
             filter = Filter.entries[pos]
-            binding.btnFilter.setText(labels[pos])
             render(forceScroll = true)
+            // 筛选按钮是图标（FCL 规范），无法在按钮上显示当前级别 → 用一次轻提示反馈
+            Toast.makeText(context, labels[pos], Toast.LENGTH_SHORT).show()
         }.show()
     }
 

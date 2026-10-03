@@ -150,11 +150,24 @@ class DshInstanceAdapter(
 
         // 按钮可用性
         val busy = isDeleting || (status?.running == true)
-        b.btnStart.isEnabled = !busy && (isRunning || inst.state == DshInstance.State.READY)
+        // 安装失败的实例：主按钮变成「重试」（直接重装同版本），
+        // 否则用户只能在「更多 → 重装」里找，或者再点一次下载——后者正是"堆一堆损坏实例"的来源之一
+        val canRetry = inst.state == DshInstance.State.BROKEN
+        b.btnStart.isEnabled = !busy && (isRunning || inst.state == DshInstance.State.READY || canRetry)
         b.btnStart.text = ctx.getString(
-            if (isRunning) R.string.dsh_action_stop else R.string.dsh_action_start
+            when {
+                isRunning -> R.string.dsh_action_stop
+                canRetry -> R.string.dsh_action_retry
+                else -> R.string.dsh_action_start
+            }
         )
-        b.btnStart.setOnClickListener { if (isRunning) onStop(inst) else onStart(inst) }
+        b.btnStart.setOnClickListener {
+            when {
+                isRunning -> onStop(inst)
+                canRetry -> onReinstall(inst)
+                else -> onStart(inst)
+            }
+        }
 
         b.btnMore.isEnabled = !busy
         b.btnMore.setOnClickListener { anchor ->

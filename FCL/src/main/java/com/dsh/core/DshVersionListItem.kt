@@ -8,11 +8,17 @@ data class DshVersionListItem(
     val version: String,
     /** 展示用标签文本，如 "latest" / "alpha"；无标签为 null */
     val tag: String?,
-    /** 体积文本，如 "48 KB"（tarball 解压后大小；实际安装含依赖约 300MB，UI 需另注明） */
+    /** 体积文本，如 "48 KB"（npm tarball 的 unpacked 大小） */
     val sizeText: String,
     val isPrerelease: Boolean,
     /** 是否已作为某个实例安装（UI 显示"已安装"角标用） */
     val installed: Boolean,
+    /**
+     * 该版本**恰好就是 rootfs 里预装的版本**。
+     * 此时点"安装"不会下载任何东西（`setup-node-dsh.sh` 会直接 `DONE source=preinstalled`），
+     * 因此界面不该再显示"安装后约 500MB"这种会误导的估算。
+     */
+    val preinstalled: Boolean,
     val entry: DshRegistry.VersionEntry
 ) {
     companion object {
@@ -21,13 +27,15 @@ data class DshVersionListItem(
 
         fun from(
             entry: DshRegistry.VersionEntry,
-            installedVersions: Set<String>
+            installedVersions: Set<String>,
+            preinstalledVersion: String? = null
         ): DshVersionListItem = DshVersionListItem(
             version = entry.version,
             tag = pickTag(entry.tags),
             sizeText = formatSize(entry.unpackedSize),
             isPrerelease = entry.isPrerelease,
             installed = installedVersions.contains(entry.version),
+            preinstalled = preinstalledVersion != null && preinstalledVersion == entry.version,
             entry = entry
         )
 

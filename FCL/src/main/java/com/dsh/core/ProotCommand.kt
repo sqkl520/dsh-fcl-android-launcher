@@ -77,6 +77,10 @@ object ProotCommand {
         if (!File(rootfsDir).isDirectory) {
             return Preflight(false, "rootfs 未就绪（未解压或解压不完整）")
         }
+        // ★ 走 proot 之前先把宿主 DNS 同步进 guest（Android 没有 /etc/resolv.conf，
+        //   不写的话 guest 内 getaddrinfo 必失败 → npm/curl 全部 EAI_AGAIN）。
+        //   放在这里是因为所有 proot 调用（安装 / 启动 / 自检）都先过 preflight。
+        DshDns.sync(context, rootfsDir)
         if (!DshPaths.rootfsLooksUsable(File(rootfsDir))) {
             return Preflight(
                 false,

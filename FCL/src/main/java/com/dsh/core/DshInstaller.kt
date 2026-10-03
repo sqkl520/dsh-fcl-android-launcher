@@ -47,7 +47,8 @@ class DshInstaller(
         data class Log(val line: String) : Progress()
         data class Stage(val text: String) : Progress()
         data class Done(val version: String) : Progress()
-        data class Failed(val reason: String) : Progress()
+        /** [version] 为本次失败的目标版本（安装开始时会写入实例），供界面只清除对应版本的"安装中"标记 */
+        data class Failed(val reason: String, val version: String? = null) : Progress()
     }
 
     /** 某个实例的安装状态（可被界面随时读取，界面重建不丢） */
@@ -104,7 +105,7 @@ class DshInstaller(
         cancelled.remove(instance.id)
         errorSummaries.remove(instance.id)
         errorTails.remove(instance.id)
-        DshInstances.markState(instance.id, DshInstance.State.INSTALLING, error = null)
+        DshInstances.markState(instance.id, DshInstance.State.INSTALLING, version = version, error = null)
         updateStatus(
             InstallStatus(instance.id, version, context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_stage_prepare))
         )
@@ -201,7 +202,7 @@ class DshInstaller(
 
     private fun fail(instance: DshInstance, reason: String) {
         DshInstances.markState(instance.id, DshInstance.State.BROKEN, error = reason)
-        _progress.value = Progress.Failed(reason)
+        _progress.value = Progress.Failed(reason, instance.dshVersion)
         _statuses.update {
             it + (instance.id to (it[instance.id]?.copy(running = false, error = reason)
                 ?: InstallStatus(instance.id, "-", "", running = false, error = reason)))

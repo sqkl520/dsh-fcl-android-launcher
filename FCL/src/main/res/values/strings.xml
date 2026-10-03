@@ -141,7 +141,7 @@
         <string name="dsh_state_stopping">%1$s stopping…</string>
         <string name="dsh_verify_running">Running self-check…</string>
         <string name="dsh_verify_title">Self-check result</string>
-        <string name="dsh_version_size">%1$s · ~300MB after install</string>
+        <string name="dsh_version_size">%1$s</string>
         <string name="dsh_webview_auth_failed">Session expired: the local cookie is no longer valid. Restart the instance to get a new token.</string>
         <string name="dsh_webview_error">Page failed to load: %1$s</string>
         <string name="dsh_webview_http_error">Server returned HTTP %1$d</string>
@@ -236,4 +236,7 @@ Version %1$s</string>
     <string name="dsh_background_pick_failed">Could not read the selected image</string>
     <string name="dsh_background_applied">Background updated</string>
     <string name="dsh_background_no_image">No custom background to sample</string>
+    <string name="dsh_version_after_install">about 500MB after install (dependencies)</string>
+    <string name="dsh_version_bundled">bundled in runtime, no download needed</string>
+    <string name="dsh_installed_broken">Failed</string>
 </resources>

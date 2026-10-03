@@ -169,31 +169,48 @@ object DshInstances {
         // 被重试，把文件 IO 放在里面（旧实现）会有两个坏处：① 同样的 readText 被重复执行；
         // ② 在原子更新的重试循环里持有 IO 时间。现在只把结果带进去做纯内存替换。
         val planned = HashMap<String, Pair<String?, DshInstance.State>>()
+        // 预装 dsh 的版本（只读一次，供下面判断"能不能把预装当成这个实例的 dsh"）
+        val preinstalledVersion = DshInstaller.readVersionFromPackageJson(
+            File(File(DshPaths.ROOTFS_DIR, DshPaths.PREINSTALLED_DSH_REL), "package.json")
+        )
         _instances.value.forEach { inst ->
-            val diskVersion = DshInstaller.readVersionFromPackageJson(DshPaths.effectiveDshPackageJson(inst.id))
+            // ★ 判定"这个实例装好了没"必须区分两件事：
+            //   ① 实例**自己**的 node_modules（真实安装结果）
+            //   ② rootfs 里的**预装** dsh（共享底座）
+            //   原来直接用 effectiveDshPackageJson（会回退到预装），于是"请求 0.2.1、安装失败"
+            //   的实例会因为预装有 0.1.6 而被判成 READY —— 卡片出现"标题 0.2.1 / 副标题 0.1.6 /
+            //   就绪 / 239 B"这种自相矛盾的状态。
+            val ownVersion = DshInstaller.readVersionFromPackageJson(
+                File(File(DshPaths.instanceDir(inst.id), "node_modules/@deepseek-ai/dsh"), "package.json")
+            )
+            // 只有当实例没有自己的包、且**预装版本恰好就是它请求的版本**时，预装才算它的 dsh
+            val effectiveVersion = ownVersion
+                ?: preinstalledVersion?.takeIf { inst.dshVersion != null && it == inst.dshVersion }
             val state = when {
-                diskVersion != null -> DshInstance.State.READY
+                effectiveVersion != null -> DshInstance.State.READY
                 // 没装好：把"安装中"这种卡死状态降级。
                 // 注意：**BROKEN 要保持 BROKEN**——否则 App 一重启，失败原因虽然还在 lastError 里，
                 // 但状态变成 NOT_INSTALLED 之后界面就不再展示它了（等于诊断信息凭空消失）。
                 inst.state == DshInstance.State.BROKEN -> DshInstance.State.BROKEN
                 else -> DshInstance.State.NOT_INSTALLED
             }
-            planned[inst.id] = diskVersion to state
+            planned[inst.id] = effectiveVersion to state
         }
 
         var changed = false
         _instances.update { list ->
             list.map { inst ->
                 val p = planned[inst.id] ?: return@map inst // 期间新建出来的实例：不动它
-                val (diskVersion, state) = p
-                if (inst.state == state && (diskVersion == null || inst.dshVersion == diskVersion)) {
+                val (effectiveVersion, state) = p
+                if (inst.state == state && (effectiveVersion == null || inst.dshVersion == effectiveVersion)) {
                     inst
                 } else {
                     changed = true
                     inst.copy(
                         state = state,
-                        dshVersion = diskVersion ?: inst.dshVersion,
+                        // 装好了 → 用磁盘真实版本；没装好 → 保留"目标版本"（安装开始时写入），
+                        // 这样卡片能显示"本来要装什么"，也才能被"同版本重试"复用
+                        dshVersion = effectiveVersion ?: inst.dshVersion,
                         lastError = if (state == DshInstance.State.READY) null else inst.lastError,
                         updatedAt = System.currentTimeMillis()
                     )
