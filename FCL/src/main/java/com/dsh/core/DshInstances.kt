@@ -170,7 +170,7 @@ object DshInstances {
         // ② 在原子更新的重试循环里持有 IO 时间。现在只把结果带进去做纯内存替换。
         val planned = HashMap<String, Pair<String?, DshInstance.State>>()
         _instances.value.forEach { inst ->
-            val diskVersion = DshInstaller.readVersionFromPackageJson(DshPaths.instanceDshPackageJson(inst.id))
+            val diskVersion = DshInstaller.readVersionFromPackageJson(DshPaths.effectiveDshPackageJson(inst.id))
             val state = when {
                 diskVersion != null -> DshInstance.State.READY
                 // 没装好：把"安装中"这种卡死状态降级。
@@ -219,7 +219,16 @@ object DshInstances {
             // 若不等它，node 可能还在往 node_modules 写文件，deleteRecursively 就会留下
             // 一堆 300MB 级残留且无提示（界面早已把实例从列表里移除）。
             // stopAndWait 最长等 8s（> TERM+等待），超时也硬删并靠日志提示。
-            val stopped = DshRuntime.stopAndWait("实例被删除")
+            //
+            // ★ 归属校验：只有\"被删的这个实例正在跑\"时才去停它。
+            // DshRuntime 是单实例策略，stopAndWait() 停的是**当前正在运行的那个实例**，
+            // 与传入的 id 无关。原来无条件调用，导致\"删除一个没在跑的实例 B\"会把正在跑的
+            // 实例 A 一起杀掉（用户只点了删除 B，A 的会话却断了）。
+            val stopped = if (DshRuntime.runningInstanceId() == id) {
+                DshRuntime.stopAndWait("实例被删除")
+            } else {
+                true
+            }
             if (!stopped) {
                 DshLogBus.append("[instances] 停止实例 ${inst?.name ?: id} 超时，仍继续删除目录")
             }

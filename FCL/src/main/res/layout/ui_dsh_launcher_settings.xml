@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  全局启动器设置页 —— **照搬 FCL 的 page_setting_list.xml**：
+    RecyclerView（左右 10dp 边距、clipToPadding=false、paddingBottom 10dp）
+    + 居中空态提示。行间 8dp 间距、组内 1dp 分割线由 SpacingItemDecoration 负责
+    （与 FCL 的 LauncherSettingPage 完全一致，不在行布局里写 margin）。
+-->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -11,9 +17,22 @@
         android:layout_marginStart="10dp"
         android:layout_marginEnd="10dp"
         android:clipToPadding="false"
-        android:paddingBottom="12dp"
+        android:paddingBottom="10dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
+
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/empty_view"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="14sp"
+        android:visibility="gone"
+        app:auto_text_tint="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -15,7 +15,7 @@ import com.dsh.core.DshServices
 import com.dsh.ui.DshInstanceAdapter
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshInstancesBinding
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -113,13 +113,17 @@ class DshInstancesUI(
         when (st) {
             is DshRuntime.State.Failed -> {
                 lastNotifiedState = st
-                MaterialAlertDialogBuilder(host.activity)
-                    .setTitle(R.string.dsh_start_failed)
+                FCLAlertDialog.Builder(host.activity)
+                    .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                    .setTitle(context.getString(R.string.dsh_start_failed))
                     .setMessage(st.reason)
-                    .setPositiveButton(R.string.dsh_action_view_logs) { _, _ ->
+                    .setPositiveButton(context.getString(R.string.dsh_action_view_logs)) {
                         host.switchTab(DshShellHost.TAB_LOGS)
                     }
-                    .setNegativeButton(android.R.string.ok) { _, _ -> DshRuntime.resetState() }
+                    .setNegativeButton(context.getString(R.string.dialog_positive)) {
+                        DshRuntime.resetState()
+                    }
+                    .create()
                     .show()
             }
             is DshRuntime.State.Exited -> {
@@ -171,11 +175,15 @@ class DshInstancesUI(
     private fun reinstall(inst: DshInstance) {
         val version = inst.dshVersion
         if (version == null) {
-            MaterialAlertDialogBuilder(host.activity)
-                .setTitle(R.string.dsh_action_reinstall)
-                .setMessage(R.string.dsh_reinstall_pick_version)
-                .setPositiveButton(R.string.dsh_action_download) { _, _ -> host.switchTab(DshShellHost.TAB_DOWNLOAD) }
-                .setNegativeButton(android.R.string.cancel, null)
+            FCLAlertDialog.Builder(host.activity)
+                .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+                .setTitle(context.getString(R.string.dsh_action_reinstall))
+                .setMessage(context.getString(R.string.dsh_reinstall_pick_version))
+                .setPositiveButton(context.getString(R.string.dsh_action_download)) {
+                    host.switchTab(DshShellHost.TAB_DOWNLOAD)
+                }
+                .setNegativeButton(context.getString(R.string.dialog_negative), null)
+                .create()
                 .show()
             return
         }
@@ -184,15 +192,17 @@ class DshInstancesUI(
     }
 
     private fun confirmDelete(inst: DshInstance) {
-        MaterialAlertDialogBuilder(host.activity)
-            .setTitle(R.string.dsh_delete_title)
+        FCLAlertDialog.Builder(host.activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+            .setTitle(context.getString(R.string.dsh_delete_title))
             .setMessage(context.getString(R.string.dsh_delete_message, inst.name))
-            .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(R.string.dsh_action_delete) { _, _ ->
+            .setPositiveButton(context.getString(R.string.dsh_action_delete)) {
                 DshCredentials.clear(context, inst.id)
                 DshInstances.delete(inst.id)
                 Toast.makeText(context, R.string.dsh_delete_started, Toast.LENGTH_SHORT).show()
             }
+            .setNegativeButton(context.getString(R.string.dialog_negative), null)
+            .create()
             .show()
     }
 }

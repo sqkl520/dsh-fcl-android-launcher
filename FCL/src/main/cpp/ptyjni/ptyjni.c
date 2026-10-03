@@ -10,6 +10,16 @@
 #include <sys/stat.h>
 #include <android/log.h>
 
+/*
+ * ★ JNI 符号命名约定（本轮修复）
+ * 上游 oonid/pr 的 :proot-engine 里，这个文件属于 `id.or.oo.pr.engine.PtyNative`，
+ * 因此符号名是 `Java_id_or_oo_pr_engine_PtyNative_*`。本项目把 Kotlin 侧挪到了
+ * `com.dsh.core.PtyNative`，但符号名没跟着改 —— 结果是 native 方法一被调用就
+ * `UnsatisfiedLinkError: No implementation found for ...`。
+ * 现在符号名与 com.dsh.core.PtyNative 对齐：改 Kotlin 侧包名/类名时，这里必须同步。
+ * （当前项目还没有调用方，属潜伏缺陷；对齐后一旦接入即可用。）
+ */
+
 #define TAG "PTY"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -38,7 +48,7 @@ static int setup_slave(int ptm_fd) {
 static pid_t last_child_pid = -1;
 
 JNIEXPORT jint JNICALL
-Java_id_or_oo_pr_engine_PtyNative_nativeForkPty(
+Java_com_dsh_core_PtyNative_nativeForkPty(
     JNIEnv *env, jclass cls, jstring jCmd, jobjectArray jArgs, jobjectArray jEnvVars,
     jint rows, jint cols) {
 
@@ -127,12 +137,12 @@ Java_id_or_oo_pr_engine_PtyNative_nativeForkPty(
 }
 
 JNIEXPORT jint JNICALL
-Java_id_or_oo_pr_engine_PtyNative_nativeGetPid(JNIEnv *env, jclass cls) {
+Java_com_dsh_core_PtyNative_nativeGetPid(JNIEnv *env, jclass cls) {
     return (jint) last_child_pid;
 }
 
 JNIEXPORT jint JNICALL
-Java_id_or_oo_pr_engine_PtyNative_nativeRead(
+Java_com_dsh_core_PtyNative_nativeRead(
     JNIEnv *env, jclass cls, jint fd, jbyteArray jBuf, jint offset, jint length) {
 
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
@@ -147,7 +157,7 @@ Java_id_or_oo_pr_engine_PtyNative_nativeRead(
 }
 
 JNIEXPORT jint JNICALL
-Java_id_or_oo_pr_engine_PtyNative_nativeWrite(
+Java_com_dsh_core_PtyNative_nativeWrite(
     JNIEnv *env, jclass cls, jint fd, jbyteArray jBuf, jint offset, jint length) {
 
     jbyte *buf = (*env)->GetByteArrayElements(env, jBuf, NULL);
@@ -162,7 +172,7 @@ Java_id_or_oo_pr_engine_PtyNative_nativeWrite(
 }
 
 JNIEXPORT jint JNICALL
-Java_id_or_oo_pr_engine_PtyNative_nativeResize(
+Java_com_dsh_core_PtyNative_nativeResize(
     JNIEnv *env, jclass cls, jint fd, jint rows, jint cols) {
 
     struct winsize ws;
@@ -173,7 +183,7 @@ Java_id_or_oo_pr_engine_PtyNative_nativeResize(
 }
 
 JNIEXPORT jint JNICALL
-Java_id_or_oo_pr_engine_PtyNative_nativeWaitPid(JNIEnv *env, jclass cls, jint pid) {
+Java_com_dsh_core_PtyNative_nativeWaitPid(JNIEnv *env, jclass cls, jint pid) {
     int status;
     pid_t result = waitpid(pid, &status, WNOHANG);
     if (result < 0) return -1;
@@ -183,6 +193,6 @@ Java_id_or_oo_pr_engine_PtyNative_nativeWaitPid(JNIEnv *env, jclass cls, jint pi
 }
 
 JNIEXPORT void JNICALL
-Java_id_or_oo_pr_engine_PtyNative_nativeClose(JNIEnv *env, jclass cls, jint fd) {
+Java_com_dsh_core_PtyNative_nativeClose(JNIEnv *env, jclass cls, jint fd) {
     close(fd);
 }

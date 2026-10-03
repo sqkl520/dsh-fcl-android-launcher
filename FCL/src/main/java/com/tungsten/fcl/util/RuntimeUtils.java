@@ -66,18 +66,44 @@ public class RuntimeUtils {
         void onStage(int resId);
     }
 
+    /**
+     * 判断 targetDir 里的 version 文件是否与 assets（classpath）里的 srcDir/version 一致。
+     *
+     * ★ 本次修复的两个隐患：
+     * 1. 原来对 asset 版本号做 `Long.parseLong(...)`，只支持**纯数字**版本。而本项目的
+     *    `assets/dsh/rootfs/version` 是语义化字符串（`debian-bookworm-arm64-node22-dsh0.1.6-alpha.2-layout2`）——
+     *    一旦 `getResourceAsStream` 在任何环境下解析成功（桌面/单测/未来换打包方式），
+     *    `Long.parseLong` 会抛 `NumberFormatException`：在 `DshBootstrap.isReady()` 里被
+     *    runCatching 吞掉变成\"永远不就绪\"，在 `install()` 里则直接把首启解压判为失败。
+     *    现在改为\"字符串相等优先，纯数字时保持数值语义\"，两种版本号写法都能用。
+     * 2. 原来把同一个 stream 打开了两次（第一次只判 null、第二次再读），第二次若返回 null
+     *    会直接 NPE。现在只读一次。
+     *
+     * 语义保持：**资源读不到时返回 true**（视为\"无需解压\"）。Android 上 assets 不在 java
+     * classpath 里，getResourceAsStream 拿不到属常态，因此调用方（DshBootstrap）必须自己
+     * 用\"目标文件是否存在 / 内容是否可用\"兜底 —— 这一条已在 DshBootstrap 里落实。
+     */
     public static boolean isLatest(String targetDir, String srcDir) throws IOException {
-        File targetFile = new File(targetDir + "/version");
+        final String assetVersion;
         try (InputStream stream = RuntimeUtils.class.getResourceAsStream(srcDir + "/version")) {
             if (stream == null) {
                 return true;
             }
+            assetVersion = IOUtils.readFullyAsString(stream).trim();
         }
+
+        File targetFile = new File(targetDir + "/version");
         if (!targetFile.exists()) return false;
-        long version = Long.parseLong(IOUtils.readFullyAsString(RuntimeUtils.class.getResourceAsStream(srcDir + "/version")).trim());
         String installedVersion = FileUtils.readText(targetFile).trim();
         if (installedVersion.isEmpty()) return false;
-        return targetFile.exists() && Long.parseLong(installedVersion) == version;
+        if (installedVersion.equals(assetVersion)) return true;
+
+        // 兼容历史行为：两边都是纯数字时按数值比较（"007" 与 "7" 视为同版本）
+        try {
+            return Long.parseLong(installedVersion) == Long.parseLong(assetVersion);
+        } catch (NumberFormatException notNumeric) {
+            return false;
+        }
     }
 
     @SuppressWarnings("ResultOfMethodCallIgnored")
@@ -174,7 +200,12 @@ public class RuntimeUtils {
             if (tarEntry.isSymbolicLink()) {
                 Objects.requireNonNull(destPath.getParentFile()).mkdirs();
                 try {
-                    Os.symlink(tarEntry.getLinkName().replace("..", dest.getAbsolutePath()), new File(dest, tarEntry.getName()).getAbsolutePath());
+                    // [第十一轮 P1] 链接目标必须**原样**写入，不能把 `..` 改写成宿主解压目录。
+                    // 原实现 `getLinkName().replace("..", dest.getAbsolutePath())` 来自 FCL 上游
+                    // （为 JRE 资产写的），对本项目 rootfs 会造出断链，其中 `/opt/node22/bin/npm`
+                    // 断链会让 probe.sh 的 npm 项 FAIL → 底座永远不就绪（详见 TarLinkPolicy）。
+                    Os.symlink(com.dsh.core.TarLinkPolicy.symlinkTarget(tarEntry.getLinkName()),
+                            new File(dest, tarEntry.getName()).getAbsolutePath());
                 } catch (Throwable e) {
                     Logging.LOG.log(Level.WARNING, e.getMessage());
                 }

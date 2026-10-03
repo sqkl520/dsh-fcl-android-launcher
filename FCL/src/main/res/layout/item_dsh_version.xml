@@ -1,74 +1,99 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 下载页版本列表的一行：版本号 + tag + 体积 + 安装按钮/已安装角标。FCL 风格（见 §2.5）。 -->
-<com.tungsten.fcllibrary.component.view.FCLConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  下载页版本列表的一行 —— **照搬 FCL 的 item_version.xml 范式**：
+    外层 ConstraintLayout(paddingBottom=8dp 作行间距)
+      → 内层 FCLConstraintLayout：background=bg_container_white + auto_tint（主题着色卡片）
+        + focusable + padding=5dp + stateListAnimator=@xml/anim_scale（按压缩放反馈）
+    文字用 FCLTextView + app:auto_text_tint。
+  内容：版本号 + tag + 体积 + 安装按钮 / 已安装角标。
+-->
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="8dp"
-    android:background="@drawable/bg_container_white"
-    android:padding="12dp"
-    app:auto_tint="true">
+    android:paddingBottom="8dp">
 
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/version"
-        android:layout_width="wrap_content"
+    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="16sp"
-        android:textStyle="bold"
-        app:auto_text_tint="true"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        tools:text="0.1.5-rc.2" />
+        android:background="@drawable/bg_container_white"
+        android:focusable="true"
+        android:padding="5dp"
+        android:stateListAnimator="@xml/anim_scale"
+        app:auto_tint="true"
+        app:layout_constraintTop_toTopOf="parent">
 
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/tag"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:paddingStart="6dp"
-        android:paddingEnd="6dp"
-        android:textSize="12sp"
-        android:visibility="gone"
-        app:auto_text_tint="true"
-        app:layout_constraintBottom_toBottomOf="@id/version"
-        app:layout_constraintStart_toEndOf="@id/version"
-        app:layout_constraintTop_toTopOf="@id/version"
-        tools:text="latest"
-        tools:visibility="visible" />
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/version"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:singleLine="true"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            app:auto_text_tint="true"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            tools:text="0.1.5-rc.2" />
 
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/size"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textSize="13sp"
-        app:auto_text_tint="true"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/version"
-        tools:text="48 KB · 安装约 300MB" />
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/tag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:paddingStart="4dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="4dp"
+            android:paddingBottom="2dp"
+            android:singleLine="true"
+            android:textSize="11sp"
+            android:visibility="gone"
+            app:auto_text_tint="true"
+            app:layout_constraintBottom_toBottomOf="@id/version"
+            app:layout_constraintStart_toEndOf="@id/version"
+            app:layout_constraintTop_toTopOf="@id/version"
+            tools:text="latest"
+            tools:visibility="visible" />
 
-    <com.tungsten.fcllibrary.component.view.FCLButton
-        android:id="@+id/btn_install"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:minWidth="0dp"
-        android:text="@string/dsh_action_install"
-        app:ripple="true"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/size"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:layout_marginEnd="10dp"
+            android:singleLine="true"
+            android:textSize="11sp"
+            app:auto_text_tint="true"
+            app:layout_constraintEnd_toStartOf="@id/btn_install"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/version"
+            tools:text="48 KB · 安装约 300MB" />
 
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/installed_badge"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/dsh_installed"
-        android:textColor="#4CAF50"
-        android:textSize="13sp"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        <com.tungsten.fcllibrary.component.view.FCLButton
+            android:id="@+id/btn_install"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="5dp"
+            android:minWidth="0dp"
+            android:text="@string/dsh_action_install"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:ripple="true" />
 
-</com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/installed_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="5dp"
+            android:text="@string/dsh_installed"
+            android:textColor="#4CAF50"
+            android:textSize="13sp"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

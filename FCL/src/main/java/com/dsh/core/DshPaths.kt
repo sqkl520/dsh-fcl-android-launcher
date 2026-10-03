@@ -120,13 +120,49 @@ object DshPaths {
      */
     fun instanceWorkspace(instanceId: String): File = File(instanceDir(instanceId), "workspace")
 
-    /** 该实例安装的 dsh 包目录（判断"装好了没"的权威依据） */
-    fun instanceDshPackageJson(instanceId: String): File =
-        File(instanceDir(instanceId), "node_modules/@deepseek-ai/dsh/package.json")
+    /** 实例内 dsh 包的相对路径 */
+    private const val INSTANCE_DSH_REL = "node_modules/@deepseek-ai/dsh"
 
-    /** 该实例 dsh 的 bin.js 入口 */
-    fun instanceDshBinJs(instanceId: String): File =
-        File(instanceDir(instanceId), "node_modules/@deepseek-ai/dsh/lib/bin.js")
+    /**
+     * rootfs 内**预装** dsh 包的相对路径。
+     *
+     * ★ 必须与 `setup-node-dsh.sh` 的 `DSH_PREINSTALL_DIR`（默认 `/opt/dsh-preinstalled`）
+     * 和 `start-dsh.sh` 的三级入口解析保持一致 —— 改一处必须三处同步。
+     * 宿主路径 = `<ROOTFS_DIR>/opt/dsh-preinstalled/...`（rootfs 解压后即可读到）。
+     */
+    const val PREINSTALLED_DSH_REL = "opt/dsh-preinstalled/node_modules/@deepseek-ai/dsh"
+
+    /**
+     * 该实例**实际生效**的 dsh 包目录（判断「装好了没」「能不能启动」的权威依据）。
+     *
+     * 解析顺序（与 `start-dsh.sh` 的入口解析一致）：
+     * 1. 实例自己的 `node_modules/@deepseek-ai/dsh`（多版本隔离，优先）
+     * 2. rootfs 内预装的 `/opt/dsh-preinstalled/...`（阶段 D-1 的优化：命中预装版本时
+     *    `setup-node-dsh.sh` 直接 `DONE source=preinstalled` 并**跳过下载**，
+     *    此时实例目录里根本没有 node_modules —— 只查实例路径会把装好的实例误判成
+     *    「未安装/BROKEN」，实例永远无法 READY，也永远无法启动）
+     * 3. 两处都没有时返回实例内的预期路径（错误信息/日志据此定位）
+     *
+     * 抽成「接受目录参数」的纯函数便于单测（见 `DshCoreLogicTest`）。
+     */
+    fun effectiveDshDir(instanceDir: File, rootfsDir: File): File {
+        val inInstance = File(instanceDir, INSTANCE_DSH_REL)
+        if (File(inInstance, "package.json").isFile) return inInstance
+        val preinstalled = File(rootfsDir, PREINSTALLED_DSH_REL)
+        if (File(preinstalled, "package.json").isFile) return preinstalled
+        return inInstance
+    }
+
+    fun effectiveDshDir(instanceId: String): File =
+        effectiveDshDir(instanceDir(instanceId), File(if (isLoaded) ROOTFS_DIR else ""))
+
+    /** 该实例实际生效的 dsh `package.json`（实例内优先，其次 rootfs 预装） */
+    fun effectiveDshPackageJson(instanceId: String): File =
+        File(effectiveDshDir(instanceId), "package.json")
+
+    /** 该实例实际生效的 dsh 入口 `lib/bin.js`（实例内优先，其次 rootfs 预装） */
+    fun effectiveDshBinJs(instanceId: String): File =
+        File(effectiveDshDir(instanceId), "lib/bin.js")
 
     /** 运行中 proot 进程的 pid 文件（孤儿进程清理用） */
     fun instancePidFile(instanceId: String): File = File(instanceDir(instanceId), "dsh.pid")
@@ -183,11 +219,18 @@ object DshPaths {
     /** rootfs 是否看起来可引导（必须有 /bin/sh 或 /usr/bin/env） */
     fun rootfsLooksUsable(): Boolean {
         if (!isLoaded) return false
-        val root = File(ROOTFS_DIR)
-        return File(root, "bin/sh").exists() ||
+        return rootfsLooksUsable(File(ROOTFS_DIR))
+    }
+
+    /**
+     * 同上，但检查**指定目录**。
+     * ★ 第十一轮：`ProotCommand.preflight()` 收 `rootfsDir` 参数却调用无参版本（看的是
+     * [ROOTFS_DIR]），传非默认 rootfs 时预检结论会失真。现在预检用这个重载，参数与判据一致。
+     */
+    fun rootfsLooksUsable(root: File): Boolean =
+        File(root, "bin/sh").exists() ||
             File(root, "usr/bin/env").exists() ||
             File(root, "bin/busybox").exists()
-    }
 
     // --- 磁盘 ---------------------------------------------------------------
 

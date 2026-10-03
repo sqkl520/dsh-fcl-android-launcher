@@ -120,6 +120,12 @@ android {
         }
     }
 
+    // rootfs.tar.xz 已是压缩包（300MB），不要让 aapt 再 deflate 一遍：
+    // 二次压缩既慢又几乎不减小体积，还会让打包阶段明显变长。
+    androidResources {
+        noCompress += listOf("xz")
+    }
+
     buildFeatures {
         viewBinding = true
         buildConfig = true

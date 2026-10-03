@@ -115,20 +115,28 @@ class DshDownloadViewModel(
     }
 
     /**
-     * 安装某版本：优先复用已有实例/空壳，避免反复点击在列表里积累一堆空实例；否则新建一个。
-     * @return 用的实例（可能是已有实例；若该版本已装好则不会重复触发安装）
+     * 安装派发结果。
+     * [started] = false 表示**没有**发起安装（该版本已装好，直接复用），
+     * 界面据此选择文案，避免「明明没开始安装却说安装已开始」（R10-16）。
      */
-    fun installVersion(item: DshVersionListItem, instanceName: String? = null): DshInstance {
+    data class InstallDispatch(val instance: DshInstance, val started: Boolean)
+
+    /**
+     * 安装某版本：优先复用已有实例/空壳，避免反复点击在列表里积累一堆空实例；否则新建一个。
+     * @return 派发结果（实例 + 是否真的发起了安装）
+     */
+    fun installVersion(item: DshVersionListItem, instanceName: String? = null): InstallDispatch {
         val existing = chooseInstanceToInstall(DshInstances.instances.value, item.version)
         // 已 READY 装过该版本：无需重装，直接复用，避免每次点击都重新下载整棵依赖树
         if (existing != null && existing.state == DshInstance.State.READY) {
             DshLogBus.append("[download] ${existing.name} 已安装 dsh ${item.version}，跳过重复安装")
-            return existing
+            return InstallDispatch(existing, started = false)
         }
         val inst = existing ?: DshInstances.create(instanceName ?: "dsh ${item.version}")
         _installingVersions.value = _installingVersions.value + item.version
-        installer.install(inst, item.version)
-        return inst
+        // installer.install 返回 false = 该实例已有安装在跑（单飞拒绝），同样不算「本次发起」
+        val started = installer.install(inst, item.version)
+        return InstallDispatch(inst, started)
     }
 
     companion object {

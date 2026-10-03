@@ -13,6 +13,206 @@
 
 ---
 
+## [Unreleased · 阶段 E-1：打包带 rootfs 的 APK] - 2026-10-03
+
+### Added
+- 产出首个**内含运行时底座**的 APK：`dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`（312MB）
+
+### Changed
+- `FCL/build.gradle.kts`：新增 `androidResources { noCompress += listOf("xz") }`
+  —— `rootfs.tar.xz` 已是压缩包，避免 aapt 二次 deflate（实测包内为 STORED）
+
+### Fixed
+- 打包环境：Android SDK 自带的 `cmake/3.22.1/bin/{cmake,ninja,cpack,ctest}` 是 x86_64，
+  在 arm64 上直接 SIGILL（exit 132）导致 `externalNativeBuild` 失败；
+  已用 `qemu-x86_64-static` 包装（与 NDK 工具链同一手法）
+
+### Notes
+- APK 内容核验：`assets/dsh/rootfs/rootfs.tar.xz` = 299.8MB（STORED）；
+  `lib/arm64-v8a/` 含 `libproot.so`、`libproot-loader.so`、`libbusybox.so`、`libptyjni.so`
+- APK SHA-256：`53bd1976e3f2cb28763f37ab70b30a551df689c29e31ff75904da3470c73ebda`
+- 归档：`apk-archive/0.1.0-SNAPSHOT/`（APK 本体不入 Git，仅 SHA256SUMS 入库）
+- 验证：`run-compile.sh` 通过、单测 32/32、`assembleFordebug` BUILD SUCCESSFUL；**尚未真机安装**
+
+---
+
+## [Unreleased · 第十一轮附加：UI 与 FCL 一致性还原] - 2026-10-03
+
+> 要求：「界面布局 / 按钮布局 / 整体主题一律跟 FCL 走」（`design/app-shell.md` §2.5）。
+> 本轮把 dsh 界面**逐部件对照 FCL 原版布局**（从 git 历史取出 `activity_main.xml` /
+> `item_profile.xml` / `item_version.xml` / `item_launcher_setting_button.xml` /
+> `page_setting_list.xml` / `LauncherSettingPage` + `LauncherSettingAdapter` 作真蓝本）后做了一次对齐。
+
+### Fixed
+- **根因：FCL 的通用 UI chrome 资产在「阶段 4 裁剪」时被一并删掉了** —— 没有它们，dsh 界面
+  **不可能**长得像 FCL。已从历史恢复（均为纯 XML，无 MC 内容）：
+  `bg_game_menu`（左侧菜单底）、`bg_right_menu`（右侧面板底）、`bg_item_rounded`（圆角行底）、
+  `bg_container_transparent_clickable`（列表行透明+按压高亮）、`bg_progress` /
+  `bg_progress_indeterminate` + `anim/progress_indeterminate_rect{1,2}`（FCL 进度条形态）、
+  以及 `ic_baseline_{arrow_back,delete,refresh,content_copy}_24` 图标。
+- **主外壳 `activity_dsh_main.xml` 与 FCL `activity_main.xml` 逐部件对齐**：
+  左侧菜单补回 `bg_game_menu` + `elevation=100dp` + padding 5/10/5/10 + `clipChildren/clipToPadding=false`；
+  菜单项由硬编码 40dp 改回 `wrap_content`（FCLMenuView 自带 8dp 内边距，FCL 写法）；
+  **补回 `back` 返回项**（§4.2 明确要求保留）；右侧面板改回 FCL 形态
+  （`bg_right_menu` + `layout_constraintWidth_percent=0.25` + `elevation=100dp` + 内层 `right_menu_content`，
+  不再是白卡片）；**动态岛从顶部移到 FCL 原位（底部居中 + 15dp 底边距 + `stateListAnimator=@null`）**；
+  补回 `video_view`（动态壁纸）与根 `transitionName="background"`；`ui_layout` 高度改回 `match_parent`。
+- **主外壳代码补齐 FCL 行为**（`DshMainActivity`）：`back` 项 → `onBackPressedDispatcher`；
+  动态壁纸 `setupLiveBackground()` + `onPause/onResume` 暂停恢复 + `onDestroy` `stopPlayback`；
+  背景随主题刷新（`ThemeEngine.addRefreshListener` / `onDestroy` 注销，FCL 同款）。
+- **列表行对齐 FCL 范式**：
+  `item_dsh_instance.xml` 改为照搬 `item_profile.xml`（实例列表 ↔ FCL 档案列表）——
+  透明容器 `bg_container_transparent_clickable` + `padding=10dp` + `clickable/focusable`
+  + `stateListAnimator=@xml/anim_scale`（**原来完全没有按压反馈**）+ 文字改用 `use_theme_color`；
+  `item_dsh_version.xml` 改为照搬 `item_version.xml`——外层 `paddingBottom=8dp` 作行间距 +
+  内层 `bg_container_white` + `auto_tint` + `focusable` + `padding=5dp` + `anim_scale`；
+  进度条改为 FCL 的 3dp 细条 + `bg_progress_indeterminate`。
+- **设置行与设置页对齐 FCL**：
+  `item_dsh_setting.xml` 改为照搬 `item_launcher_setting_button.xml`——
+  `bg_item_rounded` + 左右 12dp + 横向行 `minHeight=48dp`/上下 8dp + 标签左/动作右 + 描述在下（12sp）；
+  `ui_dsh_launcher_settings.xml` 对齐 `page_setting_list.xml`（左右 10dp、`clipToPadding=false`、
+  `paddingBottom=10dp` + 居中空态）；
+  **恢复 `com.mio.ui.adapter.SpacingItemDecoration`** 并接进设置页——组内相邻行 1dp 分割线（主题色绘制）、
+  跨组 8dp 间距、首行 10dp；`DshLauncherSettingAdapter` 去掉 FCL 没有的「分组标题行」，
+  改为每行带 `SettingGroup` + `isNextInSameGroup()`（与 FCL `LauncherSettingAdapter` 同构）。
+- **页内头部去 Material 化**：三个外壳页（实例/下载/日志）删掉页内 20sp 大标题
+  （FCL 的页名由**外壳底部动态岛**显示，页内不重复放大标题），页内动作按钮由文字
+  `FCLButton` 改为 `FCLImageButton`（`use_theme_color` + `no_padding` + `anim_scale_large`），
+  与 FCL `item_profile` / `item_download_task` 的图标按钮写法一致。
+- **16 处 `MaterialAlertDialogBuilder` 全部换成 `FCLAlertDialog`**（§2.5.2 明确要求）：
+  `DshLauncher`(5) / `DshSettingsActivity`(3) / `DshInstancesUI`(3) / `DshDownloadUI`(3) / `DshSettingsUI`(2)。
+  按 FCL 惯例：错误/危险用 `AlertLevel.ALERT`、信息用 `INFO`；单按钮对话框用
+  `setNegativeButton(dialog_positive, null)`；进度对话框改用 `FCLAlertDialog.setMessage()` 就地刷新；
+  关于页启用 `useAutoLink()` 让仓库链接可点。**`com/dsh` 下 `MaterialAlertDialogBuilder` 归零**。
+- **`activity_dsh_settings.xml`**：区块改为 `FCLLinearLayout` + `bg_item_rounded` +
+  `auto_linear_background_tint`（FCL 圆角行容器），页内标题 20sp → 16sp（FCL `dialog_edit` 同款）。
+
+### Removed
+- 本轮恢复后**确认无人引用**的资产（避免留死资产，需要时可再从历史取）：
+  `bg_game_menu_inset`、`bg_item_rounded_{top,middle,bottom}`、`bg_container_white_clickable`、
+  `bg_container_transparent_selected`、`right_arrow`、`transparent`、
+  `ic_baseline_{settings,more_horiz,edit,arrow_forward,restore}_24`。
+
+### Notes
+- **验证**：`run-compile.sh` BUILD SUCCESSFUL；单测 **32/32**；脚本一致性 **18/18**；
+  §2.5.5 三条验收：① dsh 布局里 `com.google.android.material` = **0**；
+  ② 12 个 dsh 布局全部含 fcllibrary 控件（`ui_dsh_launcher_settings` 由 0 → 1）；
+  ③ `com/dsh` 下 `MaterialAlertDialogBuilder` = **0**、`FCLAlertDialog` 37 处。**未打包、未上真机**。
+- **有意保留的差异（1 处，已论证）**：FCL 的设置行是**纯白**（`bg_item_rounded` 不带 tint），
+  暗色主题下也是白块；dsh 用 `FCLLinearLayout.auto_linear_background_tint` 让它跟随主题。
+  几何/结构/内边距与 FCL 完全一致，仅颜色改为主题驱动（暗色下可读性）。
+- **仍存在的差异（待后续）**：FCL 的列表行动作是 `FCLImageButton` 图标按钮，dsh 的实例行仍用文字
+  `FCLButton`（FCL 自己的 `item_launcher_setting_button` 也用文字按钮，故不算违规，但可再统一）；
+  `PtyNative` / `libbusybox.so` 仍是「编进去了没人用」。
+
+---
+
+## [Unreleased · 第十一轮评估与优化：修复 2 个 P1（真机阻塞级）] - 2026-10-03
+
+> 全文：`PROJECT_REVIEW_AND_OPTIMIZATION.md`（速览：`reports/round11-review-and-optimization.md`）。
+> 审查对象：git HEAD `d82f409`（阶段 A~D 已落地）+ 第十轮 6 文件改动（未提交）+ 本轮改动。
+
+### Fixed
+- **（P1）rootfs 解压把符号链接目标里的 `..` 改写成宿主路径 → `/opt/node22/bin/npm` 变断链**：
+  `RuntimeUtils.uncompressTarXZ` 沿用 FCL 上游的
+  `Os.symlink(linkName.replace("..", dest.getAbsolutePath()), ...)`。本项目 rootfs 里数百个链接命中，
+  其中 `opt/node22/bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js` 会被写成
+  `<rootfs>/lib/node_modules/npm/bin/npm-cli.js`（**实测不存在**，正确目标在
+  `<rootfs>/opt/node22/lib/...`，**实测存在**）。后果：真机首启解压后 `npm --version` 失败 →
+  `probe.sh` 的 `npm` 项 FAIL → `DshBootstrap` 自检不通过 → **底座永远不就绪**，安装/启动全挂。
+  chroot 里直接验证 rootfs 时（不经过该解压路径）是好的，所以此前几轮都没暴露。
+  现在改为**原样保留链接目标**（tar 语义），策略抽到 `com.dsh.core.TarLinkPolicy.symlinkTarget`
+  并加单测守住（防回归）。
+- **（P1）阶段 D-1 的「预装 dsh 跳过下载」优化未与 Kotlin 侧判定口径对齐 → 装完必判 BROKEN**：
+  `setup-node-dsh.sh` 命中预装版本时打印 `DONE source=preinstalled` 并**跳过下载**，实例目录里
+  因此**没有** `node_modules`；但 `DshInstaller.readInstalledVersion` / `DshInstances.repair` /
+  `DshRuntime.startLocked` 都只看实例内的
+  `node_modules/@deepseek-ai/dsh/package.json` —— 于是「刚装成功」的实例被判
+  `dsh_install_incomplete` → **BROKEN**，且重装重复同一结果（永久循环），启动也会报「未安装」。
+  现在新增 `DshPaths.effectiveDshDir(instanceDir, rootfsDir)`（实例优先 → rootfs 预装回退 →
+  都没有则返回实例预期路径），三处判定统一走它。已用 JVM harness 对**真实 rootfs** 复现：
+  旧逻辑 `null`（→BROKEN），新逻辑 `0.1.6-alpha.2`（→READY）。
+- **（P3）`installVersion` 跳过安装却提示「正在安装」**：`DshDownloadViewModel.installVersion`
+  改为返回 `InstallDispatch(instance, started)`；`DshDownloadUI` 据此选择文案
+  （新增 `dsh_install_skipped`，已登记进资源契约测试）。该路径在 R11-02 修好后**变得常见**
+  （预装版本装完即 READY，再点即命中「已装同版本」），所以一并修掉。
+- **（P3）`ProotCommand.preflight()` 的 rootfs 判据与入参不一致**：它收 `rootfsDir` 参数，
+  却调用无参的 `DshPaths.rootfsLooksUsable()`（看的是全局 `ROOTFS_DIR`）。新增
+  `DshPaths.rootfsLooksUsable(root: File)` 重载，预检改用入参。
+
+### Added
+- `FCL/src/main/java/com/dsh/core/TarLinkPolicy.kt` —— tar 链接目标还原策略（唯一出处 + 单测抓手）
+- `DshPaths.PREINSTALLED_DSH_REL` / `effectiveDshDir` / `effectiveDshPackageJson` /
+  `effectiveDshBinJs` / `rootfsLooksUsable(File)`
+- 单测 +5（共 **32/32**）：`prefersInstanceDshOverPreinstalled`、`fallsBackToPreinstalledDsh`、
+  `returnsInstancePathWhenNothingInstalled`、`doesNotFallBackToIncompletePreinstalled`、
+  `symlinkTargetsAreKeptVerbatim`
+
+### Removed
+- `DshPaths.instanceDshPackageJson` / `instanceDshBinJs`（被 `effectiveDsh*` 取代，避免两套口径）
+
+### Notes
+- **验证**：`run-compile.sh` BUILD SUCCESSFUL（0 error，仅 2 条既有 `onBackPressed` 弃用告警）；
+  单测 **32/32**（第十轮 27/27 + 本轮 5）；脚本一致性 **18/18**；
+  两个 P1 均用**独立 harness + 真实资产**复现（符号链接目标 `readlink -f` 对照；
+  真实 rootfs 的预装 dsh 版本解析）。**本轮未打包、未上真机**。
+- **仍未做（沿用前几轮）**：CI 重写、签名私钥外移 + release 混淆、WakeLock、
+  PTY/busybox 去留决策、registry 缓存落盘、日志增量渲染、`rootProject.name`。
+- **平台项待真机确认**：W^X / PROOT_LOADER；本轮修的符号链接与预装解析已用真实资产在沙箱内验证，
+  但**解压动作本身**（`Os.symlink`）只能在真机跑，属「机制已修、真机待验」。
+- **待确认（新增，P3）**：`values-zh` 缺 `dsh_about_full_name` / `dsh_about_subtitle`
+  两条**无占位符**文案 → 中文界面「关于」页回退英文（资源契约测试只覆盖带占位符的文案，抓不到）。
+
+---
+
+## [Unreleased · 第十轮评估与优化：修复 2 个 P1 + 4 个 P2] - 2026-10-03
+
+> 全文：`PROJECT_REVIEW_AND_OPTIMIZATION.md`（速览：`reports/round10-review-and-optimization.md`）。
+> 审查对象：git HEAD `d82f409`（阶段 A~D 已落地）+ 本轮 6 个文件的改动。
+
+### Fixed
+- **（P1）资源契约测试红 → 绿**：`DshSettingsUI` 新增的 `@string/dsh_about_version`（`版本：%1$s`）
+  带占位符却未登记进 `DshResourceFormatTest.callSites`，导致单测 `26/27`（FAILED=1）。
+  "占位符类型不匹配 → 真机闪退"这类 P0 的护栏因此失效。已补登记，恢复 `27/27`。
+- **（P1）`RuntimeUtils.isLatest` 不再假设版本号是数字**：`assets/dsh/rootfs/version` 已是语义化字符串
+  （`debian-bookworm-arm64-node22-dsh0.1.6-alpha.2-layout2`），旧实现无条件 `Long.parseLong` ——
+  一旦 classpath 资源可解析就抛 `NumberFormatException`（`isReady()` 被吞成"永远不就绪"，
+  `install()` 直接把首启解压判失败）。改为"字符串相等优先 + 纯数字时保持数值语义"，
+  并把同一个 stream 只读一次（旧实现第二次可能拿到 null → NPE）。已用 JVM harness 复现旧行为并验证新行为。
+- **（P2）删除实例不再误杀别的实例**：`DshInstances.delete()` 原来无条件调用
+  `DshRuntime.stopAndWait()`，而它停的是**当前正在运行的那个实例**（单实例策略），与被删 id 无关 ——
+  删一个没在跑的实例会把正在跑的那个杀掉。现加归属校验（仅被删实例在跑时才停）。
+- **（P2）JNI 符号名与 Kotlin 类对齐**：`ptyjni.c` 的 7 个符号仍是上游
+  `Java_id_or_oo_pr_engine_PtyNative_*`，而 Kotlin 侧类是 `com.dsh.core.PtyNative` ——
+  任何一次调用都会 `UnsatisfiedLinkError`（当前无调用方，属潜伏缺陷）。已改为
+  `Java_com_dsh_core_PtyNative_*` 并加注释说明"改包名必须同步"。
+- **（P2）就绪判据补上"执行位"这一维**：`DshBootstrap.isReady()` 只查 proot `isFile`，
+  而 `ProotCommand.preflight()` 查 `exists() && canExecute()` —— 无执行位时"横幅隐藏但一启动就报错"
+  （第九轮修的同类"假就绪"漏了这一维）。`isReady()` / `missingSummary()` / `install()` 已对齐。
+- **（P2）rootfs 升级可回滚**：原来"先删旧目录、再 rename 新目录"，两步之间失败会**同时失去新旧两份**
+  rootfs。改为"旧目录改名 `.old` → 新内容上位 → 校验 → 成功删备份 / 失败回滚"。
+- **（P2）空间门槛按实测值给，并移到真正要解压的分支**：原 `MIN_FREE_BYTES = 1500 MiB`
+  (=1,572,864,000 B) 比**仅 rootfs 解压后的实测体积**（`du` = 1,607,908,864 B）还小；
+  且检查发生在"是否需要解压"判定之前，导致"rootfs 已就绪、只补脚本"的场景被假失败。
+  现按实测值（1.65 GiB + 600 MB node_modules）计算，并按首装（1 份）/ 升级（2 份）分别判定。
+- **（P3）`ProotProcessExecutor` 登记表在异常路径也收敛**：`actives` 原来只在正常路径清理，
+  读输出抛异常会留下死进程记录；现移入 `finally` 且只清**已退出**的进程（存活的必须留表，
+  否则"取消安装"找不到它）。
+
+### Removed
+- `DshBootstrap.prootDir()`（阶段 A 改为 jniLibs 方案后已无调用方）。
+
+### Notes
+- **验证**：`run-compile.sh` BUILD SUCCESSFUL（含原生 ptyjni 36,312 B）；单测 **27/27**
+  （修复前 26/27）；脚本一致性 **18/18**；`nm -D libptyjni.so` 确认符号名；
+  JVM harness 复现旧 `NumberFormatException`；`du` 实测 rootfs 体积。**本轮未打包**。
+- **仍待处理**（详见报告 §3）：CI 重写（R10-10）、签名私钥外移 + release 混淆（R10-11）、
+  WakeLock（R10-12）、PTY/busybox 去留决策（R10-13）、registry 缓存落盘、WebView 竖屏、
+  `FCLPath` 死配置、`rootProject.name` 更新。
+- **平台项待真机确认**（R10-19）：W^X / PROOT_LOADER / `getResourceAsStream("/assets/...")` 在真机上的行为。
+
+---
+
 ## [Unreleased · 阶段 D-1：脚本与预装 dsh 对齐 + 运行时自检] - 2026-10-03
 
 ### Added

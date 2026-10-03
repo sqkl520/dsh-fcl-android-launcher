@@ -1,45 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.tungsten.fcllibrary.component.view.FCLConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  启动器设置的一行 —— **照搬 FCL 的 item_launcher_setting_button.xml 范式**：
+    FCLLinearLayout(vertical) + background=@drawable/bg_item_rounded + 左右 12dp 内边距
+      ├ 横向行：minHeight=48dp、上下 8dp；左侧 FCLTextView 标签，右侧 FCLButton 动作
+      └ 下方 FCLTextView 描述（12sp，marginBottom=8dp）
+  行间/组间的间距与分割线由 SpacingItemDecoration 统一负责（不在本布局里写 margin），
+  与 FCL 的 LauncherSettingPage 一致。
+  注：FCL 原行是纯白（bg_item_rounded 不带着色），这里通过 FCLLinearLayout 自带的
+  auto_linear_background_tint 让它跟随主题 —— 几何/结构完全一致，只是暗色下不会出现白块。
+-->
+<com.tungsten.fcllibrary.component.view.FCLLinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:paddingStart="14dp"
-    android:paddingTop="10dp"
-    android:paddingEnd="10dp"
-    android:paddingBottom="10dp"
-    android:background="@drawable/bg_container_white"
-    app:auto_tint="true">
+    android:background="@drawable/bg_item_rounded"
+    android:orientation="vertical"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp"
+    app:auto_linear_background_tint="true">
 
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/title"
-        android:layout_width="0dp"
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        app:auto_text_tint="true"
-        app:layout_constraintEnd_toStartOf="@id/action"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:minHeight="48dp"
+        android:orientation="horizontal"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:singleLine="true"
+            app:auto_text_tint="true" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <com.tungsten.fcllibrary.component.view.FCLButton
+            android:id="@+id/action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:minWidth="0dp"
+            android:textSize="12sp"
+            app:ripple="true" />
+
+    </androidx.appcompat.widget.LinearLayoutCompat>
 
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/description"
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="3dp"
+        android:layout_marginBottom="8dp"
         android:textSize="12sp"
-        app:auto_text_tint="true"
-        app:layout_constraintEnd_toStartOf="@id/action"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/title" />
+        app:auto_text_tint="true" />
 
-    <com.tungsten.fcllibrary.component.view.FCLButton
-        android:id="@+id/action"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:minWidth="0dp"
-        android:textSize="12sp"
-        app:ripple="true"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-</com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+</com.tungsten.fcllibrary.component.view.FCLLinearLayout>

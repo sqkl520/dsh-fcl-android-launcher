@@ -49,6 +49,9 @@ class DshResourceFormatTest {
         "dsh_key_invalid" to arrayOf<Any>("服务端返回 401"),
         "dsh_key_unknown" to arrayOf<Any>("网络错误：timeout"),
 
+        // DshSettingsUI（关于页）：%1$s = BuildConfig.VERSION_NAME
+        "dsh_about_version" to arrayOf<Any>("0.1.0-SNAPSHOT"),
+
         // DshRuntime（注意 dsh_reason_start_timeout 传的是 Long：%d 接受 Long）
         "dsh_runtime_exited" to arrayOf<Any>(143),
         "dsh_reason_exited_early" to arrayOf<Any>(1),
@@ -64,6 +67,7 @@ class DshResourceFormatTest {
         "dsh_download_warning" to arrayOf<Any>("timeout"),
         "dsh_version_size" to arrayOf<Any>("48 KB"),
         "dsh_install_done" to arrayOf<Any>("0.1.5-rc.2"),
+        "dsh_install_skipped" to arrayOf<Any>("0.1.5-rc.2"),
         "dsh_install_failed" to arrayOf<Any>("npm ERR! code ENETUNREACH"),
         "dsh_install_timeout" to arrayOf<Any>(30),
 

@@ -320,15 +320,23 @@ class DshInstaller(
         }
     }
 
-    /** 从 package.json 里读真实版本（安装是否完整，以此为准） */
-    private fun readInstalledVersion(instance: DshInstance): String? =
-        readVersionFromPackageJson(DshPaths.instanceDshPackageJson(instance.id))
-            ?.also { version ->
-                // 顺带确认入口文件在，避免"包在但入口被裁掉"的半成品
-                if (!DshPaths.instanceDshBinJs(instance.id).isFile) {
-                    DshLogBus.append("[install] 警告：${instance.name} 缺少 lib/bin.js")
-                }
-            }
+    /**
+     * 从 package.json 读真实版本（安装是否完整，以此为准）。
+     *
+     * ★ 第十一轮：走 [DshPaths.effectiveDshDir] —— 命中 rootfs 预装版本时
+     * `setup-node-dsh.sh` 会打印 `DONE source=preinstalled` 并**跳过下载**，
+     * 此时实例目录里并没有 node_modules（真正的包在 rootfs 的 `/opt/dsh-preinstalled`）。
+     * 只查实例路径会把「刚刚装成功」的实例判成 `dsh_install_incomplete` → BROKEN，
+     * 且重装会一直重复同一结果（阶段 D-1 引入的回归）。
+     */
+    private fun readInstalledVersion(instance: DshInstance): String? {
+        val dir = DshPaths.effectiveDshDir(instance.id)
+        val version = readVersionFromPackageJson(File(dir, "package.json"))
+        if (version != null && !File(dir, "lib/bin.js").isFile) {
+            DshLogBus.append("[install] 警告：${instance.name} 缺少 lib/bin.js（$dir）")
+        }
+        return version
+    }
 
     companion object {
         /** 安装最长容忍时间：低于此值可能是网络慢，高于此值基本是卡死 */

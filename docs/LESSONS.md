@@ -43,6 +43,13 @@ ssh://git@ssh.github.com:443/<owner>/<repo>.git
 - `~/.ssh` **可能不跨会话持久**；密钥丢了要重新生成 + 重新把公钥加到 GitHub
 - 编译耗时长（3~9 分钟）；长时间占用会被 `workspace_shell` 的调用超时打断（表现为 gradle 被 SIGTERM）
 - aapt2 / cmake / ninja / clang 等工具是 **x86_64**，在 arm64 沙箱里需用 `qemu-x86_64-static` 包装
+  - **NDK 工具链**：`$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/*`
+  - **SDK 自带 cmake**：`$SDK/cmake/<ver>/bin/{cmake,ninja,cpack,ctest}`
+    （不包装的话，AGP 的 `externalNativeBuild` 会直接 SIGILL，报 `finished with non-zero exit value 132`）
+  - 包装脚本要防"双重包装"（见下）
+- **打包 APK 会很慢**：300MB 的 `rootfs.tar.xz` 若被 aapt 二次压缩，打包阶段可能超过单次调用时限。
+  已在 `build.gradle.kts` 里 `androidResources { noCompress += listOf("xz") }`；
+  若仍超时，**直接重跑**即可（Gradle 增量，已完成的任务会跳过）
 - **⚠️ qemu 包装脚本的"双重包装"坑**：如果按
   `for f in *; do [ -f "$f.real" ] && continue; mv "$f" "$f.real"; 写包装脚本; done`
   这种写法循环，**刚生成的 `X.real` 会在同一次循环里被再包一层**（因为此时 `X.real.real` 还不存在，
@@ -259,3 +266,193 @@ Android 的 `Process.destroy()` / 发 SIGTERM 是**异步**的（还有 KILL 兜
 多条件则会产生"永远就绪不了"的空转。本轮把 `isReady()` 对齐到 `preflight()`（proot 可解析），
 并为 proot 分支补了"文件缺失即解压"的兜底，堵住两个方向。
 审查时可用这个套路：把"是否就绪"的判据逐条与"会真正失败的那个函数"的检查项对表。
+
+---
+
+## 8. 就绪判据要对"每一维"对表，不是对"条数"（第十轮）
+
+第九轮把 `isReady()` 对齐到 `preflight()`（补上"有没有 proot 文件"），**第十轮又发现漏了一维**：
+`preflight()` 查的是 `exists() && canExecute()`，`isReady()` 查的是 `isFile`。
+于是"二进制存在但没有执行位"这种打包异常，仍然表现为**假就绪**——横幅隐藏、点"启动"才报错。
+
+**教训**：对表时逐维比 —— `exists` / `isFile`（不是目录）/ `canExecute` / **内容可用**
+（rootfs 要 `bin/sh` 在、脚本要入口文件在）。判据集合必须是执行入口的**超集**，
+少一维就多一类假就绪；"检查了 5 个条件"不等于"检查对了"。
+
+同一轮还印证了另一件事：**门禁测试红了就等于没有门禁**。
+`DshResourceFormatTest` 的第二条用例（"带占位符的 dsh 文案必须登记进 callSites"）
+在阶段 D 新增 `dsh_about_version` 后就一直失败，而它守护的正是第五轮那个
+"`%d` 收到 String → 进页面必崩"的 P0。**每轮动手前先跑一遍 `run-tests.sh`**，
+和 §6.1 里"每轮先跑 §2.5.5 验收命令"是同一个道理。
+
+---
+
+## 9. 常量要能被实测值证伪（第十轮）
+
+`DshBootstrap.MIN_FREE_BYTES` 写的是 `1500 MiB = 1,572,864,000 B`，注释说"大致覆盖 rootfs + 一个实例的
+node_modules"。实际 `du -s --block-size=1 <解压后的 rootfs>` = **1,607,908,864 B** ——
+**光 rootfs 就比门槛大**。也就是说这道检查"通过"之后照样会写满磁盘、留下半个 rootfs。
+
+**教训**：凡是"保护某个资产"的阈值（磁盘、内存、超时、重试次数），都要拿**资产的实际尺寸/实际耗时**
+对一遍，并且把实测数字写进注释里（哪个命令、什么环境、多少字节）。靠读代码永远看不出
+"1500 MiB 够不够"——`du` 一下就知道了。
+
+顺带的两条：
+- **检查要放在"真的需要它"的分支里**。原来空间检查在 `install()` 最前面，早于
+  "这次到底要不要解压 rootfs"的判定 —— rootfs 已就绪、只是补脚本的场景会被"空间不足"**假失败**。
+- **破坏性替换要先备份后上位**。"先 `deleteRecursively()` 旧目录、再 `renameTo()` 新目录"，
+  两步之间失败就是**新旧全丢**。改成"旧目录改名 `.old` → 新内容上位 → 校验 → 成功删备份 / 失败回滚"，
+  峰值占用不变（旧实现解压 `.tmp` 时旧目录本来也还在），但失败从"底座全没"变成"回到旧版可用"。
+
+---
+
+## 10. 编进去了 ≠ 能用：JNI 符号名 / 无调用方的 native 代码（第十轮）
+
+`src/main/cpp/ptyjni/ptyjni.c` 是从上游 oonid/pr 的 `:proot-engine` 搬来的，符号名仍是
+`Java_id_or_oo_pr_engine_PtyNative_*`；本项目的 Kotlin 类是 `com.dsh.core.PtyNative`。
+JNI 按"类全限定名 + 方法名"查找实现，**对不上就是 `UnsatisfiedLinkError`**。
+
+它之所以一直没炸，只因为**全仓没有调用方**（`ProotRunner` 走的是 `ProcessBuilder`）。
+这类"编进了 APK、但没人用"的 native 代码最危险：静态审查看不出问题、编译 100% 通过、
+体积照付，等哪天有人接上去才发现要改包名。
+
+**对策**：
+- 搬 native 代码时，**第一件事就是改符号名**（或给 Kotlin 侧加 `@JvmName`/保持上游包名），
+  并在文件头写明"改包名/类名必须同步"；
+- 用 `nm -D --defined-only lib*.so | grep Java_` 与 Kotlin 侧的类名对一遍，这是**一条命令的验收**；
+- 对"无调用方"的原生库（本项目还有 `libbusybox.so` + `DshPaths.resolveBusybox()`）定期做去留决策，
+  不要让它长期停在"半接入"状态。
+
+---
+
+## 11. 别改写 tar 的符号链接目标（第十一轮，真机阻塞级）
+
+`RuntimeUtils.uncompressTarXZ` 里有一行从 FCL 上游继承来的处理：
+
+```java
+Os.symlink(tarEntry.getLinkName().replace("..", dest.getAbsolutePath()), linkPath);
+```
+
+看着像"把相对链接补成绝对路径"，实际是把相对目标**拼坏了**。内核解析相对链接是
+**相对链接所在目录**，而 `replace("..", dest)` 会把 `..` 直接换成宿主解压根目录，
+语义整个变了。
+
+实测本项目 rootfs（Debian bookworm + 官方 Node 22）里几百个链接命中，其中两个是致命的：
+
+```
+opt/node22/bin/npm  -> ../lib/node_modules/npm/bin/npm-cli.js
+  正确目标: <rootfs>/opt/node22/lib/node_modules/npm/bin/npm-cli.js   （readlink -f 存在）
+  实际写入: <rootfs>/lib/node_modules/npm/bin/npm-cli.js              （readlink -f 不存在）
+opt/dsh-preinstalled/node_modules/.bin/dsh -> ../@deepseek-ai/dsh/lib/bin.js
+  实际写入: <rootfs>/@deepseek-ai/dsh/lib/bin.js                      （断链）
+```
+
+后果链：真机首启解压 → `npm` 断链 → `npm --version` 失败 → `probe.sh` 的 `npm` 项 FAIL →
+`DshBootstrap` 自检不通过 → **底座永远不就绪**，安装/启动全挂。
+
+**为什么前几轮没发现**：验证 rootfs 时用的是 `chroot <rootfs>`（在宿主上直接构建出来的目录，
+符号链接本来就是对的），**没有走 `RuntimeUtils` 的解压路径**。这类"验证路径 ≠ 真实路径"的
+盲区要专门对一遍：凡是"打包 → 解压 → 使用"的链路，验证必须**从解压产物**开始，
+而不是从构建产物开始。
+
+**正确做法**：符号链接目标**原样写入**（tar 语义，GNU tar 亦如此）。相对目标交给内核按
+链接所在目录解析；绝对目标交给 proot 在 guest 内翻译。任何改写都会破坏它。
+本项目已把策略抽成 `com.dsh.core.TarLinkPolicy.symlinkTarget`（恒等函数 + 单测），
+让"不做改写"这条决定有代码与测试兜着，防止再次被"顺手优化"掉。
+
+---
+
+## 12. 优化一旦改变"产物形态"，判定口径必须同步（第十一轮，真机阻塞级）
+
+阶段 D-1 加了一个很好的优化：`setup-node-dsh.sh` 命中 rootfs 预装版本时
+**跳过下载**，直接 `DONE source=preinstalled`。问题是它改变了**产物形态** ——
+优化前"装成功"必然意味着实例目录里有 `node_modules`；优化后"装成功"可能
+**实例目录里什么都没有**（真正的包在 rootfs 的 `/opt/dsh-preinstalled` 下）。
+
+而 Kotlin 侧三处判定仍然只看实例路径：
+
+| 位置 | 作用 | 结果 |
+|---|---|---|
+| `DshInstaller.readInstalledVersion` | 装完硬校验 | 读到 null → `dsh_install_incomplete` → **BROKEN** |
+| `DshInstances.repair` | 冷启状态校准 | 降级成 `NOT_INSTALLED`（把装好的实例"修"坏） |
+| `DshRuntime.startLocked` | 启动前校验 | 报「未安装」，拒绝启动 |
+
+于是"装完即坏、重装还是坏、永远起不来"——一个纯优化变成了阻塞项。
+
+**教训**：任何"跳过某一步"的优化，都要问一句**「跳过之后，产物长什么样？原来依赖这个产物
+存在的那些判定还成立吗？」**。这里的正确做法不是回退优化，而是把"产物在哪"这件事
+**收敛成一个解析函数**（`DshPaths.effectiveDshDir(instanceDir, rootfsDir)`：实例优先 →
+预装回退 → 都没有返回预期路径），三处判定统一走它，并配单测覆盖三条分支。
+
+顺带一条：脚本里 `DSH_PREINSTALL_DIR`（`/opt/dsh-preinstalled`）、`ProotCommand.GUEST_ROOT`
+（`/opt/dsh`）、`DshPaths.PREINSTALLED_DSH_REL` 是**同一件事的三个写法**，分处 sh / Kotlin。
+本次在注释里写明"改一处必须三处同步"，但仍属**待收敛项**（建议后续由一处生成或加一致性测试）。
+
+---
+
+## 13. 验证要"能证伪"：拿真实资产 + 独立 harness（第十一轮方法论沉淀）
+
+本轮两个 P1 都是**编译 100% 通过、单测全绿、脚本一致性全绿**却真实存在的缺陷。能抓住它们，
+靠的是三条"可证伪"的验证手段，值得固化成习惯：
+
+1. **`readlink -f` 对照**：不满足于"代码看起来对"，直接对真实 rootfs 跑
+   `readlink -f opt/node22/bin/npm`，看目标**存不存在**。一行命令就证伪了
+   "相对链接会被正确解析"的假设。
+2. **独立 harness 打真实资产**：写一个 20 行的 JVM harness，对**真实 rootfs 目录**调用
+   `DshPaths.effectiveDshDir` + `DshInstaller.readVersionFromPackageJson`，
+   打印"旧逻辑 → null / 新逻辑 → 0.1.6-alpha.2"。比读代码强得多，且可复现。
+3. **`du` / `ls -l` 量一下**：承第十轮——凡是"保护某个资产"的阈值、或"某个路径应该存在"
+   的假设，都拿实测值/实测存在性对一遍。
+
+---
+
+## 14. "跟 FCL 走"要拿**原版布局**当尺子，别凭印象（第十一轮）
+
+`design/app-shell.md` §2.5 从第七轮起就是硬性要求："界面布局 / 按钮布局 / 整体主题一律跟 FCL 走"。
+第七轮做的是"把 Material 控件换成 fcllibrary 控件"，验收命令也只查这个 ——
+所以"0 个 Material 控件"通过了，但**观感仍然不像 FCL**。原因是三件事，只有对照原版布局才能发现：
+
+**① 视觉资产被删了，界面对不上是必然的。**
+"阶段 4 裁剪"删 MC 资源时，把 FCL 的**通用 UI chrome**（非 MC 内容）一并删了：
+`bg_game_menu`（左侧菜单半透明底）、`bg_right_menu`（右侧面板底）、`bg_item_rounded`（圆角行底）、
+`bg_container_transparent_clickable`（列表行透明+按压高亮）、`bg_progress*`（FCL 进度条形态）。
+没有这些，"跟 FCL 走"只能走成"自己发明一个长得像的"。**教训**：裁剪资源时要按"是否 MC 专属"分类，
+而不是按"当前有没有布局引用它"——后者会把设计系统一起删掉。
+
+**② 布局结构（不只是控件类型）必须逐部件对表。**
+dsh 外壳虽然用了 fcllibrary 控件，但：左侧菜单没有背景条与 100dp 抬升、右侧面板做成了白卡片
+（FCL 是 25% 宽半透明面板）、**动态岛被放到了顶部**（FCL 在底部居中）、缺 `back` 菜单项、
+缺 `video_view`。这些都是"控件对了、结构错了"。
+
+**③ 行级范式不同。**
+FCL 的列表行有两种范式，必须按"这一行在 FCL 里是什么位置"选：
+- **列表项**（`item_version` / `item_profile`）：容器 + `stateListAnimator="@xml/anim_scale"`（按压反馈）
+  + `focusable`；档案/实例列表用 `bg_container_transparent_clickable`，版本列表用
+  `bg_container_white` + `auto_tint`。
+- **设置行**（`item_launcher_setting_button`）：`bg_item_rounded` + 左右 12dp +
+  横向行 `minHeight=48dp` + 标签左/动作右 + 描述在下。
+dsh 原来两种都做成了"白卡片 + 无按压反馈"。
+
+**做法（可复用）**：把原版布局从 git 历史取出来当尺子，而不是靠记忆：
+
+```sh
+git ls-tree -r --name-only <删资源前的提交> | grep 'res/layout/'     # 有哪些原版布局
+git show "<提交>:FCL/src/main/res/layout/activity_main.xml"           # 逐部件对照
+git show "<提交>:FCL/src/main/java/.../LauncherSettingAdapter.kt"     # 连行为（分组分割线）一起看
+```
+
+顺带一条：**FCL 的分组视觉不是"标题行"，是间距+分割线**。
+`LauncherSettingPage` 用 `SpacingItemDecoration`（组内 1dp 分割线用主题色画、跨组 8dp、首行 10dp），
+`LauncherSettingAdapter.isNextInSameGroup()` 提供判断。dsh 原来自己发明了"分组标题行"，
+看着像但就不是 FCL。**结论**：还原 UI 时"行为"（间距、分割线、按压反馈、动画）要和"控件"一起还原。
+
+---
+
+## 15. 一次改完要按"验收命令"复跑（第十一轮）
+
+§6.1 已经写过"每轮动手前先跑 §2.5.5 验收命令"，本轮补上另一半：**改完也要跑**，而且要把
+验收从"有没有 Material"扩展成三条：① 布局里 0 个 Material；② 每个页面都有 fcllibrary 控件；
+③ 代码里 `MaterialAlertDialogBuilder` 归零。只查 ① 会漏掉"控件对了但结构不对"和"对话框还是 Material"。
+
+
+

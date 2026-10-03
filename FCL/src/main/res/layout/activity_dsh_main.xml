@@ -1,36 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  dsh 启动器主外壳（横屏，照搬 FCL activity_main.xml 形态）：
-  background 背景 + 左侧 FCLMenuView 滑出菜单 + 中间 ViewPager2 内容区
-  + 右侧面板（当前实例卡 + 启动/停止 + 打开界面）+ 顶部 FCLDynamicIsland 动态岛标题。
-  视觉全部走 fcllibrary 控件 + ThemeEngine（见 docs/design/app-shell.md §2.5）。
-
-  菜单项：实例 / 管理 / 下载 / 日志 / 设置（管理为插件安装预留）。
+  dsh 启动器主外壳 —— 骨架**逐部件照搬** FCL 的 activity_main.xml：
+    background(根) / video_view / left_menu / right_menu / ui_layout / title
+  只把菜单项与右侧面板的内容换成 dsh 的（见 docs/design/app-shell.md §4.1）。
+  与 FCL 保持一致的细节：左侧菜单 bg_game_menu + elevation 100dp + padding 5/10/5/10；
+  右侧面板 bg_right_menu + 宽度 25% + elevation 100dp + 内层 right_menu_content；
+  动态岛在**底部居中**（FCL 原位）；ViewPager2 高度 match_parent 且无额外边距。
+  视觉全部走 fcllibrary 控件 + ThemeEngine（§2.5）。
+  菜单项：实例 / 管理 / 下载 / 日志 / 设置 + 返回（管理为后续管理功能预留）。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/background"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:transitionName="background"
+    tools:context=".ui.shell.DshMainActivity">
 
-    <!-- ===== 左侧菜单栏 ===== -->
+    <!-- 动态壁纸（FCL 同款：可选，放 filesDir 下的 live.mp4 才显示） -->
+    <VideoView
+        android:id="@+id/video_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- ===== 左侧滑出菜单（FCL 同款：半透明底 + 100dp 抬升 + 10dp 内边距） ===== -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/left_menu"
         android:layout_width="wrap_content"
-        android:layout_height="match_parent"
-        android:paddingStart="8dp"
-        android:paddingTop="12dp"
-        android:paddingEnd="8dp"
-        android:paddingBottom="12dp"
+        android:layout_height="0dp"
+        android:background="@drawable/bg_game_menu"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:elevation="100dp"
+        android:paddingStart="5dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="5dp"
+        android:paddingBottom="10dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
         <com.tungsten.fcllibrary.component.view.FCLMenuView
             android:id="@+id/instances"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:src="@drawable/ic_dsh_instances_24"
             app:layout_constraintBottom_toTopOf="@id/manage"
             app:layout_constraintStart_toStartOf="parent"
@@ -38,8 +52,8 @@
 
         <com.tungsten.fcllibrary.component.view.FCLMenuView
             android:id="@+id/manage"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:src="@drawable/ic_dsh_manage_24"
             app:layout_constraintBottom_toTopOf="@id/download"
@@ -48,8 +62,8 @@
 
         <com.tungsten.fcllibrary.component.view.FCLMenuView
             android:id="@+id/download"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:src="@drawable/ic_baseline_download_24"
             app:layout_constraintBottom_toTopOf="@id/logs"
@@ -58,8 +72,8 @@
 
         <com.tungsten.fcllibrary.component.view.FCLMenuView
             android:id="@+id/logs"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:src="@drawable/ic_dsh_logs_24"
             app:layout_constraintBottom_toTopOf="@id/setting"
@@ -68,116 +82,136 @@
 
         <com.tungsten.fcllibrary.component.view.FCLMenuView
             android:id="@+id/setting"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:src="@drawable/ic_dsh_settings_24"
-            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintBottom_toTopOf="@id/back"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/logs" />
 
-    </androidx.constraintlayout.widget.ConstraintLayout>
-
-    <!-- ===== 右侧面板：当前实例卡 + 启动/停止 + 打开界面 ===== -->
-    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
-        android:id="@+id/right_menu"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_marginStart="8dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginEnd="8dp"
-        android:layout_marginBottom="8dp"
-        android:background="@drawable/bg_container_white"
-        android:padding="14dp"
-        app:auto_tint="true"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintWidth_percent="0.28">
-
-        <com.tungsten.fcllibrary.component.view.FCLTextView
-            android:id="@+id/right_title"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:text="@string/dsh_right_current_instance"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            app:auto_text_tint="true"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <com.tungsten.fcllibrary.component.view.FCLTextView
-            android:id="@+id/right_instance_name"
-            android:layout_width="0dp"
+        <!-- FCL 的返回项：与 §4.2 的映射一致，保留 -->
+        <com.tungsten.fcllibrary.component.view.FCLMenuView
+            android:id="@+id/back"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:ellipsize="end"
-            android:singleLine="true"
-            android:textSize="16sp"
-            app:auto_text_tint="true"
-            app:layout_constraintEnd_toEndOf="parent"
+            android:src="@drawable/ic_baseline_arrow_back_24"
+            app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/right_title"
-            tools:text="dsh 0.1.5-rc.2" />
+            app:layout_constraintTop_toBottomOf="@id/setting" />
 
-        <com.tungsten.fcllibrary.component.view.FCLTextView
-            android:id="@+id/right_instance_hint"
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- ===== 右侧面板（FCL 同款：25% 宽、半透明底、100dp 抬升、内层 content） ===== -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/right_menu"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_right_menu"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:elevation="100dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintWidth_percent="0.25">
+
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/right_menu_content"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textSize="12sp"
-            app:auto_text_tint="true"
+            android:layout_height="0dp"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/right_instance_name"
-            tools:text="就绪 · 端口 3080" />
+            app:layout_constraintTop_toTopOf="parent">
 
-        <com.tungsten.fcllibrary.component.view.FCLButton
-            android:id="@+id/right_btn_start"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/dsh_action_start"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/right_instance_hint"
-            app:ripple="true" />
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/right_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:singleLine="true"
+                android:text="@string/dsh_right_current_instance"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:use_theme_color="true" />
 
-        <com.tungsten.fcllibrary.component.view.FCLButton
-            android:id="@+id/right_btn_webui"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/dsh_action_open_webui"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/right_btn_start"
-            app:ripple="true" />
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/right_instance_name"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:ellipsize="end"
+                android:singleLine="true"
+                android:textSize="16sp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/right_title"
+                app:use_theme_color="true"
+                tools:text="dsh 0.1.5-rc.2" />
 
-    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/right_instance_hint"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textSize="12sp"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/right_instance_name"
+                app:use_theme_color="true"
+                tools:text="就绪 · 端口 3080" />
 
-    <!-- ===== 顶部动态岛标题 ===== -->
+            <com.tungsten.fcllibrary.component.view.FCLButton
+                android:id="@+id/right_btn_start"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/dsh_action_start"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/right_instance_hint"
+                app:ripple="true" />
+
+            <com.tungsten.fcllibrary.component.view.FCLButton
+                android:id="@+id/right_btn_webui"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/dsh_action_open_webui"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/right_btn_start"
+                app:ripple="true" />
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- ===== 内容区（夹在左菜单与右面板之间；FCL 为 match_parent 高度、无额外边距） ===== -->
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/ui_layout"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        app:layout_constraintEnd_toStartOf="@id/right_menu"
+        app:layout_constraintStart_toEndOf="@id/left_menu" />
+
+    <!-- ===== 动态岛标题（FCL 原位：底部居中 + 15dp 底边距） ===== -->
     <com.tungsten.fcllibrary.component.view.FCLDynamicIsland
         android:id="@+id/title"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:minWidth="120dp"
-        app:layout_constraintEnd_toEndOf="@id/ui_layout"
-        app:layout_constraintStart_toStartOf="@id/ui_layout"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <!-- ===== 内容区（在左菜单与右面板之间） ===== -->
-    <androidx.viewpager2.widget.ViewPager2
-        android:id="@+id/ui_layout"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="8dp"
+        android:layout_marginBottom="15dp"
+        android:stateListAnimator="@null"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toStartOf="@id/right_menu"
-        app:layout_constraintStart_toEndOf="@id/left_menu"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.5"
+        app:layout_constraintStart_toStartOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
