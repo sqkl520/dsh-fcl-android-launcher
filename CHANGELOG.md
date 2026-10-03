@@ -13,6 +13,31 @@
 
 ---
 
+## [Unreleased · 前端缺口 G5+G2：切页动画 + 关于页] - 2026-10-03
+
+> 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序开工。
+
+### Added
+- **关于页**（G2）：`DshAboutUI` + `ui_dsh_about.xml` + `item_dsh_about.xml` + `item_dsh_about_desc.xml`，
+  结构照搬 FCL `AboutPage`：顶部说明行 + 链接行合成一组（组首上圆角 / 组尾下圆角 / 中间无圆角，
+  行背景 tint 用主题浅色 `ltColor`），组内 1dp 缝隙 + 主题色分割线，说明行与链接组间 8dp
+  - 链接：项目仓库 / 基于 FoldCraftLauncher / proot 引擎(oonid/pr) / 许可证 GPL-3.0
+  - 恢复图标 `ic_baseline_jump_24`（FCL 关于页的"跳转"图标）
+- `DshFullPageDialog`：把任意 `DshPageUI` 全屏装进 FCL 对话框展示（创建时 `onCreate`、
+  关闭时 `destroy` 取消协程）。用途：在「页内多页 + 标签栏」（T3）落地前先承载关于页，
+  **T3 落地后同一个页面类直接作为设置子页复用，零返工**
+
+### Changed
+- `DshUIManager`：新增切页过渡动画（G5），与 FCL `UIManager.pageChangeCallback` 完全一致 ——
+  目标页 `alpha 0→1` + `translationY 30dp→0`、250ms；**同步执行不 post**（避免"先显示再消失"的闪烁）、
+  **仅在位置真的变化时播放**（布局变化重新 dispatch 当前页时不播）
+- 设置页「关于本启动器」由弹窗改为打开关于页
+
+### Notes
+- 验证：`run-compile.sh` 通过；单测 32/32（`dsh_about_desc` 占位符已登记）；本轮未打包
+
+---
+
 ## [Unreleased · 打包第二版（含首测反馈修复）] - 2026-10-03
 
 ### Changed

@@ -47,6 +47,9 @@ class DshUIManager(
 
     val count: Int get() = factories.size
 
+    /** 上一次真正选中的页（用于判断"位置是否真的变了"） */
+    private var lastSelectedPosition = -1
+
     fun init() {
         pager.adapter = Adapter()
         pager.orientation = ViewPager2.ORIENTATION_VERTICAL
@@ -56,8 +59,29 @@ class DshUIManager(
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
                 pageSelectedListener?.invoke(position)
+                playEnterTransition(position)
             }
         })
+    }
+
+    /**
+     * 切页过渡动画 —— 与 FCL 的 `UIManager.pageChangeCallback` 完全一致：
+     * 目标页 **淡入（alpha 0→1）+ 上滑（translationY 30dp→0）**，时长 250ms。
+     *
+     * 两个关键细节（照抄 FCL 的注释与做法）：
+     * 1. **同步执行、不 post**：`onPageSelected` 时页面已挂载但尚未绘制，此时置透明不会出现
+     *    "先显示再消失"的闪烁；
+     * 2. **只在位置真的变化时播放**：ViewPager2 在布局变化（软键盘弹出、页面内容刷新）后
+     *    会重新 dispatch 当前页，那种情况不播动画，否则页面会莫名闪一下。
+     */
+    private fun playEnterTransition(position: Int) {
+        if (position == lastSelectedPosition) return
+        lastSelectedPosition = position
+        val content = runCatching { getUI(position).contentView }.getOrNull() ?: return
+        content.animate().cancel()
+        content.alpha = 0f
+        content.translationY = content.resources.displayMetrics.density * 30f
+        content.animate().alpha(1f).translationY(0f).setDuration(250).start()
     }
 
     /** 切到指定页（瞬时，不滑动，避免途经页被创建） */

@@ -207,4 +207,15 @@
     <string name="dsh_logs_info">Showing %1$d of %2$d lines</string>
     <string name="dsh_logs_hidden">%1$d filtered out</string>
     <string name="dsh_logs_truncated">%1$d not shown</string>
+    <string name="dsh_about_desc">DeepSeek Harness FCL Android Launcher is an Android launcher for DeepSeek Harness (dsh), built on top of FoldCraftLauncher.
+
+It runs a Debian userland with Node.js inside proot on non-rooted devices, so dsh (a coding/chat agent) can run locally while models are served from the DeepSeek cloud API.
+
+Based on FCL (GPL-3.0), released under GPL-3.0 as well. The proot engine comes from oonid/pr.
+
+Version %1$s</string>
+    <string name="dsh_about_link_repo">Project repository</string>
+    <string name="dsh_about_link_fcl">Based on FoldCraftLauncher</string>
+    <string name="dsh_about_link_proot">proot engine (oonid/pr)</string>
+    <string name="dsh_about_link_license">License: GPL-3.0</string>
 </resources>

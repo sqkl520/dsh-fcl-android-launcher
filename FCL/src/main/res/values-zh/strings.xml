@@ -203,4 +203,15 @@
     <string name="dsh_logs_info">显示 %1$d / %2$d 行</string>
     <string name="dsh_logs_hidden">已隐藏 %1$d 行</string>
     <string name="dsh_logs_truncated">未显示 %1$d 行</string>
+    <string name="dsh_about_desc">DeepSeek Harness FCL Android Launcher 是 DeepSeek Harness（dsh）的安卓启动器，基于 FoldCraftLauncher 改造。
+
+它在未 root 的设备上通过 proot 运行 Debian 用户空间与 Node.js，从而在本地跑起 dsh（编码/对话 agent），模型走 DeepSeek 云端 API。
+
+本项目基于 FCL（GPL-3.0）改造，同样以 GPL-3.0 发布；proot 引擎来自 oonid/pr。
+
+版本 %1$s</string>
+    <string name="dsh_about_link_repo">项目仓库</string>
+    <string name="dsh_about_link_fcl">基于 FoldCraftLauncher</string>
+    <string name="dsh_about_link_proot">proot 引擎（oonid/pr）</string>
+    <string name="dsh_about_link_license">许可证：GPL-3.0</string>
 </resources>

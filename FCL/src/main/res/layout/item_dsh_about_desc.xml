@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 关于页「说明行」—— 照搬 FCL 的 item_about_desc.xml（一段可换行的说明文字） -->
+<com.tungsten.fcllibrary.component.view.FCLTextView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:padding="10dp"
+    app:auto_text_tint="true" />

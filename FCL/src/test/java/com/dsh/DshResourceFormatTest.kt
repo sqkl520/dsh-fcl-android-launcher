@@ -51,6 +51,7 @@ class DshResourceFormatTest {
 
         // DshSettingsUI（关于页）：%1$s = BuildConfig.VERSION_NAME
         "dsh_about_version" to arrayOf<Any>("0.1.0-SNAPSHOT"),
+        "dsh_about_desc" to arrayOf<Any>("0.1.0-SNAPSHOT"),
 
         // DshRuntime（注意 dsh_reason_start_timeout 传的是 Long：%d 接受 Long）
         "dsh_runtime_exited" to arrayOf<Any>(143),
