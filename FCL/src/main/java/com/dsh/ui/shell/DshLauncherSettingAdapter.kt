@@ -9,27 +9,32 @@ import androidx.recyclerview.widget.RecyclerView
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ItemDshSettingBinding
 import com.dsh.fcl.androidlauncher.databinding.ItemDshSettingGroupBinding
+import com.dsh.fcl.androidlauncher.databinding.ItemDshSettingIconsBinding
+import com.dsh.fcl.androidlauncher.databinding.ItemDshSettingSeekbarBinding
 import com.dsh.fcl.androidlauncher.databinding.ItemDshSettingSwitchBinding
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 
 /**
- * 启动器设置页适配器 —— 结构与 FCL 的 `LauncherSettingAdapter` 一致：
- * 扁平列表 + 分组（组内行紧贴成一块、组间 8dp 间距）、行高 48dp、
- * 位置感知圆角（top / middle / bottom，见 `bg_item_rounded*`）、
- * 行类型按设置项分派（按钮行 / 开关行）。
+ * 启动器设置页适配器 —— 行类型与结构与 FCL 的 `LauncherSettingAdapter` 对齐：
+ * 分组 + **按钮行 / 开关行 / 滑条行 / 多图标行**，行高 48dp，
+ * 位置感知圆角（`bg_item_rounded*`），组内紧贴、组间 8dp。
  *
- * 与 FCL 的差异仅为可读性所需：行背景按主题色 tint（FCL 原版为纯白卡片）。
+ * 与 FCL 的差异仅两点（可读性所需）：行背景按主题色 tint；组头用不显眼的小节标题。
  */
 class DshLauncherSettingAdapter(
     private val context: Context,
     private val onAction: (Row.Action) -> Unit,
     private val onSwitch: (Row.Switch, Boolean) -> Unit,
+    private val onSeek: (Row.SeekBar, Int) -> Unit,
+    private val onIcon: (Row.Icons, Int) -> Unit,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
         private const val TYPE_GROUP = 0
         private const val TYPE_ACTION = 1
         private const val TYPE_SWITCH = 2
+        private const val TYPE_SEEKBAR = 3
+        private const val TYPE_ICONS = 4
     }
 
     sealed class Row {
@@ -51,26 +56,63 @@ class DshLauncherSettingAdapter(
             val checked: () -> Boolean,
             val action: ActionType
         ) : Row()
+
+        /** 滑条行：FCLNumberSeekBar（FCL 原版用于动画速度、颜色透明度等） */
+        data class SeekBar(
+            val title: Int,
+            val description: Int,
+            val max: Int,
+            val value: () -> Int,
+            val suffix: String = "",
+            val action: ActionType
+        ) : Row()
+
+        /** 多图标行：最多 3 个图标动作（FCL 的「重置 / 从背景取色 / 设置」） */
+        data class Icons(
+            val title: Int,
+            val description: Int,
+            val icons: List<Int>,
+            val action: ActionType
+        ) : Row()
     }
 
     enum class ActionType {
+        // —— 按钮行 ——
         LANGUAGE,
         THEME_MODE,
         BACKGROUND,
-        ANIMATION_SPEED,
-        FULLSCREEN,
         RUNTIME_CHECK,
         OPEN_LOGS,
         OPEN_DOWNLOAD,
         OPEN_INSTANCE,
         EXPORT_LOGS,
-        ABOUT
+        ABOUT,
+        // —— 开关行 ——
+        FULLSCREEN,
+        // —— 滑条行 ——
+        ANIMATION_SPEED,
+        COLOR_ALPHA,
+        // —— 多图标行 ——
+        THEME_COLOR,
+        THEME_COLOR_DARK,
+        THEME_COLOR2,
+        THEME_COLOR2_DARK,
+        BACKGROUND_LT,
+        BACKGROUND_DK,
+    }
+
+    /** 多图标行的动作编号（0/1/2 = 第几个图标） */
+    object IconSlot {
+        const val FIRST = 0
+        const val SECOND = 1
+        const val THIRD = 2
     }
 
     private var rows: List<Row> = emptyList()
 
-    /** 重新构建列表（设置项定义集中在这里，便于与 FCL 的设置页逐项对照） */
+    /** 重新构建列表（设置项集中在这里，便于与 FCL 的设置页逐项对照） */
     fun rebuild() {
+        val theme = ThemeEngine.getInstance().getTheme()
         rows = listOf(
             Row.Group(R.string.dsh_setting_group_common),
             Row.Action(
@@ -87,13 +129,66 @@ class DshLauncherSettingAdapter(
                 R.string.dsh_setting_theme_mode, R.string.dsh_setting_theme_mode_desc,
                 R.string.dsh_action_open, ActionType.THEME_MODE
             ),
-            Row.Action(
-                R.string.dsh_setting_background, R.string.dsh_setting_background_desc,
-                R.string.dsh_action_open, ActionType.BACKGROUND
+            // FCL 的「主题色 / 暗色主题色 / 次要色 / 次要暗色」：一行三个图标动作
+            Row.Icons(
+                R.string.dsh_setting_theme, R.string.dsh_setting_theme_desc,
+                listOf(
+                    R.drawable.ic_baseline_restore_24,
+                    R.drawable.ic_baseline_palette_24,
+                    R.drawable.ic_baseline_edit_24
+                ),
+                ActionType.THEME_COLOR
             ),
-            Row.Action(
+            Row.Icons(
+                R.string.dsh_setting_theme_dark, R.string.dsh_setting_theme_dark_desc,
+                listOf(
+                    R.drawable.ic_baseline_restore_24,
+                    R.drawable.ic_baseline_palette_24,
+                    R.drawable.ic_baseline_edit_24
+                ),
+                ActionType.THEME_COLOR_DARK
+            ),
+            Row.Icons(
+                R.string.dsh_setting_theme2, R.string.dsh_setting_theme2_desc,
+                listOf(
+                    R.drawable.ic_baseline_restore_24,
+                    R.drawable.ic_baseline_edit_24
+                ),
+                ActionType.THEME_COLOR2
+            ),
+            Row.Icons(
+                R.string.dsh_setting_theme2_dark, R.string.dsh_setting_theme2_dark_desc,
+                listOf(
+                    R.drawable.ic_baseline_restore_24,
+                    R.drawable.ic_baseline_edit_24
+                ),
+                ActionType.THEME_COLOR2_DARK
+            ),
+            // FCL 的「颜色透明度」：0~255 滑条
+            Row.SeekBar(
+                R.string.dsh_setting_color_alpha, R.string.dsh_setting_color_alpha_desc,
+                255, { theme.colorAlpha }, "", ActionType.COLOR_ALPHA
+            ),
+            Row.Icons(
+                R.string.dsh_setting_background_lt, R.string.dsh_setting_background_lt_desc,
+                listOf(
+                    R.drawable.ic_baseline_restore_24,
+                    R.drawable.ic_baseline_edit_24
+                ),
+                ActionType.BACKGROUND_LT
+            ),
+            Row.Icons(
+                R.string.dsh_setting_background_dk, R.string.dsh_setting_background_dk_desc,
+                listOf(
+                    R.drawable.ic_baseline_restore_24,
+                    R.drawable.ic_baseline_edit_24
+                ),
+                ActionType.BACKGROUND_DK
+            ),
+            // FCL 用 0~10 档 SeekBar；这里保持同一字段与范围
+            Row.SeekBar(
                 R.string.dsh_setting_animation_speed, R.string.dsh_setting_animation_speed_desc,
-                R.string.dsh_action_open, ActionType.ANIMATION_SPEED
+                10, { theme.animationSpeed }, "", ActionType.ANIMATION_SPEED
             ),
             Row.Switch(
                 R.string.dsh_setting_fullscreen, R.string.dsh_setting_fullscreen_desc,
@@ -132,7 +227,7 @@ class DshLauncherSettingAdapter(
     fun isNextInSameGroup(position: Int): Boolean {
         val cur = rows.getOrNull(position) ?: return false
         val next = rows.getOrNull(position + 1) ?: return false
-        if (cur is Row.Group) return false      // 组头与其后的行之间用默认间距
+        if (cur is Row.Group) return false
         return next !is Row.Group
     }
 
@@ -144,12 +239,16 @@ class DshLauncherSettingAdapter(
     class GroupHolder(val binding: ItemDshSettingGroupBinding) : RecyclerView.ViewHolder(binding.root)
     class ActionHolder(val binding: ItemDshSettingBinding) : RecyclerView.ViewHolder(binding.root)
     class SwitchHolder(val binding: ItemDshSettingSwitchBinding) : RecyclerView.ViewHolder(binding.root)
+    class SeekBarHolder(val binding: ItemDshSettingSeekbarBinding) : RecyclerView.ViewHolder(binding.root)
+    class IconsHolder(val binding: ItemDshSettingIconsBinding) : RecyclerView.ViewHolder(binding.root)
 
     override fun getItemCount(): Int = rows.size
 
     override fun getItemViewType(position: Int): Int = when (rows[position]) {
         is Row.Group -> TYPE_GROUP
         is Row.Switch -> TYPE_SWITCH
+        is Row.SeekBar -> TYPE_SEEKBAR
+        is Row.Icons -> TYPE_ICONS
         else -> TYPE_ACTION
     }
 
@@ -158,6 +257,8 @@ class DshLauncherSettingAdapter(
         return when (viewType) {
             TYPE_GROUP -> GroupHolder(ItemDshSettingGroupBinding.inflate(inflater, parent, false))
             TYPE_SWITCH -> SwitchHolder(ItemDshSettingSwitchBinding.inflate(inflater, parent, false))
+            TYPE_SEEKBAR -> SeekBarHolder(ItemDshSettingSeekbarBinding.inflate(inflater, parent, false))
+            TYPE_ICONS -> IconsHolder(ItemDshSettingIconsBinding.inflate(inflater, parent, false))
             else -> ActionHolder(ItemDshSettingBinding.inflate(inflater, parent, false))
         }
     }
@@ -179,19 +280,52 @@ class DshLauncherSettingAdapter(
                 val b = (holder as SwitchHolder).binding
                 b.switchView.setText(row.title)
                 b.description.setText(row.description)
-                // 先解绑再设值，避免复用时的伪回调
                 b.switchView.setOnCheckedChangeListener(null)
                 b.switchView.isChecked = row.checked()
                 b.switchView.setOnCheckedChangeListener { _, checked -> onSwitch(row, checked) }
                 applyRowBackground(holder.itemView, position)
             }
+
+            is Row.SeekBar -> {
+                val b = (holder as SeekBarHolder).binding
+                b.title.setText(row.title)
+                b.description.setText(row.description)
+                b.seekBar.max = row.max
+                b.seekBar.setSuffix(row.suffix)
+                b.seekBar.setOnSeekBarChangeListener(null)
+                b.seekBar.progress = row.value()
+                b.seekBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (fromUser) onSeek(row, progress)
+                    }
+
+                    override fun onStartTrackingTouch(sb: android.widget.SeekBar?) = Unit
+                    override fun onStopTrackingTouch(sb: android.widget.SeekBar?) = Unit
+                })
+                applyRowBackground(holder.itemView, position)
+            }
+
+            is Row.Icons -> {
+                val b = (holder as IconsHolder).binding
+                b.title.setText(row.title)
+                b.description.setText(row.description)
+                val views = listOf(b.icon1, b.icon2, b.icon3)
+                views.forEachIndexed { slot, view ->
+                    val iconRes = row.icons.getOrNull(slot)
+                    if (iconRes == null) {
+                        view.visibility = View.GONE
+                    } else {
+                        view.visibility = View.VISIBLE
+                        view.setImageResource(iconRes)
+                        view.setOnClickListener { onIcon(row, slot) }
+                    }
+                }
+                applyRowBackground(holder.itemView, position)
+            }
         }
     }
 
-    /**
-     * 位置感知圆角 + 主题色 tint —— 与 FCL `LauncherSettingAdapter` 同款：
-     * 组内首行仅上圆角、末行仅下圆角、中间无圆角；单独一行则四角圆角。
-     */
+    /** 位置感知圆角 + 主题色 tint（与 FCL `LauncherSettingAdapter` 同款） */
     private fun applyRowBackground(view: View, position: Int) {
         val prevSame = isPrevInSameGroup(position)
         val nextSame = isNextInSameGroup(position)

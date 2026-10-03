@@ -220,4 +220,20 @@ Version %1$s</string>
     <string name="dsh_about_link_license">License: GPL-3.0</string>
     <string name="dsh_settings_tab_launcher">Launcher</string>
     <string name="dsh_about_tab">About</string>
+    <string name="color_picker_title">Pick a color</string>
+    <string name="color_picker_arrow">→</string>
+    <string name="dsh_setting_theme">Theme color</string>
+    <string name="dsh_setting_theme_desc">Main color used in light mode</string>
+    <string name="dsh_setting_theme_dark">Theme color (dark)</string>
+    <string name="dsh_setting_theme_dark_desc">Main color used in dark mode</string>
+    <string name="dsh_setting_theme2">Secondary color</string>
+    <string name="dsh_setting_theme2_desc">Accent color for text and highlights</string>
+    <string name="dsh_setting_theme2_dark">Secondary color (dark)</string>
+    <string name="dsh_setting_theme2_dark_desc">Accent color used in dark mode</string>
+    <string name="dsh_setting_color_alpha">Color opacity</string>
+    <string name="dsh_setting_color_alpha_desc">Opacity of derived theme colors</string>
+    <string name="dsh_setting_background_lt">Background (light)</string>
+    <string name="dsh_setting_background_lt_desc">Custom background used in light mode</string>
+    <string name="dsh_setting_background_dk">Background (dark)</string>
+    <string name="dsh_setting_background_dk_desc">Custom background used in dark mode</string>
 </resources>
