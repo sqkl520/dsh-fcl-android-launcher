@@ -55,6 +55,7 @@
 
 ### Added
 - 单测 +2：`reusesBrokenInstanceForSameVersion`、`reusesInstallingInstanceForSameVersion`（共 34 项）
+- `docs/design/setup-flow-and-task-area.md`：**首启前置页 + 首页任务区**的 mockup 方案（待确认后实现）
 
 ### Notes
 - 验证：`run-compile.sh` 通过；单测 **34/34**；本轮未打包
