@@ -49,7 +49,16 @@ class DshDownloadUI(
         binding.switchPrerelease.setOnCheckedChangeListener { _, checked ->
             viewModel.togglePrerelease(checked)
         }
-        binding.btnRefresh.setOnClickListener { viewModel.refresh(force = true) }
+        // ★ 刷新反馈：原来 `refresh()` 只在列表为空时才置 Loading，于是"已有数据时点刷新"
+        //   界面上毫无变化（真机反馈"右上角按钮无法刷新"）。这里自己维护刷新中状态：
+        //   刷新期间显示进度圈并禁用按钮，任何结果（Loaded/Error）都结束刷新态。
+        binding.btnRefresh.setOnClickListener {
+            if (refreshing) return@setOnClickListener
+            refreshing = true
+            binding.loading.visibility = View.VISIBLE
+            binding.btnRefresh.isEnabled = false
+            viewModel.refresh(force = true)
+        }
 
         scope.launch { viewModel.uiState.collect { render(it) } }
         scope.launch { viewModel.installingVersions.collect { adapter.submitInstalling(it) } }
@@ -68,6 +77,14 @@ class DshDownloadUI(
         viewModel.refresh()
     }
 
+    /** 是否正在刷新（用于反馈与防重复点击） */
+    private var refreshing = false
+
+    private fun endRefresh() {
+        refreshing = false
+        binding.btnRefresh.isEnabled = true
+    }
+
     private fun render(state: DshDownloadViewModel.UiState) {
         when (state) {
             is DshDownloadViewModel.UiState.Loading -> {
@@ -76,6 +93,7 @@ class DshDownloadUI(
                 binding.versionList.visibility = View.GONE
             }
             is DshDownloadViewModel.UiState.Loaded -> {
+                endRefresh()
                 binding.loading.visibility = View.GONE
                 binding.versionList.visibility = View.VISIBLE
                 adapter.submit(state.items)
@@ -87,6 +105,7 @@ class DshDownloadUI(
                 }
             }
             is DshDownloadViewModel.UiState.Error -> {
+                endRefresh()
                 binding.loading.visibility = View.GONE
                 binding.versionList.visibility = View.GONE
                 binding.errorHint.visibility = View.VISIBLE
@@ -118,24 +137,35 @@ class DshDownloadUI(
             val inst = dispatch.instance
             if (dispatch.started) {
                 toast(context.getString(R.string.dsh_install_started, item.version))
+                // ★ 只有**真的发起**了安装才弹「已开始安装」。
+                //   原来无条件弹：用户连点几次就排队弹出 N 个对话框（真机表现为"疯狂跳窗"）。
+                askOpenInstances(inst?.name ?: item.version)
             } else {
-                // 没有真的发起安装（该版本已装好 / 已有安装在跑）：别再说「正在安装」
+                // 没有真的发起安装（该版本已装好 / 已有安装在跑）：只提示，不弹窗
                 toast(context.getString(R.string.dsh_install_skipped, item.version))
             }
-            askOpenInstances(inst.name)
         }
     }
 
 
+    /** 已有一个"已开始安装"对话框时不重复弹（连点场景下避免叠窗） */
+    private var installDialogShowing = false
+
     private fun askOpenInstances(instanceName: String) {
+        if (installDialogShowing) return
+        installDialogShowing = true
         FCLAlertDialog.Builder(host.activity)
             .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
             .setTitle(context.getString(R.string.dsh_install_started_title))
             .setMessage(context.getString(R.string.dsh_install_started_message, instanceName))
             .setPositiveButton(context.getString(R.string.dsh_action_go_instances)) {
+                installDialogShowing = false
                 host.switchTab(DshShellHost.TAB_INSTANCES)
             }
-            .setNegativeButton(context.getString(R.string.dsh_action_stay), null)
+            .setNegativeButton(context.getString(R.string.dsh_action_stay)) {
+                installDialogShowing = false
+            }
+            .setCancelable(false)
             .create()
             .show()
     }

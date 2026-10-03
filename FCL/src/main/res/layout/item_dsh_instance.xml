@@ -2,9 +2,9 @@
 <!--
   实例列表的一行 —— **照搬 FCL 的 item_profile.xml 范式**（实例列表 ↔ FCL 的「档案列表」是同一个位置）：
     外层 ConstraintLayout → 内层 clickable/focusable 容器
-      background = @drawable/bg_container_transparent_clickable（透明 + 按压高亮，不是白卡片）
+      background = @drawable/bg_container_white_clickable（白色可点击卡片，与下载页版本卡片一致）
       padding = 10dp，stateListAnimator = @xml/anim_scale（按压缩放反馈）
-    文字用 FCLTextView + app:use_theme_color（FCL 列表行的取色方式）
+    文字用 FCLTextView + app:auto_text_tint（与卡片底自动对比）
   内容：名称 + 版本/端口/状态 + 体积 + 安装阶段/进度 + 失败原因 + 启动/更多。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -17,11 +17,12 @@
         android:id="@+id/parent"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@drawable/bg_container_transparent_clickable"
+        android:background="@drawable/bg_container_white_clickable"
         android:clickable="true"
         android:focusable="true"
         android:padding="10dp"
         android:stateListAnimator="@xml/anim_scale"
+        app:auto_tint="true"
         app:layout_constraintTop_toTopOf="parent">
 
         <com.tungsten.fcllibrary.component.view.FCLTextView
@@ -35,7 +36,7 @@
             app:layout_constraintEnd_toStartOf="@id/btn_start"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent"
-            app:use_theme_color="true"
+            app:auto_text_tint="true"
             tools:text="dsh 0.1.5-rc.2" />
 
         <com.tungsten.fcllibrary.component.view.FCLTextView
@@ -53,7 +54,7 @@
             app:layout_constraintEnd_toStartOf="@id/btn_start"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/name"
-            app:use_theme_color="true"
+            app:auto_text_tint="true"
             tools:text="版本 0.1.5-rc.2 · 端口 3080 · 就绪" />
 
         <com.tungsten.fcllibrary.component.view.FCLTextView
@@ -66,7 +67,7 @@
             app:layout_constraintEnd_toStartOf="@id/btn_start"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/subtitle"
-            app:use_theme_color="true"
+            app:auto_text_tint="true"
             tools:text="312.4 MB" />
 
         <!-- 安装阶段文案（仅安装中可见） -->
@@ -81,7 +82,7 @@
             app:layout_constraintEnd_toStartOf="@id/btn_start"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/size"
-            app:use_theme_color="true"
+            app:auto_text_tint="true"
             tools:text="安装 @deepseek-ai/dsh@0.1.5-rc.2…" />
 
         <!-- FCL 的进度条形态：3dp 细条 + bg_progress_indeterminate 的动画 -->

@@ -12,15 +12,15 @@
     android:paddingTop="10dp"
     android:paddingEnd="12dp">
 
-    <com.tungsten.fcllibrary.component.view.FCLImageButton
+    <!-- 刷新：按 FCL 图标按钮规范（FCLImageView + background 图标 + padding 0 + use_theme_color） -->
+    <com.tungsten.fcllibrary.component.view.FCLImageView
         android:id="@+id/btn_refresh"
         android:layout_width="28dp"
         android:layout_height="28dp"
-        android:src="@drawable/ic_baseline_refresh_24"
-        android:stateListAnimator="@xml/anim_scale_large"
+        android:background="@drawable/ic_baseline_refresh_24"
+        android:padding="0dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent"
-        app:no_padding="true"
         app:use_theme_color="true" />
 
     <com.tungsten.fcllibrary.component.view.FCLSwitch

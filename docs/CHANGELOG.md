@@ -13,6 +13,55 @@
 
 ---
 
+## [Unreleased · 真机二测问题修复（DNS / 防重复 / FCL 规范控件 / 状态误判）] - 2026-10-04
+
+> 来源：真机第二次实测（安装 dsh 全部失败 + 连点安装疯狂弹窗 + 一堆"损坏"实例 + UI 细节）。
+
+### Fixed
+- **【阻塞级】guest 内 DNS 解析失败导致 `npm install` 必然失败**（`EAI_AGAIN / getaddrinfo`）：
+  新增 `DshDns`，在每次走 proot 之前把宿主 DNS 写进 rootfs 的 `/etc/resolv.conf`
+  （Android 无 `/etc/resolv.conf`，原实现的 bind 列表里也没有任何 DNS 注入）；
+  取不到系统 DNS 时回退公共 DNS，并写入 `options timeout:2 attempts:3`
+- **连点安装 → 疯狂弹窗 + 堆损坏实例**：
+  - `installVersion()` 开头加**同版本单飞**：已在安装的版本直接拒绝（原来会走完整流程 N 次）
+  - `Progress.Failed` 增加 `version` 字段；ViewModel **只移除本次失败的那个版本**
+    （原来 `emptySet()` 会清空全部"安装中"，其它安装也随之解禁）
+  - 下载页「已开始安装」对话框**只在真的发起安装时弹**，并加"同时只弹一个"守卫
+  - `chooseInstanceToInstall()` 放宽：**同版本但未成功（BROKEN / INSTALLING）→ 复用同一实例重试**
+    （原来只认 READY 与空壳，失败后再点就新建实例）
+  - `DshInstaller.install()` 开始时把**目标版本**写进实例（失败实例因此能被"同版本重试"复用）
+- **状态误判：安装失败却显示"就绪"，卡片同时出现两个版本号（标题 0.2.1 / 副标题 0.1.6 / 239 B）**：
+  `DshInstances.repair()` 改为区分「实例自己的 node_modules」与「rootfs 预装」——
+  只有当**请求版本恰好等于预装版本**时，预装才算该实例的 dsh（原来无条件回退到预装）
+- **"进度条突然消失 + 只显示'rootfs 未就绪'"**：任务结束后横幅无条件写 `missingSummary()`，
+  把 `Progress.Failed` 的真实原因覆盖了；现在失败时显示真实原因，并清掉残留的进度明细行
+
+### Changed
+- **图标按钮改为 FCL 规范**（原来用 `FCLImageButton + android:src + anim_scale_large`，属自创）：
+  日志页工具行、下载页刷新按钮统一改成 `FCLImageView + android:background=图标 + padding=0dp + use_theme_color`，
+  **去掉 `stateListAnimator`**（FCL 的页内图标按钮不设，`anim_scale_large` 是列表卡片放大 1.5 倍的做法）
+- 日志页「自动滚动」开关改为独占一行的 `FCLSwitch`（FCL 开关行都是 `match_parent` 一行），
+  工具栏不再混排"文字按钮 / 带文字开关 / 图标按钮"
+- **恢复 FCL 的选项对话框 `ItemSelectionDialog`**（+ `com/mio/ui/DialogCard.kt`、`item_text.xml`、
+  `dialog_item_selection.xml`、`ic_baseline_list_24`、`bg_container_white_clickable`），
+  语言 / 主题模式 / 日志级别筛选改用它；**删除自创的 `DshOptionDialog`**
+  （它用 `autoTint` 在浅色对话框底上涂白字，正是"文字几乎看不见"的原因）
+- **统一列表卡片配色**：实例卡片由透明可点击底改为 `bg_container_white_clickable + auto_tint`
+  （与下载页版本卡片一致；文字由 `use_theme_color` 改为 `auto_text_tint`）
+- **下载页刷新反馈**：刷新期间显示进度并禁用刷新按钮（原来已有数据时点了毫无反馈）
+- **版本卡片体积文案**：去掉误导性的"安装后约 300MB"；改为按是否命中预装区分
+  （命中 → "运行时已内置，无需下载"；否则 → "安装后约 500MB（含依赖）"，实测 `/opt/dsh/app` = 499MB）
+- 损坏实例的主按钮变为**「重试」**（直接重装同版本），不必再翻「更多 → 重装」
+
+### Added
+- 单测 +2：`reusesBrokenInstanceForSameVersion`、`reusesInstallingInstanceForSameVersion`（共 34 项）
+
+### Notes
+- 验证：`run-compile.sh` 通过；单测 **34/34**；本轮未打包
+- 首页"进行中任务区"与"首启前置页"两个新需求**尚未实现**，正在出 mockup 方案（见 `docs/TASKS.md`）
+
+---
+
 ## [Unreleased · 前端缺口 G4：图片选择（背景图 / 从背景取色）] - 2026-10-03
 
 > 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序，最后一项（G5→G2→G1→G3→G4）。
