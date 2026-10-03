@@ -13,6 +13,31 @@
 
 ---
 
+## [Unreleased · 前端 vs FCL 对照审查] - 2026-10-03
+
+### Added
+- `docs/reports/frontend-gap-vs-fcl.md`：前端与 FCL 原版（基线 `647919c`）的逐项对照报告，
+  含结构性缺口、组件/资源缺口清单、动画对照、有意保留的差异与建议实施顺序
+- `docs/TASKS.md` 依对照结果重排（T1~T14）
+
+### Notes
+- 对照结论：结构性缺 4 项 ——
+  **G1 页内多页容器 + 标签栏**（`FCLPage`/`FCLMultiPageUI`/`FCLUILayout`，缺失；
+  导致设置页无法像 FCL 那样分「启动器设置/插件管理/关于」子页）、
+  **G2 关于页**（FCL 有独立 `AboutPage` + `item_about*`，我们只有弹窗）、
+  **G3 主题自定义整套资源**（`FCLColorPickerDialog`/`ColorPickerView`/`AlphaPatternDrawable`/
+  `FCLNumberSeekBar` 等缺失 → 主题色/次要色/透明度/背景图都做不了）、
+  **G4 文件/图片选择**（`browser/` 整包在阶段 4 被删 → 背景图无选择器）
+- 另：G5 切页动画缺失 —— FCL 在 `UIManager.onPageSelected` 做「淡入 + 上滑 30dp / 250ms」，
+  且只在位置真变时播放；我们的 ViewPager 配置已一致但无过渡动画
+- 资源层：drawable FCL 112 → 我们 32（缺的多为 MC 图标，通用清单已列）；anim 6 → 4
+  （缺 `frag_start_anim`/`frag_stop_anim`）；`values/` 5 个文件齐全，**样式层不缺**
+- 已确认**不是**缺口的：ViewPager 配置（垂直/禁手势/不预加载/不保存）、动态岛 `setTextWithAnim`、
+  基础控件（`FCLMenuView`/`FCLDynamicIsland`/`FCLSpinner`/`FCLSwitch`/`FCLProgressBar`/`FCLImageButton`/`FCLTabLayout`）
+- 本轮仅文档与任务清单，未改代码；未打包
+
+---
+
 ## [Unreleased · 真机首测反馈修复（进度可见性 / 设置页 / 图标 / 日志页）] - 2026-10-03
 
 > 来源：APK 安装后用户实测反馈 5 条。
