@@ -13,6 +13,22 @@
 
 ---
 
+## [Unreleased · 打包第二版（含首测反馈修复）] - 2026-10-03
+
+### Changed
+- 重新打包 `dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`（312MB），
+  内容包含本轮「进度可见性 / 设置页照搬 FCL / 移除冗余图标 / 日志页重做」的全部修复
+- APK SHA-256：`e61a5939279985b7b2ade103555927250616e3301a2d72baeca6158b710c2b00`
+
+### Notes
+- 包内核验：`assets/dsh/rootfs/rootfs.tar.xz` 299.8MB（STORED）；
+  `lib/arm64-v8a/` 含 `libproot.so`、`libproot-loader.so`、`libbusybox.so`、`libptyjni.so`；
+  dex 内含新增类（`DshOptionDialog`、`DshLauncherSettingAdapter`、`TarLinkPolicy`、`SpacingItemDecoration`）
+- 签名与上一版相同（debug key `FCL-Debug`），可直接覆盖安装
+- 归档：`apk-archive/0.1.0-SNAPSHOT/`（APK 本体不入 Git，仅 SHA256SUMS）
+
+---
+
 ## [Unreleased · 前端 vs FCL 对照审查] - 2026-10-03
 
 ### Added
