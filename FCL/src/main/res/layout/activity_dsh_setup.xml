@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  首启「准备运行环境」页（一次性）。
+  设计目标：观感与 FCL 一致 —— 带主题背景图 + 白卡片 + 主题色进度条 + 分组清单，
+  所有控件走 fcllibrary + ThemeEngine（不用 Material）。
+
+  结构：
+    background(根, transitionName) / bg_cover(主题背景图) / bg_scrim(压暗层)
+    └ ScrollView（居中、限宽）
+        ├ 品牌区：应用名 + 副标题
+        ├ 主进度卡 progress_card：状态图标 + 标题 + 百分比 + 进度条 + 当前步骤 + 明细
+        ├ 准备项清单 step_list（代码里按位置圆角拼成一组）
+        └ 底部按钮行：查看日志 / 重试 / 重新开始
+-->
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:transitionName="background">
+
+    <!-- 主题背景图（与主外壳同一张；亮暗由 ThemeEngine 决定） -->
+    <ImageView
+        android:id="@+id/bg_cover"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:scaleType="centerCrop"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- 压暗层：保证白卡片/文字在任意背景上都能看清 -->
+    <View
+        android:id="@+id/bg_scrim"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="#59000000"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <ScrollView
+        android:id="@+id/content_scroll"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clipToPadding="false"
+        android:fillViewport="true"
+        android:paddingTop="24dp"
+        android:paddingBottom="24dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:paddingStart="40dp"
+            android:paddingEnd="40dp">
+
+            <!-- ===== 品牌区 ===== -->
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/app_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="@string/dsh_setup_brand"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                app:auto_text_tint="true" />
+
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/app_subtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:alpha="0.85"
+                android:gravity="center"
+                android:text="@string/dsh_about_subtitle"
+                android:textSize="13sp"
+                app:auto_text_tint="true" />
+
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/setup_hint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:alpha="0.7"
+                android:gravity="center"
+                android:text="@string/dsh_setup_hint_space"
+                android:textSize="12sp"
+                app:auto_text_tint="true" />
+
+            <!-- ===== 主进度卡 ===== -->
+            <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+                android:id="@+id/progress_card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="22dp"
+                android:background="@drawable/bg_container_white"
+                android:padding="20dp"
+                app:auto_tint="true">
+
+                <com.tungsten.fcllibrary.component.view.FCLImageView
+                    android:id="@+id/state_icon"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:padding="0dp"
+                    android:src="@drawable/ic_baseline_download_24"
+                    app:layout_constraintBottom_toBottomOf="@id/progress_title"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toTopOf="@id/progress_title"
+                    app:use_theme_color="true" />
+
+                <com.tungsten.fcllibrary.component.view.FCLTextView
+                    android:id="@+id/progress_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:singleLine="true"
+                    android:text="@string/dsh_setup_title"
+                    android:textSize="17sp"
+                    android:textStyle="bold"
+                    app:auto_text_tint="true"
+                    app:layout_constraintEnd_toStartOf="@id/progress_percent"
+                    app:layout_constraintStart_toEndOf="@id/state_icon"
+                    app:layout_constraintTop_toTopOf="parent" />
+
+                <com.tungsten.fcllibrary.component.view.FCLTextView
+                    android:id="@+id/progress_percent"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="17sp"
+                    android:textStyle="bold"
+                    app:layout_constraintBaseline_toBaselineOf="@id/progress_title"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:use_theme_color="true" />
+
+                <com.tungsten.fcllibrary.component.view.FCLProgressBar
+                    android:id="@+id/progress_bar"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="0dp"
+                    android:layout_height="8dp"
+                    android:layout_marginTop="14dp"
+                    android:max="1000"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toBottomOf="@id/progress_title" />
+
+                <com.tungsten.fcllibrary.component.view.FCLTextView
+                    android:id="@+id/progress_stage"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:textSize="13sp"
+                    app:auto_text_tint="true"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toBottomOf="@id/progress_bar" />
+
+                <com.tungsten.fcllibrary.component.view.FCLTextView
+                    android:id="@+id/progress_detail"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:alpha="0.65"
+                    android:ellipsize="middle"
+                    android:fontFamily="monospace"
+                    android:singleLine="true"
+                    android:textSize="11sp"
+                    android:visibility="gone"
+                    app:auto_text_tint="true"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toBottomOf="@id/progress_stage" />
+
+            </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+
+            <!-- ===== 准备项清单（行由代码 inflate 后按位置圆角拼成一组） ===== -->
+            <LinearLayout
+                android:id="@+id/step_list"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:orientation="vertical" />
+
+            <!-- ===== 底部按钮行 ===== -->
+            <LinearLayout
+                android:id="@+id/button_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:gravity="end"
+                android:orientation="horizontal">
+
+                <com.tungsten.fcllibrary.component.view.FCLButton
+                    android:id="@+id/btn_logs"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:minWidth="0dp"
+                    android:text="@string/dsh_setup_view_logs"
+                    app:ripple="true" />
+
+                <com.tungsten.fcllibrary.component.view.FCLButton
+                    android:id="@+id/btn_retry"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:minWidth="0dp"
+                    android:text="@string/dsh_action_retry"
+                    android:visibility="gone"
+                    app:ripple="true" />
+
+                <com.tungsten.fcllibrary.component.view.FCLButton
+                    android:id="@+id/btn_restart"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:minWidth="0dp"
+                    android:text="@string/dsh_setup_restart"
+                    app:ripple="true" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

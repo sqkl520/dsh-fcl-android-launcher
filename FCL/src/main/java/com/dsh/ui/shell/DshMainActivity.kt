@@ -180,9 +180,7 @@ class DshMainActivity : FCLActivity(), DshShellHost {
                     scope = scope,
                     onOpenSettings = { openInstanceSettings(it.id) },
                     onOpenLogs = { switchTab(DshShellHost.TAB_LOGS) },
-                    onPrepareRuntime = {
-                        DshLauncher.prepareRuntime(this, DshLauncher.OWNER_SHELL_PANEL)
-                    },
+                    onPrepareRuntime = { DshLauncher.openSetup(this) },
                     onStarted = { openWebView() }
                 )
             }

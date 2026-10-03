@@ -337,6 +337,7 @@ class DshLauncherSettingAdapter(
             else -> R.drawable.bg_item_rounded
         }
         view.setBackgroundResource(bg)
-        view.backgroundTintList = ColorStateList.valueOf(ThemeEngine.getInstance().getTheme().color)
+        // 与 FCL 的 LauncherSettingAdapter 一致：行底用「提亮后的主题色」(ltColor)
+        view.backgroundTintList = ColorStateList.valueOf(ThemeEngine.getInstance().getTheme().ltColor)
     }
 }

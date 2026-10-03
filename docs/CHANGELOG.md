@@ -13,6 +13,46 @@
 
 ---
 
+## [Unreleased · 首启前置页 + 首页任务区（用户新需求）] - 2026-10-04
+
+> 需求：①前置都放到第一次启动的一次性卡片页，装好再进首页；②首页改成"进行中任务"区域，
+> 所有正在运行的任务都要显示，并按 FCL 的 UI 来做。
+> 决策（用户确认）：**删掉旧横幅**、**不提供跳过**、**要准备项清单且观感至少达到 FCL 水准**。
+
+### Added
+- **首启「准备运行环境」页** `DshSetupActivity` + `activity_dsh_setup.xml` + `item_dsh_setup_step.xml`：
+  主题背景图 + 压暗层 + 品牌区 + 主进度卡（状态图标/标题/百分比/进度条/当前步骤/明细）
+  + **准备项清单**（proot / 启动脚本 / rootfs / 运行时自检，按位置圆角拼成一组）+ 底部按钮
+  - 进入即自动开始；准备完成前**不进主外壳**（`SplashActivity` 按 `dsh_setup_completed` 门禁分流）
+  - 失败**停在本页**并显示真实原因，露出「重试」；「重新开始」删版本标记强制重解压
+  - 「查看日志」就地弹窗看最近日志（**不**作为"跳过"通道）
+  - 就绪后自动跑一次运行时自检（probe），通过才进首页
+- **首页任务区**：`DshTasks` 聚合器 + `view_dsh_task_row.xml`（照 FCL `item_download_task.xml`：
+  标题 + 3dp 进度条 + 右侧 22dp 图标按钮），聚合四类任务：
+  解压运行环境（`DshBootstrap`）/ 安装 dsh（`DshInstaller`）/ 启停（`DshRuntime`）/ 删除（`DshInstances`）；
+  无任务时整块隐藏；安装与启动可取消
+- `ic_baseline_done_24`、`ic_baseline_close_24`（FCL 图标）
+
+### Changed
+- **移除首页「运行时底座未就绪」横幅**及其全部代码（`view_dsh_bootstrap_banner.xml` 一并删除）——
+  职责由「首启前置页（未就绪时）+ 首页任务区（进行中时）」承担，避免同一件事两处显示、
+  以及失败原因被 `missingSummary()` 覆盖的老问题
+- `DshLauncher` 去掉 `prepareRuntime` / `ensureRuntimeReady` / `OWNER_*`，改为 `openSetup()`：
+  底座没就绪统一跳前置页（不再就地解压 + 弹对话框）
+- `DshDownloadUI.onInstall`：底座未就绪 → 跳前置页并中止本次安装
+- 行底取色对齐 FCL：清单行与设置行统一用 **`ltColor`**（提亮后的主题色，FCL 的
+  `LauncherSettingAdapter` 即如此），避免 `auto_text_tint` 的浅色文字落在纯白行底上看不见
+- `FCLApp.onCreate` 初始化 `DshAppContextHolder` 与 `DshTasks`
+
+### Removed
+- 死资源/死文案：`view_dsh_bootstrap_banner.xml`、`dsh_bootstrap_missing` / `_extracting` /
+  `_done` / `_ready` / `_failed_title` / `dsh_bootstrap_failed`（均已被新页面取代）
+
+### Notes
+- 验证：`run-compile.sh` 通过；单测 34/34；本轮未打包
+
+---
+
 ## [Unreleased · 真机二测问题修复（DNS / 防重复 / FCL 规范控件 / 状态误判）] - 2026-10-04
 
 > 来源：真机第二次实测（安装 dsh 全部失败 + 连点安装疯狂弹窗 + 一堆"损坏"实例 + UI 细节）。

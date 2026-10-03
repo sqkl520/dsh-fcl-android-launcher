@@ -37,8 +37,6 @@ class DshResourceFormatTest {
         "dsh_state_failed" to arrayOf<Any>("boom"),
 
         // DshBootstrap / DshInstancesActivity
-        "dsh_bootstrap_missing" to arrayOf<Any>("rootfs 未就绪"),
-        "dsh_bootstrap_failed" to arrayOf<Any>("no space left on device"),
 
         // DshSettingsActivity
         "dsh_settings_version" to arrayOf<Any>("0.1.5-rc.2"),

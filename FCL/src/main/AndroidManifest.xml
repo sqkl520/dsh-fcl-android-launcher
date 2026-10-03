@@ -42,6 +42,13 @@
             </intent-filter>
         </activity>
 
+        <!-- 首启「准备运行环境」页（一次性前置）：准备完成前不进主外壳 -->
+        <activity
+            android:name="com.dsh.ui.setup.DshSetupActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
+            android:screenOrientation="sensorLandscape"
+            tools:ignore="LockedOrientationActivity" />
+
         <!-- DeepSeek Harness (dsh) 启动器主外壳：左侧菜单 + ViewPager2 五页 + 右侧面板 -->
         <activity
             android:name="com.dsh.ui.shell.DshMainActivity"

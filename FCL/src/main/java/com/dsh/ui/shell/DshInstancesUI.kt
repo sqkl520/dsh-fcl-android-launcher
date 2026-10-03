@@ -4,7 +4,8 @@ import android.content.Context
 import android.view.View
 import android.widget.Toast
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.dsh.core.DshBootstrap
+import com.dsh.core.DshTask
+import com.dsh.core.DshTasks
 import com.dsh.core.DshCredentials
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
@@ -55,101 +56,74 @@ class DshInstancesUI(
         binding.instanceList.layoutManager = LinearLayoutManager(context)
         binding.instanceList.adapter = adapter
 
-        binding.bootstrapBanner.btnPrepareRuntime.setOnClickListener { prepareRuntime() }
-
         observeState()
-        observeBootstrap()
+        observeTasks()
         maybeAdoptOrphan()
     }
 
     /**
-     * 订阅底座解压进度。
+     * 订阅「进行中任务」并渲染任务区。
      *
-     * ★ 修的问题：原来进度只显示在一个「不可取消的对话框」里，而解压任务跑在**页面级协程**上——
-     * 一旦切页/页面被 ViewPager 回收，协程被 cancel，对话框就再也不刷新（看起来卡死），
-     * 用户再点一次还会撞上互斥只得到「已有解压任务在进行」。
-     * 现在任务在进程级作用域（[com.dsh.core.DshAppScope]）里跑，进度经 StateFlow 暴露，
-     * 页面只负责渲染横幅 —— 切页/回来都不会丢进度。
+     * 首页要把**所有正在跑的任务**集中显示（解压运行环境 / 安装 dsh / 启动 / 删除）——
+     * 它们分散在四个模块里，统一由 [com.dsh.core.DshTasks] 聚合，这里只负责画。
+     * 无任务时整块隐藏。
      */
-    private fun observeBootstrap() {
-        // 进度：阶段文字 + 明细 + 进度条
+    private fun observeTasks() {
         scope.launch {
-            DshBootstrap.progress.collect { p -> renderBootstrapProgress(p) }
-        }
-        // 忙闲：解压中隐藏按钮，避免重复触发
-        scope.launch {
-            DshBootstrap.busy.collect { busy ->
-                binding.bootstrapBanner.btnPrepareRuntime.visibility =
-                    if (busy) View.GONE else View.VISIBLE
-                if (busy) binding.bootstrapBanner.root.visibility = View.VISIBLE
-            }
-        }
-        // 就绪状态（任务结束后刷新一次）
-        scope.launch {
-            DshBootstrap.busy.collect { busy ->
-                if (!busy) refreshBootstrapBanner()
-            }
+            DshTasks.tasks.collect { renderTasks(it) }
         }
     }
 
-    private fun renderBootstrapProgress(p: DshBootstrap.Progress?) {
-        val banner = binding.bootstrapBanner
-        if (p == null) return
-        banner.root.visibility = View.VISIBLE
-        when (p) {
-            is DshBootstrap.Progress.Stage -> {
-                banner.bannerText.text = p.text
-                val f = p.fraction
-                if (f != null) {
-                    banner.bannerProgress.visibility = View.VISIBLE
-                    banner.bannerProgress.isIndeterminate = false
-                    banner.bannerProgress.progress = (f * 1000).toInt().coerceIn(0, 1000)
-                } else {
-                    banner.bannerProgress.visibility = View.VISIBLE
-                    banner.bannerProgress.isIndeterminate = true
+    private fun renderTasks(tasks: List<DshTask>) {
+        binding.taskArea.visibility = if (tasks.isEmpty()) View.GONE else View.VISIBLE
+        binding.taskList.removeAllViews()
+        if (tasks.isEmpty()) return
+
+        val inflater = android.view.LayoutInflater.from(context)
+        tasks.forEach { task ->
+            val row = com.dsh.fcl.androidlauncher.databinding.ViewDshTaskRowBinding
+                .inflate(inflater, binding.taskList, false)
+
+            row.taskTitle.text = taskTitle(task)
+
+            val f = task.fraction
+            if (f == null) {
+                row.taskProgress.isIndeterminate = true
+            } else {
+                row.taskProgress.isIndeterminate = false
+                row.taskProgress.progress = (f * 1000).toInt().coerceIn(0, 1000)
+            }
+
+            if (task.detail.isNullOrEmpty()) {
+                row.taskDetail.visibility = View.GONE
+            } else {
+                row.taskDetail.visibility = View.VISIBLE
+                row.taskDetail.text = task.detail
+            }
+
+            when (task.action) {
+                DshTask.Action.NONE -> row.taskAction.visibility = View.GONE
+                DshTask.Action.CANCEL -> {
+                    row.taskAction.visibility = View.VISIBLE
+                    row.taskAction.setImageResource(R.drawable.ic_baseline_close_24)
+                    row.taskAction.contentDescription = context.getString(R.string.dsh_tasks_cancel)
+                    row.taskAction.setOnClickListener { DshTasks.cancel(task) }
+                }
+                DshTask.Action.STOP -> {
+                    row.taskAction.visibility = View.VISIBLE
+                    row.taskAction.setImageResource(R.drawable.ic_baseline_close_24)
+                    row.taskAction.contentDescription = context.getString(R.string.dsh_tasks_stop)
+                    row.taskAction.setOnClickListener { DshTasks.cancel(task) }
                 }
             }
-            is DshBootstrap.Progress.Detail -> {
-                banner.bannerDetail.visibility = View.VISIBLE
-                banner.bannerDetail.text = p.detail
-            }
-            is DshBootstrap.Progress.Failed -> {
-                banner.bannerText.text = context.getString(R.string.dsh_bootstrap_failed_title)
-                banner.bannerDetail.visibility = View.VISIBLE
-                banner.bannerDetail.text = p.reason
-                banner.bannerProgress.visibility = View.GONE
-            }
-            DshBootstrap.Progress.Done -> {
-                banner.bannerProgress.visibility = View.GONE
-                banner.bannerDetail.visibility = View.GONE
-            }
+            binding.taskList.addView(row.root)
         }
     }
 
-    /** 就绪时隐藏横幅；未就绪时显示缺口说明；**失败时显示真实原因**（而不是笼统的"未就绪"） */
-    private fun refreshBootstrapBanner() {
-        scope.launch {
-            val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
-            val banner = binding.bootstrapBanner
-            banner.root.visibility = if (ready) View.GONE else View.VISIBLE
-            if (ready) return@launch
-
-            val p = DshBootstrap.currentProgress()
-            if (p is DshBootstrap.Progress.Failed) {
-                // ★ 真机踩过：任务一结束（busy=false）这里就无条件写"未就绪"，
-                //   把 Progress.Failed 里的**真实失败原因**覆盖掉了 —— 用户永远看不到为什么失败。
-                banner.bannerText.text = context.getString(R.string.dsh_bootstrap_failed_title)
-                banner.bannerDetail.visibility = View.VISIBLE
-                banner.bannerDetail.text = p.reason
-            } else {
-                banner.bannerText.text =
-                    context.getString(R.string.dsh_bootstrap_missing, DshBootstrap.missingSummary() ?: "")
-                // ★ 明细行显示的是"最后处理的文件名"，必须清掉，否则残留下来会被误当成错误信息
-                banner.bannerDetail.text = ""
-                banner.bannerDetail.visibility = View.GONE
-            }
-            banner.bannerProgress.visibility = View.GONE
-        }
+    /** 任务标题：运行环境用固定文案，其余用「实例名 · 阶段」 */
+    private fun taskTitle(task: DshTask): String = when (task.kind) {
+        DshTask.Kind.BOOTSTRAP -> context.getString(R.string.dsh_task_bootstrap)
+        else -> listOf(task.title, task.stage).filter { it.isNotBlank() }.joinToString(" · ")
     }
 
     private fun observeState() {
@@ -180,7 +154,6 @@ class DshInstancesUI(
         scope.launch {
             DshRuntime.state.collect { st -> notifyIfNeeded(st) }
         }
-        scope.launch { refreshBootstrapBanner() }
     }
 
     private fun notifyIfNeeded(st: DshRuntime.State) {
@@ -242,21 +215,9 @@ class DshInstancesUI(
             scope = scope,
             onOpenSettings = { host.openInstanceSettings(it.id) },
             onOpenLogs = { host.switchTab(DshShellHost.TAB_LOGS) },
-            onPrepareRuntime = { prepareRuntime() },
+            onPrepareRuntime = { DshLauncher.openSetup(host.activity) },
             onStarted = { host.openWebView() }
         )
-    }
-
-    private fun prepareRuntime() {
-        DshLauncher.prepareRuntime(
-            activity = host.activity,
-            owner = DshLauncher.OWNER_INSTANCE_PAGE
-        ) { ready ->
-            if (ready) {
-                Toast.makeText(context, R.string.dsh_bootstrap_ready, Toast.LENGTH_SHORT).show()
-            }
-            refreshBootstrapBanner()
-        }
     }
 
     private fun reinstall(inst: DshInstance) {

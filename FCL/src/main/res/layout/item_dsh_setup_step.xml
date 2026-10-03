@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  首启前置页的「准备项」行：状态图标 + 名称 + 状态文字。
+  行背景由代码按位置设置（组首上圆角 / 组尾下圆角 / 中间无圆角），
+  与 FCL 分组列表的做法一致。
+-->
+<androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="52dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp">
+
+    <com.tungsten.fcllibrary.component.view.FCLImageView
+        android:id="@+id/step_icon"
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:padding="0dp"
+        app:use_theme_color="true"
+        tools:src="@drawable/ic_baseline_done_24" />
+
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/step_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="14dp"
+        android:layout_weight="1"
+        android:singleLine="true"
+        android:textSize="14sp"
+        app:auto_text_tint="true"
+        tools:text="Linux rootfs" />
+
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/step_state"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:singleLine="true"
+        android:textSize="13sp"
+        app:use_theme_color="true"
+        tools:text="解压中 · 38%" />
+
+</androidx.appcompat.widget.LinearLayoutCompat>
