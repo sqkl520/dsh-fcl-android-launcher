@@ -175,6 +175,17 @@ EINVAL: invalid argument, readlink '.../native-cache/node-addon-require-builtin-
 
 ## 3. Android / FCL 平台经验
 
+### 3.0 长任务千万别绑在"页面级作用域"上（真机实测踩到）
+
+本项目页面是 ViewPager2 里的 `FCLCommonUI`，页面被回收时其协程作用域会被 cancel。
+把「解压 300MB rootfs」这类**分钟级任务**放在页面作用域里会得到两个坏结果：
+
+1. 切页 → 协程取消 → 进度对话框再也不刷新（用户看到的就是"卡死"）；
+2. 用户再点一次 → 撞上互斥守卫 → 只得到一句「已有解压任务在进行」，**依然看不到进度**。
+
+正确做法：任务跑在**进程级作用域**（本项目 `DshAppScope`），进度用 `StateFlow` 暴露，
+界面只做订阅渲染；同时给任务一个 `owner` 标识，让"同一入口重复点击"变成**幂等**而不是报错。
+
 ### 3.1 改 `namespace` 的连锁影响
 
 把 `namespace` 从 `com.tungsten.fcl` 改成别的包名时：

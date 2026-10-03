@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  dsh 运行/安装日志控制台。FCL 范式（见 §2.5）：页内不放大标题（页名由外壳动态岛显示），
-  动作按钮用 FCLImageButton（use_theme_color + no_padding + anim_scale_large）。
-  内容：状态行 + 自动滚动开关 + 日志路径 + 滚动日志 + 顶部复制/清空图标。
+  dsh 运行/安装日志页 —— 控制台式日志视图：
+    顶部工具行：状态 + 级别筛选 + 自动滚动 + 复制/清空（FCLImageButton）
+    中部控制台：深色半透明底 + 等宽字体 + 按级别着色（ERROR/WARN/OK/INFO）
+    底部信息行：行数统计 + 落盘路径
+  设计参考常见日志查看器（终端配色 + 级别高亮 + 一键回到底部）。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -12,14 +14,52 @@
     android:paddingTop="10dp"
     android:paddingEnd="12dp">
 
+    <!-- ===== 工具行 ===== -->
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/runtime_status"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:singleLine="true"
+        android:textSize="13sp"
+        app:auto_text_tint="true"
+        app:layout_constraintEnd_toStartOf="@id/btn_filter"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <com.tungsten.fcllibrary.component.view.FCLButton
+        android:id="@+id/btn_filter"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:minWidth="0dp"
+        android:text="@string/dsh_logs_filter_all"
+        app:ripple="true"
+        app:layout_constraintBottom_toBottomOf="@id/runtime_status"
+        app:layout_constraintEnd_toStartOf="@id/switch_auto_scroll"
+        app:layout_constraintTop_toTopOf="@id/runtime_status" />
+
+    <com.tungsten.fcllibrary.component.view.FCLSwitch
+        android:id="@+id/switch_auto_scroll"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:checked="true"
+        android:text="@string/dsh_logs_auto_scroll"
+        android:textSize="12sp"
+        app:layout_constraintBottom_toBottomOf="@id/runtime_status"
+        app:layout_constraintEnd_toStartOf="@id/btn_copy"
+        app:layout_constraintTop_toTopOf="@id/runtime_status" />
+
     <com.tungsten.fcllibrary.component.view.FCLImageButton
         android:id="@+id/btn_copy"
         android:layout_width="28dp"
         android:layout_height="28dp"
+        android:layout_marginStart="10dp"
         android:src="@drawable/ic_baseline_content_copy_24"
         android:stateListAnimator="@xml/anim_scale_large"
+        app:layout_constraintBottom_toBottomOf="@id/runtime_status"
         app:layout_constraintEnd_toStartOf="@id/btn_clear"
-        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintTop_toTopOf="@id/runtime_status"
         app:no_padding="true"
         app:use_theme_color="true" />
 
@@ -27,70 +67,69 @@
         android:id="@+id/btn_clear"
         android:layout_width="28dp"
         android:layout_height="28dp"
-        android:layout_marginStart="12dp"
+        android:layout_marginStart="10dp"
         android:src="@drawable/ic_baseline_delete_24"
         android:stateListAnimator="@xml/anim_scale_large"
+        app:layout_constraintBottom_toBottomOf="@id/runtime_status"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintTop_toTopOf="@id/runtime_status"
         app:no_padding="true"
         app:use_theme_color="true" />
 
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/runtime_status"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:singleLine="true"
-        android:textSize="13sp"
-        app:auto_text_tint="true"
-        app:layout_constraintEnd_toStartOf="@id/switch_auto_scroll"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btn_clear" />
-
-    <com.tungsten.fcllibrary.component.view.FCLSwitch
-        android:id="@+id/switch_auto_scroll"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:checked="true"
-        android:text="@string/dsh_logs_auto_scroll"
-        android:textSize="12sp"
-        app:layout_constraintBottom_toBottomOf="@id/runtime_status"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="@id/runtime_status" />
-
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/log_path"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:singleLine="true"
-        android:textSize="11sp"
-        app:auto_text_tint="true"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/runtime_status" />
-
+    <!-- ===== 控制台 ===== -->
     <ScrollView
         android:id="@+id/log_scroll"
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:layout_marginTop="8dp"
-        android:background="#11000000"
-        android:padding="8dp"
-        app:layout_constraintBottom_toBottomOf="parent"
+        android:background="@drawable/bg_log_console"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="8dp"
+        app:layout_constraintBottom_toTopOf="@id/log_info"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/log_path">
+        app:layout_constraintTop_toBottomOf="@id/runtime_status">
 
         <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/log_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:textSize="12sp"
+            android:lineSpacingExtra="2dp"
             android:textIsSelectable="true"
-            app:auto_text_tint="true" />
+            android:textSize="11sp" />
 
     </ScrollView>
+
+    <!-- 回到底部（向上翻看历史时出现） -->
+    <com.tungsten.fcllibrary.component.view.FCLButton
+        android:id="@+id/btn_jump_bottom"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="16dp"
+        android:minWidth="0dp"
+        android:text="@string/dsh_logs_jump_bottom"
+        android:textSize="12sp"
+        android:visibility="gone"
+        app:ripple="true"
+        app:layout_constraintBottom_toBottomOf="@id/log_scroll"
+        app:layout_constraintEnd_toEndOf="@id/log_scroll" />
+
+    <!-- ===== 信息行 ===== -->
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/log_info"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:singleLine="true"
+        android:textSize="10sp"
+        android:alpha="0.7"
+        app:auto_text_tint="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

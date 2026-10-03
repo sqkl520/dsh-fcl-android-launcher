@@ -77,6 +77,29 @@ object DshBootstrap {
     private val busyGuard = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
+     * 当前解压任务的「归属者」标识（页面/入口名）。
+     *
+     * ★ 修的问题：原来只看 `busy` 布尔值，页面被 ViewPager 回收 → 页面级协程被 cancel →
+     * 进度对话框不再刷新（看起来像卡死），用户再点一次就撞上互斥，只得到一句
+     * 「已有解压任务在进行」——**完全看不到进度**。
+     * 现在配合进程级作用域（[DshAppScope]）与 [progress] StateFlow：
+     * 任务本身与界面生命周期解耦，界面只是订阅显示；同一归属者重复点击不再报错。
+     */
+    private val busyOwner = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
+    /** 是否有解压任务在跑 */
+    @JvmStatic
+    fun isBusy(): Boolean = busyGuard.get()
+
+    /** 当前任务的归属者（排查用） */
+    @JvmStatic
+    fun currentOwner(): String? = busyOwner.get()
+
+    /** 当前进度（界面订阅显示；无任务时为 null） */
+    @JvmStatic
+    fun currentProgress(): Progress? = _progress.value
+
+    /**
      * 底座是否已就绪。
      *
      * ★ 方案 B：proot / loader / busybox 一律由 **jniLibs** 提供（nativeLibraryDir 有执行位，
@@ -123,12 +146,19 @@ object DshBootstrap {
     /**
      * 首启解压（幂等）。在 IO 线程调用。逐项检查 version，只解压过期的子项。
      */
-    fun install(context: Context, onProgress: (Progress) -> Unit = {}) {
+    fun install(context: Context, owner: String? = null, onProgress: (Progress) -> Unit = {}) {
         // 原子占位：避免两个界面（列表页横幅 + 下载页）同时解压同一个 rootfs 互相踩坏
         if (!busyGuard.compareAndSet(false, true)) {
-            onProgress(Progress.Failed("已有解压任务在进行"))
+            val cur = busyOwner.get()
+            if (owner != null && cur == owner) {
+                // ★ 同一入口重复点击：不报错，只把"最新进度"重放给本次调用方（幂等）
+                _progress.value?.let(onProgress)
+            } else {
+                onProgress(Progress.Failed("已有解压任务在进行（$cur）"))
+            }
             return
         }
+        busyOwner.set(owner)
         _busy.value = true
         val emit: (Progress) -> Unit = { p ->
             _progress.value = p
@@ -224,6 +254,7 @@ object DshBootstrap {
         } finally {
             _busy.value = false
             busyGuard.set(false)
+            busyOwner.set(null)
         }
     }
 

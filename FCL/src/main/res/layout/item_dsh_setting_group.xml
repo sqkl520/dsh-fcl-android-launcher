@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设置分组标题行（小节名）。FCL 原版靠「组内 1dp 缝隙 + 组间 8dp 间距」隐式分组；
+  本项目保留一个小节标题让结构更清楚，样式做成不显眼的说明文字（非卡片），
+  与 FCL 的 description 同款取值（12sp + auto_text_tint）。
+-->
+<com.tungsten.fcllibrary.component.view.FCLTextView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/group_title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="12dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="4dp"
+    android:textSize="12sp"
+    android:textStyle="bold"
+    app:auto_text_tint="true"
+    tools:text="通用" />

@@ -74,7 +74,12 @@ class DshResourceFormatTest {
         // DshWebViewActivity / DshLogsActivity
         "dsh_webview_error" to arrayOf<Any>("net::ERR_CONNECTION_REFUSED"),
         "dsh_webview_http_error" to arrayOf<Any>(401),
-        "dsh_logs_path" to arrayOf<Any>("/data/user/0/com.tungsten.fcl/files/dsh/logs/runtime.log")
+        "dsh_logs_path" to arrayOf<Any>("/data/user/0/com.tungsten.fcl/files/dsh/logs/runtime.log"),
+
+        // DshLogsUI（控制台式日志页）：信息行与筛选统计，参数都是 Int
+        "dsh_logs_info" to arrayOf<Any>(120, 300),
+        "dsh_logs_hidden" to arrayOf<Any>(180),
+        "dsh_logs_truncated" to arrayOf<Any>(40)
     )
 
     @Test
