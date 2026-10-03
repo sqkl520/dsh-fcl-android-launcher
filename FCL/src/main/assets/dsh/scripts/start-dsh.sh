@@ -1,42 +1,46 @@
 #!/bin/sh
 # start-dsh.sh — 在 rootfs 内部启动一个 dsh 实例的 web 服务
-# 运行环境：proot 内的 Linux 用户态（glibc/Ubuntu 或 musl/Alpine，arm64）
+# 运行环境：proot 内的 Linux 用户态（glibc/Debian，arm64）
 #
-# 已在 aarch64 + Ubuntu24.04 + glibc + proot 环境端到端验证：
-#   - dsh web 服务起在 127.0.0.1:<port>，返回完整 Web UI（HTTP 200）
-#   - headless 一次性任务用真实 DeepSeek key 调 deepseek-flash 成功返回
+# 已在 aarch64 + Debian12 + glibc + patched proot + PROOT_LOADER 环境验证：
+#   - proot 内 node / bash / child_process 正常
+#   - dsh --version 可跑；web 服务在本机 WebView 下使用
 #
 # 用法:
 #   INSTANCE_DIR=/opt/dsh/instances/default PORT=3080 ./start-dsh.sh
 #
 # 关键环境变量（都可选，有默认值）:
-#   INSTANCE_DIR   实例根目录，内含 node_modules(装了 @deepseek-ai/dsh) 与 home/
-#   PORT           监听端口，默认 3080；传 0 表示由系统分配（会打印真实 URL）
-#   HOST           绑定地址，默认 127.0.0.1（给本机 WebView 用，别绑 0.0.0.0）
-#   PROFILE        dsh profile，默认 web
-#   CRED_FILE      存放 DEEPSEEK_API_KEY 的文件（KEY=VALUE 形式）；
-#                  App 启动时不再写这个文件，密钥改为通过**进程环境变量**传入（不落盘）。
-#                  保留该分支是为了 Termux / 手工调试场景。
-#   READY_TIMEOUT  等待就绪的秒数，默认 120
+#   INSTANCE_DIR       实例根目录；若其下有 node_modules 则优先使用（多版本隔离）
+#   DSH_PREINSTALL_DIR dsh 预装目录（rootfs 内），默认 /opt/dsh-preinstalled
+#   PORT               监听端口，默认 3080；传 0 表示由系统分配
+#   HOST               绑定地址，默认 127.0.0.1（给本机 WebView 用，别绑 0.0.0.0）
+#   PROFILE            dsh profile，默认 web
+#   CRED_FILE          存放 DEEPSEEK_API_KEY 的文件（KEY=VALUE）；App 走进程环境变量，不落盘。
+#                      保留该分支是为了 Termux / 手工调试场景。
+#   READY_TIMEOUT      等待就绪的秒数，默认 120
 #
-# ## 本次改造（对应审查发现的问题）
-# 原来脚本末端是 `exec node ...`，于是：
-#   1. 启动器只能靠 dsh 打印的某一行文本判断"起来了没"，日志格式一变就抓瞎；
-#   2. dsh 起不来时脚本退出但**没有机器可读的失败信号**，启动器只能干等到超时；
-#   3. 信号无法转发（exec 之后脚本自己就是 node），优雅停止不受控。
-# 现在：后台起 node → 主动探测就绪（按端口或按 URL）→ 打印 `[start-dsh] READY ...` →
+# ## dsh 入口解析顺序（方案 B 对齐）
+#   1) 实例自己的 node_modules      → 支持"每实例装不同版本"（自定义性）
+#   2) rootfs 内预装的 DSH_PREINSTALL_DIR → 首次可用、离线可用（稳定性优先）
+#   3) 用 node 在 INSTANCE_DIR 里 require.resolve（兼容旧布局）
+#   解析结果会打印 `[start-dsh] dsh src=...`，便于排查。
+#
+# ## 设计要点
+# 后台起 node → 主动探测就绪（token URL 或端口）→ 打印 `[start-dsh] READY ...` →
 # 前台跟随输出，收到 TERM/INT 转发给子进程；超时/早退打印 `FAILED reason=...` 并非 0 退出。
 #
-# ## 可移植性修复（重要）
-# 原来用 `#!/usr/bin/env bash` + `set -uo pipefail` + bash 的 `/dev/tcp` 端口探测。
-# 但启动器实际是用 `/bin/sh <script>` 调用本脚本（见 ProotCommand），在 Debian/Ubuntu rootfs 上
-# `/bin/sh` 是 **dash**——dash 遇到 `set -o pipefail` 会"Illegal option"并在第 1 行就退出（exit 2），
-# 于是安装/启动**在真机上必然直接失败**。现在脚本改成严格 POSIX sh：
-#   - 去掉 pipefail（dash/busybox 都不支持）
-#   - 端口探测改用 node 的 net 模块（启动阶段 node 必然可用，且不依赖 /dev/tcp）
+# ## 可移植性
+# 严格 POSIX sh（启动器用 `/bin/sh <script>` 调用，Debian 上是 dash；dash 不支持 pipefail）。
+# 端口探测用 node 的 net 模块（不依赖 bash 的 /dev/tcp，也不需要 curl/nc）。
 set -u
 
+# 预装 Node 目录必须进 PATH：rootfs 内 node/npm 放在 /opt/node22/bin
+# （ProotCommand 也会设置 PATH，这里再兜一层，避免手工调试时找不到 node）
+PATH="/opt/node22/bin:$PATH"
+export PATH
+
 INSTANCE_DIR="${INSTANCE_DIR:-$PWD}"
+DSH_PREINSTALL_DIR="${DSH_PREINSTALL_DIR:-/opt/dsh-preinstalled}"
 PORT="${PORT:-3080}"
 HOST="${HOST:-127.0.0.1}"
 CRED_FILE="${CRED_FILE:-$INSTANCE_DIR/credentials.env}"
@@ -60,24 +64,59 @@ if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
   echo "[start-dsh] 警告: 未检测到 DEEPSEEK_API_KEY。UI 能起，但对话会失败。" >&2
 fi
 
-# --- 定位已安装的 dsh 入口 bin.js -----------------------------------------
-# 用 node 自己解析，避免路径写死；.bin/dsh 软链不能带 flag，所以直接跑 bin.js。
-BIN_JS="$(cd "$INSTANCE_DIR" && node -e "process.stdout.write(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)"
+# 原生模块加载器（node-addon-native-custom-loader）默认会先把 .node
+# **硬链接**到 os.tmpdir() 下的缓存目录再 require。
+# 在部分文件系统上该硬链接会失败，表现为：
+#   EINVAL: invalid argument, readlink '.../native-cache/....node'
+#   → Error: No usable native binding found for node-addon-require-builtin-...
+# 我们的 .node 本来就在可 dlopen 的目录里，直接关掉这层缓存最稳。
+NARB_DISABLE_NATIVE_CACHE="${NARB_DISABLE_NATIVE_CACHE:-1}"
+export NARB_DISABLE_NATIVE_CACHE
+
+# --- 定位 dsh 入口 bin.js --------------------------------------------------
+DSH_REL="node_modules/@deepseek-ai/dsh/lib/bin.js"
+BIN_JS=""
+DSH_SRC=""
+if [ -f "$INSTANCE_DIR/$DSH_REL" ]; then
+  BIN_JS="$INSTANCE_DIR/$DSH_REL"
+  DSH_SRC="instance"
+elif [ -f "$DSH_PREINSTALL_DIR/$DSH_REL" ]; then
+  BIN_JS="$DSH_PREINSTALL_DIR/$DSH_REL"
+  DSH_SRC="preinstalled"
+else
+  # 兼容旧布局：用 node 自己解析（需要可用的 node）
+  RESOLVED="$(cd "$INSTANCE_DIR" 2>/dev/null && node -e "process.stdout.write(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)"
+  if [ -n "$RESOLVED" ] && [ -f "$RESOLVED" ]; then
+    BIN_JS="$RESOLVED"
+    DSH_SRC="resolved"
+  fi
+fi
+
 if [ -z "$BIN_JS" ]; then
   echo "[start-dsh] FAILED reason=package-missing"
-  echo "[start-dsh] 错误: 在 $INSTANCE_DIR 找不到 @deepseek-ai/dsh，先跑 setup-node-dsh.sh。" >&2
+  echo "[start-dsh] 错误: 实例目录与预装目录都找不到 @deepseek-ai/dsh。" >&2
+  echo "[start-dsh]   实例: $INSTANCE_DIR/$DSH_REL" >&2
+  echo "[start-dsh]   预装: $DSH_PREINSTALL_DIR/$DSH_REL" >&2
   exit 1
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "[start-dsh] FAILED reason=node-missing"
+  echo "[start-dsh] 错误: PATH 中找不到 node（期望 /opt/node22/bin/node）" >&2
+  exit 1
+fi
+
+DSH_VER="$(node -e "try{process.stdout.write(require('$BIN_JS/../../package.json').version)}catch(e){}" 2>/dev/null || true)"
+
 echo "[start-dsh] node    : $(node -v)"
 echo "[start-dsh] dsh bin : $BIN_JS"
+[ -n "$DSH_VER" ] && echo "[start-dsh] dsh ver : $DSH_VER"
+echo "[start-dsh] dsh src : $DSH_SRC"
 echo "[start-dsh] listen  : http://$HOST:$PORT"
 echo "[start-dsh] DSH_HOME: $DSH_HOME"
 echo "[start-dsh] workdir : $PWD"
 
 # --- 端口就绪探测（用 node 的 net 模块，不依赖 bash 的 /dev/tcp，也不需要 curl/nc）--------
-# 说明：旧版用 `(exec 3<>/dev/tcp/$HOST/$1)`，那是 **bash 专有**语法，在 dash/busybox 下不可用。
-# 这里改用 node（启动阶段一定装好了），一条命令连上即算端口已开。
 port_open() {
   node -e 'var n=require("net"),s=n.connect({host:process.argv[1],port:+process.argv[2]},function(){s.end();process.exit(0)});s.on("error",function(){process.exit(1)});s.setTimeout(1500,function(){s.destroy();process.exit(1)})' "$HOST" "$1" 2>/dev/null
 }
