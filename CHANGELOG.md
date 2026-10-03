@@ -13,6 +13,43 @@
 
 ---
 
+## [Unreleased · 前端缺口 G3：主题自定义（取色 + 数值滑条）] - 2026-10-03
+
+> 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序，G5/G2/G1 之后的第 4 步。
+
+### Added
+- 恢复 FCL 的**取色体系**（自包含，仅依赖 android.*）：
+  `FCLColorPickerDialog`、`component/view/color/ColorPickerView`、`AlphaPatternDrawable`、
+  布局 `dialog_color_picker.xml`
+- 恢复 FCL 的**数值滑条** `FCLNumberSeekBar`（自带数值显示，点数值可弹出输入框改值）
+  与其依赖 `EditDialog` + `dialog_edit.xml`
+- 恢复资源：`bg_number_seekbar_track`、`ic_baseline_{restore,edit,palette}_24`
+- 新增设置行布局：`item_dsh_setting_seekbar.xml`（滑条行）、`item_dsh_setting_icons.xml`（多图标行）
+- `attrs.xml` 补 `FCLNumberSeekBar`（`suffix`）与 `ColorPickerView`（`cpv_*`）styleable
+
+### Changed
+- `DshLauncherSettingAdapter` 扩展为 **5 种行类型**：分组 / 按钮 / 开关 / **滑条** / **多图标**；
+  `Row.SeekBar`、`Row.Icons` 与 `IconSlot`（一行最多 3 个图标动作）
+- 设置页新增（行为逐项对照 FCL `LauncherSettingPage`）：
+  - **主题色 / 暗色主题色**：一行「重置 / 设置」（FCL 三项中的"从背景取色"待 G4）；拖动实时预览、确定才落盘
+  - **次要色 / 次要色（暗色）**：同上
+  - **颜色透明度**：0~255 滑条（FCL `SEEKBAR_COLOR_ALPHA`）→ `applyColorAlpha` + 持久化 + 刷新
+  - **动画速度**：由对话框选择改为 FCL 同款 **0~10 滑条**（`setAnimationSpeed` + 持久化）
+  - **背景图（亮/暗）**：先给出行与「重置」图标，选择器待 G4
+- 取色对话框的 `Listener` 与 FCL 一致：拖动 `onColorChanged` 实时预览、确定 `onPositive` 落盘、
+  取消 `onNegative` 还原初始色
+
+### Notes
+- 修掉恢复文件里的旧包名引用（`com.tungsten.fcl.R` → `com.dsh.fcl.androidlauncher.R`，
+  含 `databinding` 与 `FCLAppBarLayout`）；Kotlin 侧访问主题色要走属性（`color` / `color2`），
+  不能用 `@JvmName("_getColor")` 的 JVM 名
+- `ColorPickerView` 无外部依赖（不需要 colorpicker 三方库）；`palette-ktx` 声明在版本目录但未引入
+  （"从背景取色"属于 G4 范畴，届时再评估）
+- 验证：`run-compile.sh` 通过；单测 32/32；binding 生成齐全
+  （`DialogColorPickerBinding` / `DialogEditBinding` / `ItemDshSettingSeekbarBinding` / `ItemDshSettingIconsBinding`）；未打包
+
+---
+
 ## [Unreleased · 前端缺口 G1：页内多页容器 + 标签栏] - 2026-10-03
 
 > 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序，G5/G2 之后的第 3 步（结构性改造）。

@@ -63,4 +63,15 @@
         <attr name="auto_tint" />
     </declare-styleable>
 
+    <declare-styleable name="FCLNumberSeekBar">
+        <attr name="suffix" format="string" />
+    </declare-styleable>
+
+    <declare-styleable name="ColorPickerView" parent="ColorPanelView">
+        <attr name="cpv_alphaChannelVisible" format="boolean|reference" />
+        <attr name="cpv_alphaChannelText" format="string|reference" />
+        <attr name="cpv_sliderColor" format="color|reference" />
+        <attr name="cpv_borderColor" format="color|reference" />
+    </declare-styleable>
+
 </resources>

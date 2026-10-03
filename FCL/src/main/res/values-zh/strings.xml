@@ -216,4 +216,20 @@
     <string name="dsh_about_link_license">许可证：GPL-3.0</string>
     <string name="dsh_settings_tab_launcher">启动器设置</string>
     <string name="dsh_about_tab">关于</string>
+    <string name="color_picker_title">取色</string>
+    <string name="color_picker_arrow">→</string>
+    <string name="dsh_setting_theme">主题色</string>
+    <string name="dsh_setting_theme_desc">亮色模式下的主色</string>
+    <string name="dsh_setting_theme_dark">暗色主题色</string>
+    <string name="dsh_setting_theme_dark_desc">暗色模式下的主色</string>
+    <string name="dsh_setting_theme2">次要色</string>
+    <string name="dsh_setting_theme2_desc">文字与强调元素用的辅色</string>
+    <string name="dsh_setting_theme2_dark">次要色（暗色）</string>
+    <string name="dsh_setting_theme2_dark_desc">暗色模式下的辅色</string>
+    <string name="dsh_setting_color_alpha">颜色透明度</string>
+    <string name="dsh_setting_color_alpha_desc">派生主题色的整体不透明度</string>
+    <string name="dsh_setting_background_lt">背景图（亮色）</string>
+    <string name="dsh_setting_background_lt_desc">亮色模式下使用的自定义背景</string>
+    <string name="dsh_setting_background_dk">背景图（暗色）</string>
+    <string name="dsh_setting_background_dk_desc">暗色模式下使用的自定义背景</string>
 </resources>
