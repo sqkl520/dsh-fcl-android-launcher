@@ -221,6 +221,18 @@ object ThemeEngine {
         ThemeData.saveTheme(context, getTheme())
     }
 
+    /**
+     * 更换背景图（不需要传入具体 view 的重载）。
+     *
+     * 与上面那版等价，只是不立刻把位图塞给某个 view —— 主外壳已经通过
+     * [addRefreshListener] 订阅了主题变化，换图后会自行重新加载背景。
+     * 这样调用方无需知道"背景 view 是哪一个"（设置页在 ViewPager 里，拿不到外壳的内层视图）。
+     */
+    fun applyAndSave(context: Context, lt: String?, dk: String?) {
+        applyBackground(context, null, lt, dk)
+        ThemeData.saveTheme(context, getTheme())
+    }
+
     /** 关闭皮肤模型开关（替代原 Theme.setiIgnoreSkinContainer 字段直改） */
     fun setCloseSkinModel(closeSkinModel: Boolean) {
         updateTheme { it.copy(closeSkinModel = closeSkinModel) }

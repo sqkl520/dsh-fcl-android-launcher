@@ -80,7 +80,6 @@ class DshLauncherSettingAdapter(
         // —— 按钮行 ——
         LANGUAGE,
         THEME_MODE,
-        BACKGROUND,
         RUNTIME_CHECK,
         OPEN_LOGS,
         OPEN_DOWNLOAD,
@@ -173,7 +172,8 @@ class DshLauncherSettingAdapter(
                 R.string.dsh_setting_background_lt, R.string.dsh_setting_background_lt_desc,
                 listOf(
                     R.drawable.ic_baseline_restore_24,
-                    R.drawable.ic_baseline_edit_24
+                    R.drawable.ic_baseline_edit_24,
+                    R.drawable.ic_baseline_palette_24
                 ),
                 ActionType.BACKGROUND_LT
             ),
@@ -181,7 +181,8 @@ class DshLauncherSettingAdapter(
                 R.string.dsh_setting_background_dk, R.string.dsh_setting_background_dk_desc,
                 listOf(
                     R.drawable.ic_baseline_restore_24,
-                    R.drawable.ic_baseline_edit_24
+                    R.drawable.ic_baseline_edit_24,
+                    R.drawable.ic_baseline_palette_24
                 ),
                 ActionType.BACKGROUND_DK
             ),

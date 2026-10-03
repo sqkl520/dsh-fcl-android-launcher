@@ -6,15 +6,19 @@
 
 ## 0. 结论摘要
 
-结构上真正缺的是 **4 件事**，其余是资源与组件级的补齐：
+结构上真正缺的是 **4 件事**，其余是资源与组件级的补齐。
+**（2026-10-03 更新：G1~G5 已全部落地，见下表"落地"列）**
 
-| # | 缺口 | 影响 | 优先级 |
-|---|---|---|---|
-| G1 | **页内多页容器 + 标签栏体系**（`FCLPage` / `FCLMultiPageUI` / `FCLUILayout` + `FCLTabLayout`） | 设置页无法像 FCL 那样分「启动器设置 / 插件管理 / 关于」子页；下载页无法做「分类 / 详情」子页 | P1 |
-| G2 | **关于页**（`AboutPage` + `item_about.xml` + `item_about_desc.xml`） | 我们现在只有一个弹窗，没有 FCL 那种带图标/版本/链接/描述的卡片列表页 | P1 |
-| G3 | **主题自定义整套资源**（`FCLColorPickerDialog` / `ColorPickerView` / `AlphaPatternDrawable` / `dialog_color_picker` / `FCLNumberSeekBar`） | 主题色、次要色、颜色透明度、背景图**全都做不了** | P1 |
-| G4 | **文件/图片选择**（`browser/` 整包：`FileBrowser` / `FileBrowserActivity` / `FileBrowserLauncher` / `SelectionMode`） | 「选择背景图」没有选择器可用（只能提示"待接入"） | P1 |
-| G5 | **页面切换动画**（FCL：淡入 + 上滑 30dp / 250ms） | 目前切页是硬切，无过渡（用户反馈的"没有任何动画"） | P2 |
+| # | 缺口 | 影响 | 优先级 | 落地 |
+|---|---|---|---|---|
+| G1 | **页内多页容器 + 标签栏体系**（`FCLPage` / `FCLMultiPageUI` / `FCLUILayout` + `FCLTabLayout`） | 设置页无法像 FCL 那样分「启动器设置 / 插件管理 / 关于」子页；下载页无法做「分类 / 详情」子页 | P1 | ✅ `73f3d99`（`DshMultiPageUI`；设置页 = 启动器设置 \| 关于） |
+| G2 | **关于页**（`AboutPage` + `item_about.xml` + `item_about_desc.xml`） | 我们现在只有一个弹窗，没有 FCL 那种带图标/版本/链接/描述的卡片列表页 | P1 | ✅ `97151a2`（`DshAboutUI`，说明行 + 链接组） |
+| G3 | **主题自定义整套资源**（`FCLColorPickerDialog` / `ColorPickerView` / `AlphaPatternDrawable` / `dialog_color_picker` / `FCLNumberSeekBar`） | 主题色、次要色、颜色透明度、背景图**全都做不了** | P1 | ✅ `136d962`（含 0~255 透明度、0~10 动画速度滑条） |
+| G4 | **文件/图片选择**（`browser/` 整包：`FileBrowser` / `FileBrowserActivity` / `FileBrowserLauncher` / `SelectionMode`） | 「选择背景图」没有选择器可用（只能提示"待接入"） | P1 | ✅ 走系统 `ACTION_OPEN_DOCUMENT`（不恢复 FileBrowser 整包） |
+| G5 | **页面切换动画**（FCL：淡入 + 上滑 30dp / 250ms） | 目前切页是硬切，无过渡（用户反馈的"没有任何动画"） | P2 | ✅ `97151a2`（外壳）+ `73f3d99`（页内子页） |
+
+后续待办见 `docs/TASKS.md`。
+
 
 ## 1. 页面体系对照（最大的结构性差异）
 

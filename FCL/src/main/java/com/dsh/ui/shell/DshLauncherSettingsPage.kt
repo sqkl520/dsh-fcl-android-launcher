@@ -7,6 +7,9 @@ import android.content.Context.MODE_PRIVATE
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.recyclerview.widget.LinearLayoutManager
+import android.net.Uri
+import com.tungsten.fclauncher.utils.FCLPath
+import java.io.File
 import com.dsh.core.DshBootstrap
 import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
@@ -95,9 +98,6 @@ class DshLauncherSettingsPage(
         when (row.action) {
             DshLauncherSettingAdapter.ActionType.LANGUAGE -> pickLanguage()
             DshLauncherSettingAdapter.ActionType.THEME_MODE -> pickThemeMode()
-            DshLauncherSettingAdapter.ActionType.BACKGROUND -> Toast.makeText(
-                context, R.string.dsh_setting_background_pending, Toast.LENGTH_SHORT
-            ).show()
             DshLauncherSettingAdapter.ActionType.THEME_COLOR ->
                 pickColor(_getColor(), { ThemeEngine.getInstance().applyColor(it) }, { applyAndSaveColor(it) })
             DshLauncherSettingAdapter.ActionType.THEME_COLOR_DARK ->
@@ -151,34 +151,53 @@ class DshLauncherSettingsPage(
     private fun onIcon(row: DshLauncherSettingAdapter.Row.Icons, slot: Int) {
         val isReset = slot == DshLauncherSettingAdapter.IconSlot.FIRST
         when (row.action) {
-            DshLauncherSettingAdapter.ActionType.THEME_COLOR ->
-                if (isReset) resetColor() else pickColor(
+            // FCL 的主题行是三个图标：重置 / 从背景取色 / 设置
+            DshLauncherSettingAdapter.ActionType.THEME_COLOR -> when (slot) {
+                DshLauncherSettingAdapter.IconSlot.FIRST -> resetColor()
+                DshLauncherSettingAdapter.IconSlot.SECOND ->
+                    fetchColorFromBackground(false) { applyAndSaveColor(it) }
+                else -> pickColor(
                     _getColor(),
                     { ThemeEngine.getInstance().applyColor(it) },
                     { applyAndSaveColor(it) }
                 )
-            DshLauncherSettingAdapter.ActionType.THEME_COLOR_DARK ->
-                if (isReset) resetColorDark() else pickColor(
+            }
+            DshLauncherSettingAdapter.ActionType.THEME_COLOR_DARK -> when (slot) {
+                DshLauncherSettingAdapter.IconSlot.FIRST -> resetColorDark()
+                DshLauncherSettingAdapter.IconSlot.SECOND ->
+                    fetchColorFromBackground(true) { applyAndSaveColorDark(it) }
+                else -> pickColor(
                     _getColorDark(),
                     { ThemeEngine.getInstance().applyColorDark(it) },
                     { applyAndSaveColorDark(it) }
                 )
-            DshLauncherSettingAdapter.ActionType.THEME_COLOR2 ->
-                if (isReset) resetColor2() else pickColor(
+            }
+            DshLauncherSettingAdapter.ActionType.THEME_COLOR2 -> when (slot) {
+                DshLauncherSettingAdapter.IconSlot.FIRST -> resetColor2()
+                else -> pickColor(
                     _getColor2(),
                     { ThemeEngine.getInstance().applyColor2(it) },
                     { applyAndSaveColor2(it) }
                 )
-            DshLauncherSettingAdapter.ActionType.THEME_COLOR2_DARK ->
-                if (isReset) resetColor2Dark() else pickColor(
+            }
+            DshLauncherSettingAdapter.ActionType.THEME_COLOR2_DARK -> when (slot) {
+                DshLauncherSettingAdapter.IconSlot.FIRST -> resetColor2Dark()
+                else -> pickColor(
                     _getColor2Dark(),
                     { ThemeEngine.getInstance().applyColor2Dark(it) },
                     { applyAndSaveColor2Dark(it) }
                 )
-            DshLauncherSettingAdapter.ActionType.BACKGROUND_LT,
-            DshLauncherSettingAdapter.ActionType.BACKGROUND_DK -> Toast.makeText(
-                context, R.string.dsh_setting_background_pending, Toast.LENGTH_SHORT
-            ).show()
+            }
+            DshLauncherSettingAdapter.ActionType.BACKGROUND_LT -> when (slot) {
+                DshLauncherSettingAdapter.IconSlot.FIRST -> resetBackground(false)
+                DshLauncherSettingAdapter.IconSlot.SECOND -> pickBackground(false)
+                else -> fetchColorFromBackground(false) { applyAndSaveColor(it) }
+            }
+            DshLauncherSettingAdapter.ActionType.BACKGROUND_DK -> when (slot) {
+                DshLauncherSettingAdapter.IconSlot.FIRST -> resetBackground(true)
+                DshLauncherSettingAdapter.IconSlot.SECOND -> pickBackground(true)
+                else -> fetchColorFromBackground(true) { applyAndSaveColorDark(it) }
+            }
             else -> Unit
         }
     }
@@ -228,6 +247,93 @@ class DshLauncherSettingsPage(
 
     private fun resetColor2Dark() = ThemeEngine.getInstance()
         .applyAndSave2Dark(context, android.graphics.Color.parseColor("#FFFFFF"))
+
+    // ===== 背景图（G4：走系统选择器，不恢复 FCL 的 FileBrowser 整包） =====
+
+    private fun backgroundFile(dark: Boolean): File =
+        File(if (dark) FCLPath.DK_BACKGROUND_PATH else FCLPath.LT_BACKGROUND_PATH)
+
+    /** 选择背景图：挑图 → 复制到 cache 临时文件 → 交给 ThemeEngine 应用并落盘 */
+    private fun pickBackground(dark: Boolean) {
+        host.pickImage { uri ->
+            if (uri == null) return@pickImage
+            scope.launch {
+                val tmp = withContext(Dispatchers.IO) { copyToCache(uri) }
+                if (tmp == null) {
+                    Toast.makeText(context, R.string.dsh_background_pick_failed, Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                // 亮色传 lt、暗色传 dk；另一个传 null 表示不动
+                if (dark) {
+                    ThemeEngine.getInstance().applyAndSave(context, null, tmp.absolutePath)
+                } else {
+                    ThemeEngine.getInstance().applyAndSave(context, tmp.absolutePath, null)
+                }
+                ThemeEngine.getInstance().refreshTheme()
+                refreshRows()
+                Toast.makeText(context, R.string.dsh_background_applied, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 把选中的图片读到 cache（避免长期持有 content Uri 权限） */
+    private fun copyToCache(uri: Uri): File? = runCatching {
+        val out = File(context.cacheDir, "dsh-bg-${System.currentTimeMillis()}.img")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            out.outputStream().use { input.copyTo(it) }
+        } ?: return@runCatching null
+        out
+    }.getOrNull()
+
+    /** 重置背景为内置默认图（删除自定义图后让 ThemeEngine 重新加载） */
+    private fun resetBackground(dark: Boolean) {
+        runCatching { backgroundFile(dark).delete() }
+        ThemeEngine.getInstance().applyAndSave(context, null, null)
+        ThemeEngine.getInstance().refreshTheme()
+        refreshRows()
+    }
+
+    /**
+     * 从当前背景图提取主色并应用（对应 FCL 主题行里的「从背景取色」图标）。
+     * 用缩略图取平均色实现 —— 不引入 androidx.palette（FCL 用了，但我们只需要一个代表色）。
+     */
+    private fun fetchColorFromBackground(dark: Boolean, applyAndSave: (Int) -> Unit) {
+        scope.launch {
+            val color = withContext(Dispatchers.IO) { averageColorOf(backgroundFile(dark)) }
+            if (color == null) {
+                Toast.makeText(context, R.string.dsh_background_no_image, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            applyAndSave(color)
+            ThemeEngine.getInstance().refreshTheme()
+            refreshRows()
+        }
+    }
+
+    private fun averageColorOf(file: File): Int? = runCatching {
+        if (!file.isFile) return@runCatching null
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sample = 1
+        while (bounds.outWidth / sample > 64 || bounds.outHeight / sample > 64) sample *= 2
+        val bmp = android.graphics.BitmapFactory.decodeFile(
+            file.absolutePath,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        ) ?: return@runCatching null
+        var r = 0L; var g = 0L; var b = 0L; var n = 0L
+        var y = 0
+        while (y < bmp.height) {
+            var x = 0
+            while (x < bmp.width) {
+                val p = bmp.getPixel(x, y)
+                r += (p shr 16) and 0xFF; g += (p shr 8) and 0xFF; b += p and 0xFF; n++
+                x += 2
+            }
+            y += 2
+        }
+        bmp.recycle()
+        if (n == 0L) null else android.graphics.Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
+    }.getOrNull()
 
     /** 值变了之后让行重新绑定（滑条/开关的显示值来自 ThemeData） */
     private fun refreshRows() {
