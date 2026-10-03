@@ -13,6 +13,32 @@
 
 ---
 
+## [Unreleased · 前端缺口 G4：图片选择（背景图 / 从背景取色）] - 2026-10-03
+
+> 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序，最后一项（G5→G2→G1→G3→G4）。
+
+### Added
+- `DshShellHost.pickImage(onPicked)`：走系统文件选择器（`ActivityResultContracts.OpenDocument`）挑图；
+  在 `DshMainActivity.onCreate` 注册（页面是 ViewPager 懒创建的，若在页面里注册会因 Activity 已 RESUMED 抛异常）
+- 设置页背景图行接上真实功能（与 FCL 三项图标一致）：
+  **重置 / 选择图片 / 从背景取色**
+  - 选择图片 → 复制到 cache（不长期持有 content Uri 权限）→ `ThemeEngine.applyAndSave` 应用并落盘
+  - 重置 → 删除自定义图后重新加载内置默认背景
+  - 从背景取色 → 缩略图取平均色并应用为主题色（亮/暗各取对应背景）
+- `ThemeEngine.applyAndSave(context, lt, dk)` 重载：不需要传入具体 view 即可换背景
+  （主外壳已通过 `addRefreshListener` 订阅主题变化，会自行重新加载背景）
+
+### Removed
+- 死代码清理：`ActionType.BACKGROUND`（已被 `BACKGROUND_LT/DK` 取代）与其分支；
+  未使用文案 `dsh_setting_background` / `_desc` / `_pending`
+
+### Notes
+- 未恢复 FCL 的 `FileBrowser` 整包（阶段 4 已裁）：只需要"选一张图"，系统选择器零权限、零额外代码
+- 未引入 `androidx.palette`（FCL 用了）：只需要一个代表色，缩略图平均色即可
+- 验证：`run-compile.sh` 通过；单测 32/32；未打包
+
+---
+
 ## [Unreleased · 前端缺口 G3：主题自定义（取色 + 数值滑条）] - 2026-10-03
 
 > 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序，G5/G2/G1 之后的第 4 步。

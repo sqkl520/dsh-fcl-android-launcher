@@ -49,6 +49,22 @@ class DshMainActivity : FCLActivity(), DshShellHost {
     private var mediaPlayer: MediaPlayer? = null
     private var videoPosition = 0
 
+    /** 待处理的选择图片回调（一次只允许一个选择请求） */
+    private var pendingImagePick: ((android.net.Uri?) -> Unit)? = null
+
+    /**
+     * 系统图片选择器。
+     * 必须在 Activity 进入 STARTED 之前注册 —— 页面是 ViewPager 懒创建的
+     * （进入设置 tab 时才创建，此时 Activity 已 RESUMED），若把注册放在页面里会抛异常，
+     * 所以统一在这里注册，页面通过 [pickImage] 发起请求。
+     */
+    private val pickImageLauncher =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+            val cb = pendingImagePick
+            pendingImagePick = null
+            cb?.invoke(uri)
+        }
+
     override val activity: FCLActivity get() = this
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -236,6 +252,15 @@ class DshMainActivity : FCLActivity(), DshShellHost {
 
     override fun openWebView() {
         startActivity(Intent(this, DshWebViewActivity::class.java))
+    }
+
+    override fun pickImage(onPicked: (android.net.Uri?) -> Unit) {
+        pendingImagePick = onPicked
+        runCatching { pickImageLauncher.launch(arrayOf("image/*")) }
+            .onFailure {
+                pendingImagePick = null
+                onPicked(null)
+            }
     }
 
     override fun onBackPressed() {

@@ -186,9 +186,6 @@
     <string name="dsh_setting_group_appearance">Appearance</string>
     <string name="dsh_setting_theme_mode">Theme mode</string>
     <string name="dsh_setting_theme_mode_desc">Follow system / light / dark</string>
-    <string name="dsh_setting_background">Background image</string>
-    <string name="dsh_setting_background_desc">Custom light and dark backgrounds</string>
-    <string name="dsh_setting_background_pending">Background image picker is not wired up yet</string>
     <string name="dsh_setting_animation_speed">Animation speed</string>
     <string name="dsh_setting_animation_speed_desc">Speed of list and page animations</string>
     <string name="dsh_setting_fullscreen">Fullscreen (ignore notch)</string>
@@ -236,4 +233,7 @@ Version %1$s</string>
     <string name="dsh_setting_background_lt_desc">Custom background used in light mode</string>
     <string name="dsh_setting_background_dk">Background (dark)</string>
     <string name="dsh_setting_background_dk_desc">Custom background used in dark mode</string>
+    <string name="dsh_background_pick_failed">Could not read the selected image</string>
+    <string name="dsh_background_applied">Background updated</string>
+    <string name="dsh_background_no_image">No custom background to sample</string>
 </resources>
