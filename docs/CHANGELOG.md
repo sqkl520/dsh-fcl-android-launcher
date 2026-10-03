@@ -13,6 +13,38 @@
 
 ---
 
+## [Unreleased · 前端缺口 G1：页内多页容器 + 标签栏] - 2026-10-03
+
+> 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序，G5/G2 之后的第 3 步（结构性改造）。
+
+### Added
+- `DshMultiPageUI`：页内「多页容器」基类，结构照搬 FCL `FCLMultiPageUI` ——
+  内层 ViewPager2 + 顶部 `FCLTabLayout` 联动；**禁用滑动**（只由 tab 切换）、**不预加载**、
+  **不保留状态**（页面随 ViewPager 创建/回收）、tab 高亮与位置双向同步、
+  过渡动画同 FCL（`alpha 0→1` + `translationY 30dp→0` / 250ms，仅位置真变时播放）
+- `ui_dsh_multipage.xml`：多页骨架（CoordinatorLayout + `FCLAppBarLayout` + `FCLTabLayout` + `FCLUILayout`），
+  照搬 FCL `ui_setting.xml`；tab 改为由子类动态添加（FCL 是 XML 静态 `TabItem`），便于复用
+- 移植 FCL 通用组件：`FCLUILayout`、`com/mio/ui/widget/FCLAppBarLayout`
+- 恢复资源：`bg_tab_top_rounded`、`ic_baseline_tune_24`、`ic_baseline_settings_24`、`ic_outline_extension_24`；
+  `attrs.xml` 补 `FCLAppBarLayout` styleable
+
+### Changed
+- **设置 tab 改为页内多页**：`DshSettingsUI` 变成多页容器，子页 = 「启动器设置 | 关于」
+  （对应 FCL 的 `SettingUI` = 版本设置/启动器设置/插件管理/关于；dsh 暂为 2 页）
+- 原设置列表页改名为 `DshLauncherSettingsPage`（子页），并接受 `onOpenAbout` 回调
+- 设置列表里的「关于本启动器」由弹窗改为**切换到「关于」子页**（FCL 里关于本就是设置子页）
+
+### Removed
+- `DshFullPageDialog`：G2 阶段为临时承载关于页而建，G1 落地后其用途被设置子页取代，删除以免留下死代码
+  （将来需要"临时页/导航栈"时应采用 FCL 的 overlay 机制，而非对话框）
+
+### Notes
+- 修掉一个初始化顺序坑：`registry` 不能在基类属性初始化时按抽象 `pageCount` 分配
+  （子类属性晚于基类构造初始化，会拿到 0），改为在 `onCreate` 阶段分配
+- 验证：`run-compile.sh` 通过；单测 32/32；本轮未打包
+
+---
+
 ## [Unreleased · 前端缺口 G5+G2：切页动画 + 关于页] - 2026-10-03
 
 > 按 `docs/reports/frontend-gap-vs-fcl.md` 的建议顺序开工。

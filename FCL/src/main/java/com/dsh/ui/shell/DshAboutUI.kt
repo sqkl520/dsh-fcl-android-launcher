@@ -23,8 +23,8 @@ import com.tungsten.fcllibrary.component.theme.ThemeEngine
  * 行背景圆角按位置（组首上圆角 / 组尾下圆角 / 中间无圆角），
  * 组内行间 1dp 缝隙并绘制主题色分割线，说明行与链接组之间 8dp。
  *
- * 目前由 [DshFullPageDialog] 全屏承载（设置页「关于本启动器」进入）；
- * 待「页内多页 + 标签栏」（TASKS T3）落地后，本类可直接作为设置页的子页复用，无需改动。
+ * 作为设置页的子页使用（见 [DshSettingsUI] 的多页容器）：
+ * 「启动器设置 | 关于」两个 tab 中的后者。
  */
 class DshAboutUI(context: Context) : DshPageUI(context, R.layout.ui_dsh_about) {
 

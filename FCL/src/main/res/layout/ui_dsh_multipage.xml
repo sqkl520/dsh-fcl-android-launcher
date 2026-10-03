@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  页内「多页容器」骨架 —— 照搬 FCL 的 ui_setting.xml：
+    CoordinatorLayout
+      └ FCLAppBarLayout（tab 随内容滚动收起/展开）
+          └ FCLTabLayout#tab_layout（bg_tab_top_rounded，10dp 外边距）
+      └ FCLUILayout#container（承载内层 ViewPager2；layout_behavior=appbar_scrolling_view_behavior）
+
+  tab 由 DshMultiPageUI 按子类给的标题/图标**动态添加**（FCL 是在 XML 里静态写 TabItem，
+  我们改成动态，方便同一套骨架被不同多页复用）。
+-->
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <com.mio.ui.widget.FCLAppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@android:color/transparent">
+
+        <com.tungsten.fcllibrary.component.view.FCLTabLayout
+            android:id="@+id/tab_layout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_marginTop="10dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/bg_tab_top_rounded"
+            app:follow_theme="true"
+            app:layout_scrollFlags="scroll|enterAlways|snap"
+            app:tabGravity="fill"
+            app:tabInlineLabel="true"
+            app:tabMode="auto"
+            app:tabTextAppearance="@style/TabTextAppearance"
+            app:tabUnboundedRipple="false" />
+
+    </com.mio.ui.widget.FCLAppBarLayout>
+
+    <com.tungsten.fcllibrary.component.view.FCLUILayout
+        android:id="@+id/container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>
