@@ -66,8 +66,16 @@ class SplashActivity : FCLActivity() {
 
     /** 进入 dsh 启动器主外壳。不做任何 MC 单例初始化（渲染器 / Java / 控制器 / 配置）。 */
     private fun enterDsh() {
+        // ★ 首启门禁：运行环境没准备好就先走「准备运行环境」页（一次性）。
+        //   准备完成前不进主外壳 —— 首页因此不必再挂"底座未就绪"横幅（那种横幅还会把
+        //   真实失败原因覆盖掉，真机已踩过）。
+        val target = if (com.dsh.ui.setup.DshSetupActivity.isCompleted(this)) {
+            com.dsh.ui.shell.DshMainActivity::class.java
+        } else {
+            com.dsh.ui.setup.DshSetupActivity::class.java
+        }
         startActivity(
-            Intent(this@SplashActivity, com.dsh.ui.shell.DshMainActivity::class.java),
+            Intent(this@SplashActivity, target),
             ActivityOptionsCompat.makeCustomAnimation(this@SplashActivity, 0, 0).toBundle()
         )
         finish()

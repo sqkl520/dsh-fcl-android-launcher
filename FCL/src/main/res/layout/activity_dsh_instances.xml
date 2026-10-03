@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  dsh 实例列表页。FCL 范式（见 docs/design/app-shell.md §2.5）：
-  FCL 的页面**不在页内放标题、也不放页面级动作行** —— 页名由外壳底部的 FCLDynamicIsland 显示，
+  dsh 实例列表页（首页）。FCL 范式（见 docs/design/app-shell.md §2.5）：
+  FCL 的页面不在页内放标题、也不放页面级动作行 —— 页名由外壳底部的 FCLDynamicIsland 显示，
   页面切换/日志/下载等入口都在左侧菜单里，页内保持干净。
-  内容：运行时底座横幅 + 实例列表 + 空态提示。
+
+  内容：**进行中任务区**（所有正在跑的任务；无任务时整块隐藏）+ 实例列表 + 空态提示。
+  原「运行时底座未就绪」横幅已移除：它的职责由「首启准备运行环境页」（未就绪时）与
+  任务区（进行中/失败时）承担，留着会出现同一件事两处显示、且失败原因被覆盖。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -13,16 +16,45 @@
     android:paddingTop="10dp"
     android:paddingEnd="12dp">
 
-    <!-- 运行时底座未就绪时的横幅：就地把 proot/rootfs 解压好，并显示解压进度 -->
-    <include
-        android:id="@+id/bootstrap_banner"
-        layout="@layout/view_dsh_bootstrap_banner"
+    <!-- ===== 进行中任务区 ===== -->
+    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+        android:id="@+id/task_area"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:background="@drawable/bg_container_white"
+        android:paddingStart="12dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="10dp"
         android:visibility="gone"
+        app:auto_tint="true"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toTopOf="parent">
+
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/task_header"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:text="@string/dsh_tasks_header"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            app:auto_text_tint="true"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <LinearLayout
+            android:id="@+id/task_list"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/task_header" />
+
+    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/instance_list"
@@ -34,7 +66,7 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/bootstrap_banner" />
+        app:layout_constraintTop_toBottomOf="@id/task_area" />
 
     <!-- 空态提示：无实例时显示 -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
@@ -49,6 +81,6 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toBottomOf="@id/task_area" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

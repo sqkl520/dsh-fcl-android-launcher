@@ -43,6 +43,9 @@ public class FCLApp extends Application implements Application.ActivityLifecycle
         // 只用 App 私有目录（filesDir/cacheDir），不需要任何存储权限；幂等。
         com.dsh.core.DshPaths.loadPaths(this);
         com.dsh.core.DshInstances.init();
+        // 任务聚合（首页"进行中任务"区）需要 Application Context 来取 installer 实例
+        com.dsh.core.DshAppContextHolder.init(this);
+        com.dsh.core.DshTasks.startDefault();
     }
 
     @NotNull

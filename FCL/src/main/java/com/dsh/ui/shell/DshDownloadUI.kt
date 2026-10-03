@@ -116,37 +116,24 @@ class DshDownloadUI(
 
     private fun onInstall(item: DshVersionListItem) {
         scope.launch {
-            // 底座没就绪就地准备（走进程级任务 + 由横幅/日志显示进度），等结果再继续
+            // 运行环境没就绪：跳「准备运行环境」页（不在下载页就地解压 + 弹对话框 —— 那次
+            // 真机实测的进度丢失与失败原因覆盖就是这么来的），本次安装中止
             if (!DshBootstrap.isReady()) {
-                val ready = DshLauncher.ensureRuntimeReady(
-                    host.activity, DshLauncher.OWNER_DOWNLOAD_PAGE
-                )
-                if (!ready) {
-                    val reason = (DshBootstrap.currentProgress() as? DshBootstrap.Progress.Failed)?.reason
-                    FCLAlertDialog.Builder(host.activity)
-                        .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
-                        .setTitle(context.getString(R.string.dsh_bootstrap_failed_title))
-                        .setMessage(reason ?: context.getString(R.string.dsh_bootstrap_missing_short))
-                        .setNegativeButton(context.getString(R.string.dialog_positive), null)
-                        .create()
-                        .show()
-                    return@launch
-                }
+                DshLauncher.openSetup(host.activity)
+                return@launch
             }
             val dispatch = viewModel.installVersion(item)
-            val inst = dispatch.instance
             if (dispatch.started) {
                 toast(context.getString(R.string.dsh_install_started, item.version))
                 // ★ 只有**真的发起**了安装才弹「已开始安装」。
-                //   原来无条件弹：用户连点几次就排队弹出 N 个对话框（真机表现为"疯狂跳窗"）。
-                askOpenInstances(inst?.name ?: item.version)
+                //   原来无条件弹：连点几次就排队弹出 N 个对话框（真机表现为"疯狂跳窗"）。
+                askOpenInstances(dispatch.instance?.name ?: item.version)
             } else {
                 // 没有真的发起安装（该版本已装好 / 已有安装在跑）：只提示，不弹窗
                 toast(context.getString(R.string.dsh_install_skipped, item.version))
             }
         }
     }
-
 
     /** 已有一个"已开始安装"对话框时不重复弹（连点场景下避免叠窗） */
     private var installDialogShowing = false
