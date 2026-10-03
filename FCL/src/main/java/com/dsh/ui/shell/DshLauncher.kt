@@ -2,6 +2,7 @@ package com.dsh.ui.shell
 
 import android.content.pm.PackageManager
 import android.os.Build
+import com.dsh.core.DshAppScope
 import com.dsh.core.DshBootstrap
 import com.dsh.core.DshCredentials
 import com.dsh.core.DshInstance
@@ -129,52 +130,84 @@ object DshLauncher {
     }
 
     /**
-     * 就地准备运行时底座（解压 proot/rootfs/脚本），带不可取消的进度对话框。
-     * @param onDone 完成回调（参数为是否已就绪），用于刷新调用方的横幅/状态。
+     * 就地准备运行时底座（解压 rootfs / 脚本）。
+     *
+     * ★ 与界面生命周期解耦：任务跑在进程级 [DshAppScope]，**不再弹进度对话框**。
+     * 进度通过 `DshBootstrap.progress` / `DshBootstrap.busy` 这两个 StateFlow 暴露，
+     * 由界面（实例页横幅）订阅显示 —— 这样切页、页面被 ViewPager 回收、旋转屏幕都不会
+     * 让「进度消失」或卡住一个再也动不了的对话框。
+     *
+     * @param owner 归属者标识（同一入口重复点击时幂等，不会误报「已有解压任务在进行」）
+     * @param onDone 完成回调（参数为是否已就绪）
      */
     fun prepareRuntime(
         activity: FCLActivity,
-        scope: CoroutineScope,
-        onDone: (ready: Boolean) -> Unit,
+        owner: String = OWNER_INSTANCE_PAGE,
+        onDone: (ready: Boolean) -> Unit = {},
     ) {
-        val dialog = FCLAlertDialog.Builder(activity)
-            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
-            .setTitle(activity.getString(R.string.dsh_action_prepare_runtime))
-            .setMessage(activity.getString(R.string.dsh_bootstrap_extracting))
-            .setCancelable(false)
-            .setNegativeButton(activity.getString(R.string.dialog_negative), null)
-            .create()
-        dialog.show()
-        scope.launch {
-            val failure = withContext(Dispatchers.IO) {
-                var fail: String? = null
-                DshBootstrap.install(activity) { p ->
-                    val text = when (p) {
-                        is DshBootstrap.Progress.Stage -> p.text
-                        is DshBootstrap.Progress.Detail -> p.detail
-                        is DshBootstrap.Progress.Failed -> {
-                            fail = p.reason
-                            p.reason
-                        }
-                        DshBootstrap.Progress.Done -> activity.getString(R.string.dsh_bootstrap_done)
-                    }
-                    activity.runOnUiThread { dialog.setMessage(text) }
-                }
-                fail
-            }
-            dialog.dismiss()
-            if (failure != null) {
-                FCLAlertDialog.Builder(activity)
-                    .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
-                    .setTitle(activity.getString(R.string.dsh_bootstrap_failed_title))
-                    .setMessage(failure)
-                    .setNegativeButton(activity.getString(R.string.dialog_positive), null)
-                    .create()
-                    .show()
-            }
-            val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
-            onDone(ready)
+        if (DshBootstrap.isBusy()) {
+            // 已有任务在跑：进度由横幅显示，这里不再弹任何东西
+            return
         }
+        DshAppScope.scope.launch {
+            DshBootstrap.install(activity, owner)
+            val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
+            withContext(Dispatchers.Main) {
+                if (!ready) {
+                    val reason = (DshBootstrap.currentProgress() as? DshBootstrap.Progress.Failed)?.reason
+                    if (reason != null) {
+                        FCLAlertDialog.Builder(activity)
+                            .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                            .setTitle(activity.getString(R.string.dsh_bootstrap_failed_title))
+                            .setMessage(reason)
+                            .setNegativeButton(activity.getString(R.string.dialog_positive), null)
+                            .create()
+                            .show()
+                    }
+                }
+                onDone(ready)
+            }
+        }
+    }
+
+    /** 实例页横幅上的「准备运行时」 */
+    const val OWNER_INSTANCE_PAGE = "instances-page"
+
+    /** 下载页触发底座准备时用（避免与实例页互斥报错） */
+    const val OWNER_DOWNLOAD_PAGE = "download-page"
+
+    /** 外壳右侧面板触发时用 */
+    const val OWNER_SHELL_PANEL = "shell-panel"
+
+    /**
+     * 确保底座就绪（挂起直到成功/失败/超时）。
+     *
+     * 给「装 dsh 之前必须先有底座」这类**需要等结果**的流程用（下载页）。
+     * 任务同样跑在进程级作用域，界面销毁/切页不会中断它。
+     */
+    suspend fun ensureRuntimeReady(
+        activity: FCLActivity,
+        owner: String,
+        timeoutMs: Long = 15 * 60_000L,
+    ): Boolean {
+        if (DshBootstrap.isReady()) return true
+        if (!DshBootstrap.isBusy()) {
+            DshAppScope.scope.launch { DshBootstrap.install(activity, owner) }
+        }
+        // 等任务真正占位（launch 是异步的，避免"刚启动就判定结束"）
+        val grace = System.currentTimeMillis() + 2_000
+        while (!DshBootstrap.isBusy() && !DshBootstrap.isReady() &&
+            System.currentTimeMillis() < grace
+        ) {
+            kotlinx.coroutines.delay(50)
+        }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (DshBootstrap.isReady()) return true
+            if (!DshBootstrap.isBusy()) return DshBootstrap.isReady()
+            kotlinx.coroutines.delay(300)
+        }
+        return DshBootstrap.isReady()
     }
 
     private const val REQ_POST_NOTIFICATIONS = 4101

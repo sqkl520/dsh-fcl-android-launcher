@@ -55,12 +55,89 @@ class DshInstancesUI(
         binding.instanceList.layoutManager = LinearLayoutManager(context)
         binding.instanceList.adapter = adapter
 
-        binding.btnDownload.setOnClickListener { host.switchTab(DshShellHost.TAB_DOWNLOAD) }
-        binding.btnLogs.setOnClickListener { host.switchTab(DshShellHost.TAB_LOGS) }
         binding.bootstrapBanner.btnPrepareRuntime.setOnClickListener { prepareRuntime() }
 
         observeState()
+        observeBootstrap()
         maybeAdoptOrphan()
+    }
+
+    /**
+     * 订阅底座解压进度。
+     *
+     * ★ 修的问题：原来进度只显示在一个「不可取消的对话框」里，而解压任务跑在**页面级协程**上——
+     * 一旦切页/页面被 ViewPager 回收，协程被 cancel，对话框就再也不刷新（看起来卡死），
+     * 用户再点一次还会撞上互斥只得到「已有解压任务在进行」。
+     * 现在任务在进程级作用域（[com.dsh.core.DshAppScope]）里跑，进度经 StateFlow 暴露，
+     * 页面只负责渲染横幅 —— 切页/回来都不会丢进度。
+     */
+    private fun observeBootstrap() {
+        // 进度：阶段文字 + 明细 + 进度条
+        scope.launch {
+            DshBootstrap.progress.collect { p -> renderBootstrapProgress(p) }
+        }
+        // 忙闲：解压中隐藏按钮，避免重复触发
+        scope.launch {
+            DshBootstrap.busy.collect { busy ->
+                binding.bootstrapBanner.btnPrepareRuntime.visibility =
+                    if (busy) View.GONE else View.VISIBLE
+                if (busy) binding.bootstrapBanner.root.visibility = View.VISIBLE
+            }
+        }
+        // 就绪状态（任务结束后刷新一次）
+        scope.launch {
+            DshBootstrap.busy.collect { busy ->
+                if (!busy) refreshBootstrapBanner()
+            }
+        }
+    }
+
+    private fun renderBootstrapProgress(p: DshBootstrap.Progress?) {
+        val banner = binding.bootstrapBanner
+        if (p == null) return
+        banner.root.visibility = View.VISIBLE
+        when (p) {
+            is DshBootstrap.Progress.Stage -> {
+                banner.bannerText.text = p.text
+                val f = p.fraction
+                if (f != null) {
+                    banner.bannerProgress.visibility = View.VISIBLE
+                    banner.bannerProgress.isIndeterminate = false
+                    banner.bannerProgress.progress = (f * 1000).toInt().coerceIn(0, 1000)
+                } else {
+                    banner.bannerProgress.visibility = View.VISIBLE
+                    banner.bannerProgress.isIndeterminate = true
+                }
+            }
+            is DshBootstrap.Progress.Detail -> {
+                banner.bannerDetail.visibility = View.VISIBLE
+                banner.bannerDetail.text = p.detail
+            }
+            is DshBootstrap.Progress.Failed -> {
+                banner.bannerText.text = context.getString(R.string.dsh_bootstrap_failed_title)
+                banner.bannerDetail.visibility = View.VISIBLE
+                banner.bannerDetail.text = p.reason
+                banner.bannerProgress.visibility = View.GONE
+            }
+            DshBootstrap.Progress.Done -> {
+                banner.bannerProgress.visibility = View.GONE
+                banner.bannerDetail.visibility = View.GONE
+            }
+        }
+    }
+
+    /** 就绪时隐藏横幅，否则显示缺口说明 */
+    private fun refreshBootstrapBanner() {
+        scope.launch {
+            val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
+            val banner = binding.bootstrapBanner
+            banner.root.visibility = if (ready) View.GONE else View.VISIBLE
+            if (!ready) {
+                banner.bannerText.text =
+                    context.getString(R.string.dsh_bootstrap_missing, DshBootstrap.missingSummary() ?: "")
+                banner.bannerProgress.visibility = View.GONE
+            }
+        }
     }
 
     private fun observeState() {
@@ -91,14 +168,7 @@ class DshInstancesUI(
         scope.launch {
             DshRuntime.state.collect { st -> notifyIfNeeded(st) }
         }
-        scope.launch {
-            val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
-            binding.bootstrapBanner.root.visibility = if (ready) View.GONE else View.VISIBLE
-            if (!ready) {
-                binding.bootstrapBanner.bannerText.text =
-                    context.getString(R.string.dsh_bootstrap_missing, DshBootstrap.missingSummary() ?: "")
-            }
-        }
+        scope.launch { refreshBootstrapBanner() }
     }
 
     private fun notifyIfNeeded(st: DshRuntime.State) {
@@ -166,9 +236,14 @@ class DshInstancesUI(
     }
 
     private fun prepareRuntime() {
-        DshLauncher.prepareRuntime(host.activity, scope) { ready ->
-            binding.bootstrapBanner.root.visibility = if (ready) View.GONE else View.VISIBLE
-            if (ready) Toast.makeText(context, R.string.dsh_bootstrap_ready, Toast.LENGTH_SHORT).show()
+        DshLauncher.prepareRuntime(
+            activity = host.activity,
+            owner = DshLauncher.OWNER_INSTANCE_PAGE
+        ) { ready ->
+            if (ready) {
+                Toast.makeText(context, R.string.dsh_bootstrap_ready, Toast.LENGTH_SHORT).show()
+            }
+            refreshBootstrapBanner()
         }
     }
 

@@ -13,6 +13,43 @@
 
 ---
 
+## [Unreleased · 真机首测反馈修复（进度可见性 / 设置页 / 图标 / 日志页）] - 2026-10-03
+
+> 来源：APK 安装后用户实测反馈 5 条。
+
+### Fixed
+- **解压进度不可见 + 误报「已有解压任务在进行」**：解压任务原先跑在**页面级协程**上，
+  切页/页面被 ViewPager 回收即被取消 → 对话框卡死、进度消失；再点一次撞上互斥守卫只得到一句报错。
+  现在任务改到进程级 `DshAppScope`，进度经 `DshBootstrap.progress` / `busy` 两个 StateFlow 暴露，
+  由实例页横幅渲染（进度条 + 阶段 + 明细 + 就绪后自动隐藏）；`DshBootstrap.install` 增加 `owner`
+  参数，同一入口重复点击变为**幂等**而非报错
+- 实例页右上角两个图标（日志 / 下载）与左侧菜单重复，且 `ic_dsh_logs_24` 形似汉堡菜单造成误解 —— 移除
+- **默认资源 `values/strings.xml` 混入中文**（此前批量加文案时的失误）→ 改为英文并补齐 `values-zh` 对应项
+
+### Changed
+- **设置页按 FCL `LauncherSettingPage` 结构重做**：
+  行高 48dp、`paddingStart/End 12dp`、label + 占位 + 动作按钮、描述 12sp；
+  `SpacingItemDecoration`（**组内 1dp 细缝并绘制主题色分割线、组间 8dp 间距**、首行 10dp）；
+  位置感知圆角（`bg_item_rounded{,_top,_middle,_bottom}`，从基线恢复 3 个变体）；
+  行背景按主题色 tint，主题切换时重绘分割线
+- 设置项重组为 4 组（通用 / 外观 / 运行环境 / DeepSeek Harness），并**新增 4 项可用设置**（行为照搬 FCL）：
+  语言（`LocaleUtils.changeLanguage` + 重建界面）、主题模式（`launcher.themeMode` + `AppCompatDelegate` + `ThemeEngine.refreshTheme`）、
+  动画速度（`setAnimationSpeed` + 持久化）、全屏/忽略刘海（`applyAndSave(context, window, checked)`）
+- **日志页重做为控制台式视图**：深色控制台底（`bg_log_console`）、按级别着色
+  （ERROR 红 / WARN 琥珀 / OK 绿 / 普通浅灰，`[tag]` 前缀青色）、级别筛选（全部/警告及以上/仅错误）、
+  向上翻看时出现「回到底部」、信息行显示「展示行数 / 总行数 / 被筛掉 / 超限未显示 / 落盘路径」；
+  单次最多渲染 1500 行
+
+### Added
+- `DshOptionDialog`：基于 `FCLDialog` + `FCLTextView` 的单选对话框（fcllibrary 缺通用选项对话框）
+- 布局：`item_dsh_setting_switch.xml`（FCL 开关行）、`item_dsh_setting_group.xml`（小节标题）、`bg_log_console.xml`
+- `docs/TASKS.md`：待办清单（含 **FCL 动画体系还原**、设置页剩余自定义项、真机验收等）
+
+### Notes
+- 验证：`run-compile.sh` 通过；单测 **32/32**（含新增 `dsh_logs_*` 占位符契约）；本轮未打包
+
+---
+
 ## [Unreleased · 阶段 E-1：打包带 rootfs 的 APK] - 2026-10-03
 
 ### Added

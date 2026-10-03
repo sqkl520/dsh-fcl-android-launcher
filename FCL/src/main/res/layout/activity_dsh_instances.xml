@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   dsh 实例列表页。FCL 范式（见 docs/design/app-shell.md §2.5）：
-  FCL 的页面**不在页内放大标题** —— 页名由外壳底部的 FCLDynamicIsland 显示；
-  页内动作一律用 FCLImageButton（app:use_theme_color + app:no_padding + anim_scale_large），
-  与 FCL 的 item_profile / item_download_task 里的图标按钮写法一致。
-  内容：顶部动作行（日志 / 下载）+ 运行时底座横幅 + 实例列表 + 空态提示。
+  FCL 的页面**不在页内放标题、也不放页面级动作行** —— 页名由外壳底部的 FCLDynamicIsland 显示，
+  页面切换/日志/下载等入口都在左侧菜单里，页内保持干净。
+  内容：运行时底座横幅 + 实例列表 + 空态提示。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -14,41 +13,16 @@
     android:paddingTop="10dp"
     android:paddingEnd="12dp">
 
-    <!-- 顶部动作行（右对齐）：日志 / 下载 -->
-    <com.tungsten.fcllibrary.component.view.FCLImageButton
-        android:id="@+id/btn_logs"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:src="@drawable/ic_dsh_logs_24"
-        android:stateListAnimator="@xml/anim_scale_large"
-        app:layout_constraintEnd_toStartOf="@id/btn_download"
-        app:layout_constraintTop_toTopOf="parent"
-        app:no_padding="true"
-        app:use_theme_color="true" />
-
-    <com.tungsten.fcllibrary.component.view.FCLImageButton
-        android:id="@+id/btn_download"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:layout_marginStart="12dp"
-        android:src="@drawable/ic_baseline_download_24"
-        android:stateListAnimator="@xml/anim_scale_large"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:no_padding="true"
-        app:use_theme_color="true" />
-
-    <!-- 运行时底座未就绪时的横幅：就地把 proot/rootfs 解压好 -->
+    <!-- 运行时底座未就绪时的横幅：就地把 proot/rootfs 解压好，并显示解压进度 -->
     <include
         android:id="@+id/bootstrap_banner"
         layout="@layout/view_dsh_bootstrap_banner"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btn_download" />
+        app:layout_constraintTop_toTopOf="parent" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/instance_list"
@@ -75,6 +49,6 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/bootstrap_banner" />
+        app:layout_constraintTop_toTopOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

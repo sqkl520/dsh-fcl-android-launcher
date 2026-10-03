@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 日志控制台底色：深色半透明 + 8dp 圆角（终端观感，任何主题下都可读） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="8dp" />
+    <solid android:color="#CC0B0F14" />
+</shape>

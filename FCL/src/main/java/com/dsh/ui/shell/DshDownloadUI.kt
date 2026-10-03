@@ -97,10 +97,22 @@ class DshDownloadUI(
 
     private fun onInstall(item: DshVersionListItem) {
         scope.launch {
-            val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
-            if (!ready) {
-                val proceed = prepareRuntime()
-                if (!proceed) return@launch
+            // 底座没就绪就地准备（走进程级任务 + 由横幅/日志显示进度），等结果再继续
+            if (!DshBootstrap.isReady()) {
+                val ready = DshLauncher.ensureRuntimeReady(
+                    host.activity, DshLauncher.OWNER_DOWNLOAD_PAGE
+                )
+                if (!ready) {
+                    val reason = (DshBootstrap.currentProgress() as? DshBootstrap.Progress.Failed)?.reason
+                    FCLAlertDialog.Builder(host.activity)
+                        .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                        .setTitle(context.getString(R.string.dsh_bootstrap_failed_title))
+                        .setMessage(reason ?: context.getString(R.string.dsh_bootstrap_missing_short))
+                        .setNegativeButton(context.getString(R.string.dialog_positive), null)
+                        .create()
+                        .show()
+                    return@launch
+                }
             }
             val dispatch = viewModel.installVersion(item)
             val inst = dispatch.instance
@@ -114,44 +126,6 @@ class DshDownloadUI(
         }
     }
 
-    private suspend fun prepareRuntime(): Boolean {
-        val dialog = FCLAlertDialog.Builder(host.activity)
-            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
-            .setTitle(context.getString(R.string.dsh_action_prepare_runtime))
-            .setMessage(context.getString(R.string.dsh_bootstrap_extracting))
-            .setCancelable(false)
-            .setNegativeButton(context.getString(R.string.dialog_negative), null)
-            .create()
-        dialog.show()
-        val failure = withContext(Dispatchers.IO) {
-            var fail: String? = null
-            DshBootstrap.install(context) { p ->
-                val text = when (p) {
-                    is DshBootstrap.Progress.Stage -> p.text
-                    is DshBootstrap.Progress.Detail -> p.detail
-                    is DshBootstrap.Progress.Failed -> {
-                        fail = p.reason
-                        p.reason
-                    }
-                    DshBootstrap.Progress.Done -> context.getString(R.string.dsh_bootstrap_done)
-                }
-                host.activity.runOnUiThread { dialog.setMessage(text) }
-            }
-            fail
-        }
-        dialog.dismiss()
-        if (failure != null) {
-            FCLAlertDialog.Builder(host.activity)
-                .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
-                .setTitle(context.getString(R.string.dsh_bootstrap_failed_title))
-                .setMessage(failure)
-                .setNegativeButton(context.getString(R.string.dialog_positive), null)
-                .create()
-                .show()
-            return false
-        }
-        return true
-    }
 
     private fun askOpenInstances(instanceName: String) {
         FCLAlertDialog.Builder(host.activity)
