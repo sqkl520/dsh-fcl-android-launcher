@@ -24,9 +24,9 @@
 
 ```powershell
 # 前置：工具链按 ENVIRONMENT.md §1 装好；rootfs 按 ROOTFS.md 补回
-#       android-app/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz   ← 300MB，不入 Git
+#       dsh-fcl-android-launcher/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz   ← 300MB，不入 Git
 
-cd D:\Projects\dsh-workspace\android-app
+cd D:\Projects\ea\dsh-fcl-android-launcher
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
 ```
 
@@ -48,8 +48,8 @@ cd D:\Projects\dsh-workspace\android-app
 | `<源码仓库>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 源码仓 | 二进制否；`SHA256SUMS`/`README.md` 是 |
 | `<源码仓库>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会把它 **`mv`** 到工作区的 `output/`，不留第三份 | 源码仓 | 否 |
 
-> 「工作区」= ea 仓库根（手机 `/workspace`、电脑 `D:\Projects\dsh-workspace`）；
-> 「源码」= 本仓库（手机的 `/workspace/android-app`、电脑的 `D:\Projects\dsh-workspace\android-app`）。
+> 「工作区」= ea 仓库根（手机 `/workspace`、电脑 `D:\Projects\ea`）；
+> 「源码」= 本仓库（手机的 `/workspace/dsh-fcl-android-launcher`、电脑的 `D:\Projects\ea\dsh-fcl-android-launcher`）。
 > 仓库分工见 **ea 仓库根的 `REPOS.md`**（手机 `/workspace/REPOS.md`）。
 
 命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
