@@ -2,7 +2,7 @@
 
 > ## 📦 仓库
 > **GitHub**：<https://github.com/sqkl520/dsh-fcl-android-launcher>
-> 本地仓库：`/workspace/FCL`（基线为 FCL 上游 `f4f2624`）
+> 本地源码：`android-app/`（手机 `/workspace/android-app`；基线为 FCL 上游 `f4f2624`）
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 GPL-3.0 发布。
 >

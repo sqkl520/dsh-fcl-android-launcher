@@ -13,6 +13,22 @@
 
 ---
 
+## [Unreleased · PC dir merge: source repo nested as workspace/android-app] - 2026-10-05
+
+> Folders merged: source repo moved inside workspace as android-app, outer
+> renamed to workspace. Root scripts default SRC to ./android-app. Docs updated.
+
+### Changed
+- PC layout: source repo now at workspace/android-app (own .git kept);
+  outer folder renamed to workspace. Same layout on phone/PC.
+- Root scripts default SRC=./android-app (overridable via SRC=<path>).
+- Doc paths updated: PACKAGING / ENVIRONMENT / INDEX.
+
+### Notes
+- Verified after move: :FCL:compileDebugKotlin BUILD SUCCESSFUL in 1m38s.
+- workspace/docs synced with these 3 docs.
+
+---
 ## [Unreleased · 搬到 Windows 电脑：环境搭建 + 仓库清理 + 文档同步] - 2026-10-05
 
 > 需求：把开发环境从手机沙箱搬到电脑，配好工具链，删掉电脑 coding 用不上的东西，同步文档。
