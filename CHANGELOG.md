@@ -13,6 +13,35 @@
 
 ---
 
+## [Unreleased · 动画完全对齐：恢复 SwipeMenuLayout / WaveProgressView / AnimUtil] - 2026-10-04
+
+> 用户要求：**完全套用仿照 FCL 的 UI**，此前判为"不需要"的 3 项也全部加上。
+
+### Added
+- 恢复 FCL 的三个动画组件（源码原样取自基线 `647919c`，依赖干净、无需改包名）：
+  - `com/mio/ui/widget/SwipeMenuLayout.kt`（含 `closeSwipeMenuOnOutsideTouch` 扩展）
+  - `com/mio/ui/view/WaveProgressView.kt`
+  - `com/mio/util/AnimUtil.kt`
+- **侧滑菜单落到实例行**：`item_dsh_instance.xml` 改为 `SwipeMenuLayout` + 菜单层
+  （照 `item_favorite.xml`：靠右 `FCLLinearLayout` + `bg_container_white` + `auto_linear_background_tint`，
+  内含 40dp / padding 8dp 的 `FCLImageButton`），左滑露出「设置 / 删除」
+  - 适配器接入互斥（同一列表至多一个打开）与点击外部关闭（`closeSwipeMenuOnOutsideTouch`）
+  - 即原来的「更多」弹窗动作收进滑动菜单（FCL 的语义正是"管理类动作进滑动菜单"），弹窗保留
+- **波浪进度落到前置页主进度**：`activity_dsh_setup.xml` 的 `FCLProgressBar` → `WaveProgressView`(28dp)，
+  代码改用 `setProgress(Float)`（负值=不确定态，FCL 的约定）
+  - 任务行仍用 FCL 的 3dp 细条（对应 `item_download_task`），与 FCL 的分工一致
+- **入场动画落到两个列表**：实例列表 / 版本列表在 `onBindViewHolder` 末尾调用
+  `AnimUtil.playTranslationX(root, animationSpeed * 30L, -100f, 0f)`
+  （照 FCL 的 `RemoteVersionListAdapter` 等；默认动画速度 8 → 240ms）
+
+### Notes
+- 至此 FCL 的 16 类动画**全部对齐**（详见 `docs/reports/animation-vs-fcl.md`）
+- 入场动画按 FCL 原样放在 `onBindViewHolder`，因此列表整体重绑时（切「显示预览版」/刷新）
+  所有行会一起滑入 —— 这是 FCL 的既有观感，保持一致
+- 验证：`run-compile.sh` 通过；单测 34/34
+
+---
+
 ## [Unreleased · 动画体系与 FCL 全面对照（修正 2 处偏离）] - 2026-10-04
 
 > 需求：再检查一下 FCL 的动画与我们有什么不同。

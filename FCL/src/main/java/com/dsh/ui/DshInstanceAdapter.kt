@@ -6,6 +6,10 @@ import android.view.ViewGroup
 import android.widget.PopupMenu
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+import com.mio.ui.widget.SwipeMenuLayout
+import com.mio.ui.widget.closeSwipeMenuOnOutsideTouch
+import com.mio.util.AnimUtil
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstaller
 import com.dsh.core.DshInstances
@@ -36,6 +40,15 @@ class DshInstanceAdapter(
     private var runningId: String? = null
     private var deleting: Set<String> = emptySet()
     private var installStatus: Map<String, DshInstaller.InstallStatus> = emptyMap()
+
+    /** 当前左滑打开的菜单（FCL 的互斥做法：同一列表至多一个打开） */
+    private var openMenuLayout: SwipeMenuLayout? = null
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        // 点击其它区域时关闭已打开的滑动菜单（FCL 的同名扩展）
+        recyclerView.closeSwipeMenuOnOutsideTouch { openMenuLayout }
+    }
 
     /** 每行的体积缓存（key = id:版本:状态）。做成实例字段：Adapter 随界面销毁时一起被回收，
      *  不再像原来那样存在 companion 里当作全局静态缓存（删掉的实例会永久占着条目）。 */
@@ -212,6 +225,40 @@ class DshInstanceAdapter(
                 }
             }
         }
+
+        // ===== 左滑菜单（照 FCL item_favorite：菜单层放"管理类动作"）=====
+        // 菜单里只放「设置 / 删除」这类管理动作；「启动 / 更多」仍在内容层（主操作要一眼可见）。
+        // 互斥：打开新的前先关掉旧的（FCL RemoteModListAdapter 的做法）
+        (b.root as? SwipeMenuLayout)?.onMenuStateChangeListener =
+            object : SwipeMenuLayout.OnMenuStateChangeListener {
+                override fun onMenuOpened() {
+                    val prev = openMenuLayout
+                    if (prev != null && prev !== b.root) prev.closeMenu()
+                    openMenuLayout = b.root as SwipeMenuLayout
+                }
+
+                override fun onMenuClosed() {
+                    if (openMenuLayout === b.root) openMenuLayout = null
+                }
+            }
+        b.menuSettings.isEnabled = !busy
+        b.menuSettings.setOnClickListener {
+            (b.root as? SwipeMenuLayout)?.closeMenu()
+            onOpenSettings(inst)
+        }
+        b.menuDelete.isEnabled = !busy
+        b.menuDelete.setOnClickListener {
+            (b.root as? SwipeMenuLayout)?.closeMenu()
+            onDelete(inst)
+        }
+
+        // ===== 入场动画（FCL 同款：AnimationUtil.playTranslationX，时长随"动画速度"设置）=====
+        AnimUtil.playTranslationX(
+            b.root,
+            ThemeEngine.getInstance().getTheme().animationSpeed * 30L,
+            -100f,
+            0f
+        ).start()
     }
 
     override fun getItemCount(): Int = items.size

@@ -1,7 +1,9 @@
 # 动画对照报告：我们 vs FCL 原版
 
 > 对照对象：本地基线 `647919c`。逐项核对 FCL 的全部动画来源（资源 + 代码调用点）与我们的现状。
-> 结论：**FCL 一共 16 类动画，我们已对齐 13 类；本轮修正 2 处偏离，1 类确认不需要。**
+> 结论：**FCL 一共 16 类动画，现已 16/16 全部对齐** ——
+> 首轮修正 2 处偏离；随后按要求把原先判定"不需要"的 3 项（`SwipeMenuLayout`、
+> `WaveProgressView`、`AnimUtil`）**也全部恢复并投入使用**，以做到完全套用 FCL 的 UI。
 
 ## 1. 完整对照表
 
@@ -20,9 +22,9 @@
 | 11 | 对话框进出场 | **FCL 未设置**（无 `setWindowAnimations` / `windowAnimationStyle`） | 同（我们也没设） | ✅ 一致（非缺口） |
 | 12 | RecyclerView 增删动画 | 默认（FCL 未自定义 `ItemAnimator`；仅 `ModListPage` 临时禁用过） | 默认 | ✅ 一致 |
 | 13 | 进度条着色 | `FCLProgressBar.refreshTheme` → `progressTintList` = `dkColor` | 用同一个控件 | ✅ 一致 |
-| 14 | 侧滑菜单 | `com/mio/ui/widget/SwipeMenuLayout`（translationX 吸附开合） | 未使用 | ⛔ 本项目无此需求 |
-| 15 | 波浪进度 | `com/mio/ui/view/WaveProgressView`（ValueAnimator 无限循环） | 未使用 | ⛔ MC 专属（下载游戏资源用） |
-| 16 | 动画工具类 | `com/mio/util/AnimUtil.kt`（translationX/Y/Z、rotation、scaleX/Y、alpha、delay、interpolator） | 未恢复 | ⛔ 不需要（我们用 `view.animate()` 链式 API，能力等价） |
+| 14 | 侧滑菜单 | `com/mio/ui/widget/SwipeMenuLayout`（translationX 吸附开合 + `closeSwipeMenuOnOutsideTouch` 扩展） | **已恢复并用于实例行**（左滑露出「设置 / 删除」） | ✅ 已对齐 |
+| 15 | 波浪进度 | `com/mio/ui/view/WaveProgressView`（ValueAnimator 无限循环 + 逐帧缓动） | **已恢复并用于前置页主进度**（28dp） | ✅ 已对齐 |
+| 16 | 动画工具类 | `com/mio/util/AnimUtil.kt`（translationX/Y/Z、rotation、scaleX/Y、alpha、delay、interpolator） | **已恢复并用于实例列表 / 版本列表的入场动画** | ✅ 已对齐 |
 | — | `frag_start_anim` / `frag_stop_anim` | 500ms alpha + translateX 100%（**fragment 子页**用） | 未恢复 | ⛔ 不需要（我们页内多页是 ViewPager2 + 第 3 类的 30dp/250ms） |
 
 ## 2. 本轮修正的 2 处偏离
@@ -63,11 +65,23 @@ android:max="1000"
 
 **修正**：统一为 FCL 的写法（3dp + AppCompat style + `bg_progress_indeterminate`）。
 
+## 2.5 追加：原先判为"不需要"的 3 项也已全部落地
+
+用户要求**完全套用 FCL 的 UI**，因此这三项不再"跳过"，各自落到与 FCL 语义一致的位置：
+
+| 组件 | FCL 的用法 | 我们落地位置 |
+|---|---|---|
+| `SwipeMenuLayout` | 下载列表项（`item_remote_mod` / `item_favorite`）左滑露出**管理类动作**（收藏、改分组、删除） | **实例列表行**：左滑露出「设置 / 删除」（原先这两个动作埋在"更多"弹窗里，语义完全同构）；并接入 `closeSwipeMenuOnOutsideTouch` 做互斥与点外部关闭 |
+| `WaveProgressView` | 主页的**大进度**（下载游戏资源时） | **前置页的主进度**（28dp）：维护准备是最长的等待，正是 FCL 用波浪进度表达的场景；任务行仍用 FCL 的 3dp 细条（对应 `item_download_task`） |
+| `AnimUtil` | 各列表适配器 `onBindViewHolder` 末尾 `playTranslationX(root, animationSpeed * 30L, -100f, 0f)` | **实例列表 / 版本列表**同款调用：行从左侧 -100f 滑入到 0，时长随「动画速度」设置变化（默认 8 → 240ms） |
+
+> 注：`AnimUtil` 的入场动画按其原样放在 `onBindViewHolder` 里，会带来 FCL 一样的观感 ——
+> 列表整体重绑时（切「显示预览版」/ 刷新）所有行一起滑入。
+
 ## 3. 结论
 
 - FCL 的动画**没有"隐藏菜单"**：所有动画都在 `res/anim`（6 个）、`res/xml`（2 个 scale selector）
   与四处代码调用点（`UIManager`/`FCLMultiPageUI`、`FCLMenuView`、`FCLSpinner`、`FCLDynamicIsland`）里
-- 我们**已完成 13/16**；未对齐的 3 类里，2 类是本项目不需要（侧滑菜单、波浪进度），
-  1 类是可选工具类
+- 我们**已完成 16/16**（含原先判为"不需要"、后按要求全部恢复并投入使用的 3 项）
 - 真正需要"看起来像 FCL"的几个关键动效——**页面切换、菜单选中、按压缩放、按压涟漪、
   Spinner 弹窗、动态岛文字、不定进度条**——现已全部对齐

@@ -231,6 +231,11 @@ FCL 的动画只有这些来源，**没有隐藏菜单**：
   `FCLMenuView`（选中态 tint + Ripple + scale）、`FCLSpinner`（弹窗 `setAnimationStyle` + 箭头 ValueAnimator）、
   `FCLDynamicIsland`（文字切换）
 - **FCL 的 Activity 转场是 `makeCustomAnimation(0,0)`（硬切）、对话框也没设进出场动画** —— 别在这两处"补动画"
+- 其余三个"看起来像 MC 专属"的动画组件，本项目**也已照单全收**（用户要求完全套用 FCL）：
+  - `SwipeMenuLayout`：`item_favorite` / `item_remote_mod` 的左滑管理菜单 → 我们用在实际例行（设置/删除）
+  - `WaveProgressView`：FCL 主页的大进度 → 我们用在首启前置页的主进度（28dp）
+  - `AnimUtil`：各列表适配器 `onBindViewHolder` 末尾 `playTranslationX(root, animationSpeed*30L, -100f, 0f)`
+    → 我们用在实例列表 / 版本列表的入场动画（注意它会让"整列表重绑时全部一起滑入"，这是 FCL 的既有观感）
 
 ### 3.1 改 `namespace` 的连锁影响
 

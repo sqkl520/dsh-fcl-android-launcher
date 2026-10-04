@@ -140,14 +140,12 @@
                         app:layout_constraintEnd_toEndOf="parent"
                         app:use_theme_color="true" />
 
-                    <com.tungsten.fcllibrary.component.view.FCLProgressBar
+                    <!-- 主进度用 FCL 的波浪进度条（FCL 主页的"下载进度"就是它）：0..1，负值=不确定态 -->
+                    <com.mio.ui.view.WaveProgressView
                         android:id="@+id/progress_bar"
-                        style="@style/Widget.AppCompat.ProgressBar.Horizontal"
                         android:layout_width="0dp"
-                        android:layout_height="8dp"
-                        android:layout_marginTop="12dp"
-                        android:indeterminateDrawable="@drawable/bg_progress_indeterminate"
-                        android:max="1000"
+                        android:layout_height="28dp"
+                        android:layout_marginTop="6dp"
                         app:layout_constraintEnd_toEndOf="parent"
                         app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintTop_toBottomOf="@id/progress_title" />

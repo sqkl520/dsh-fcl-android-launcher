@@ -174,12 +174,12 @@ class DshSetupActivity : FCLActivity() {
             binding.progressDetail.visibility = View.VISIBLE
             binding.progressDetail.text = detail
         }
+        // WaveProgressView：0..1 为确定进度，负值表示不确定（FCL 的约定）
         if (fraction == null) {
-            binding.progressBar.isIndeterminate = true
+            binding.progressBar.setProgress(-1f)
             binding.progressPercent.text = ""
         } else {
-            binding.progressBar.isIndeterminate = false
-            binding.progressBar.progress = (fraction * 1000).toInt().coerceIn(0, 1000)
+            binding.progressBar.setProgress(fraction.toFloat().coerceIn(0f, 1f))
             binding.progressPercent.text =
                 getString(R.string.dsh_setup_percent, (fraction * 100).toInt())
         }
@@ -190,8 +190,7 @@ class DshSetupActivity : FCLActivity() {
         binding.stateIcon.setImageResource(R.drawable.ic_baseline_warning_24)
         binding.progressTitle.setText(R.string.dsh_setup_title_failed)
         setProgress(reason, null, null)
-        binding.progressBar.isIndeterminate = false
-        binding.progressBar.progress = 0
+        binding.progressBar.setProgress(0f)
         binding.progressPercent.text = ""
         binding.btnRetry.visibility = View.VISIBLE
         refreshStepStates()
