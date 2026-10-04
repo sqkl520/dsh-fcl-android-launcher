@@ -13,6 +13,35 @@
 
 ---
 
+## [Unreleased · 工作区快照推送 + 工具链/脚本可移植化] - 2026-10-04
+
+> 需求：把工作区所有文件传到 `github.com/sqkl520/ea`，好在手机上继续做这个项目。
+
+### Added
+- **`docs/ROOTFS.md`**：运行时 rootfs 的**重建步骤**（原先只在临时命令里做过，没有留档 —— 本次固化）：
+  debootstrap Debian 12 arm64 → 官方 Node v22.23.3 → 预装 dsh 到 `/opt/dsh-preinstalled` →
+  装编译工具 → 清理（`/etc/resolv.conf`、`.l2s.*`、构建垃圾软链）→ `tar -cJf` 打包 →
+  **chroot 自检**（注意不能用嵌套 proot，会让内层 stat 失败）→ 放回 assets 并更新 `version`。
+  含体积参考（解压 ~1.4GB / 压缩 ~300MB）与 `noCompress "xz"` 的原因
+- **`docs/ENVIRONMENT.md`**：在新设备上重建开发环境 —— JDK 17 / SDK(35) / NDK 27.0.12077973 的版本与路径、
+  **arm64 上 x86_64 工具需用 qemu 包装**及其"双重包装"坑的排查与修复、已知环境坑（编译超时、打包超时、
+  `.l2s.tmp_*` 残留）、磁盘占用
+
+### Changed
+- **三个脚本改为位置无关**（原来是硬编码 `/workspace`，搬到别的路径就跑不了）：
+  `build-apk.sh` / `run-compile.sh` / `run-tests.sh` 的**仓库根改为「脚本所在目录」**
+  （`ROOT=$(cd "$(dirname "$0")" && pwd)`），SDK 路径支持 `ANDROID_SDK_ROOT` 覆盖
+  - 改完重跑单测验证：34/34 通过
+
+### Notes
+- 工作区快照已推送到 **`github.com/sqkl520/ea`**（`752cf80` + `60b2edd`）：源码 / 文档 / proot 参考 /
+  Early PoC / 审查取证 / 根脚本，共 13332 个文件
+  - **排除**（超 GitHub 单文件 100MB 限制或可重建）：`rootfs.tar.xz`(300MB)、APK(310MB/个)、
+    构建产物、依赖目录、`.l2s.*`；README 里逐条说明了"为什么不在 + 怎么补"
+  - `ea` 是**快照**，不含 `FCL/.git` 历史；源码历史仍在 `dsh-fcl-android-launcher`
+
+---
+
 ## [Unreleased · 设置页补齐 FCL 自定义项：12 语言 + 自定义启动器名（T2）] - 2026-10-04
 
 ### Added
