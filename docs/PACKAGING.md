@@ -1,23 +1,41 @@
 # 打包说明（运行时底座 + 出 APK）
 
-> ## ⚠️ 过时声明（2026-10-01）
-> 本文"**运行时底座**"部分（自备 `libproot.so` + `rootfs.tar.xz` 并手工打包）**已被新决策取代**：
-> 运行时底座改走 **oonid/pr 的 `:proot-engine`**（`targetSdk` 保持 34，不降级）。
-> 详见 **`design/proot-engine-integration.md`**（决策/API/License/落地步骤）与 **`design/wx-exec-proot-loader.md`**（W^X 绕过原理）。
-> 集成后：proot 二进制由 proot-engine 的 jniLibs 提供、rootfs 由 pr-cli 从 OCI 镜像拉取——**不再需要你手工准备大文件**。
-> 因此本文"运行时底座"章节仅作**历史参考**；仅"**在 arm64 上出完整 APK**"一节（qemu 转发工具链）仍适用。
+> ## ⚠️ 部分过时（2026-10-01 标注，2026-10-05 复核）
+>
+> **已作废的部分**：文末〔在 arm64 上出完整 APK（qemu 转发 NDK 工具链）〕整节 ——
+> 那是**手机沙箱（arm64）**才需要的 qemu 包装手法。现在开发环境是 **Windows x64**，
+> SDK 自带的 cmake/ninja/clang 原生执行，**不需要 qemu**。
+>
+> **关于 `:proot-engine`**：`design/proot-engine-integration.md` 曾计划改用它，
+> 但**最终没有采用** —— 项目继续走"自研 proot 层 + 预打包 rootfs"（阶段 A~E-1 已落地，
+> 0.1.1 已出 APK）。因此下文"运行时底座"章节**仍然适用**，只是要按下面「Windows 打包」一节操作。
 >
 > ---
 
 > 本文分两部分：
 > 1. **运行时底座**：APK 里要打包的两类平台大文件（proot 二进制、rootfs 压缩包）怎么准备、放在哪、
 >    以及首启之后会发生什么。
-> 2. **出 APK**：在 arm64 环境（含 proot 沙箱）上如何产出**完整可用**的 arm64 APK
->    （含 native 库）。见文末〔在 arm64 上出完整 APK〕。
+> 2. **出 APK**：怎么产出完整可用的 arm64 APK（含 native 库）。见〔Windows 打包〕与文末〔在 arm64 上出完整 APK〕。
 >
 > 对应代码：`FCL/src/main/assets/dsh/`（解压底座）+ `com.dsh.core.DshBootstrap`（首启解压与自检）。
 > 该 assets 目录内另有一份最小提示 `FCL/src/main/assets/dsh/README.md`，指向本文。
-> 出 APK 的可复现脚本：`/workspace/build-apk.sh`。
+
+## Windows 打包（当前环境，2026-10-05）
+
+```powershell
+# 前置：工具链按 ENVIRONMENT.md §1 装好；rootfs 按 ROOTFS.md 补回
+#       FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz   ← 300MB，不入 Git
+
+cd D:\Projects\dsh-fcl-android-launcher
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
+```
+
+产物：`FCL/build/outputs/apk/fordebug/dsh-fcl-android-launcher-<ver>-arm64.apk`。
+
+**打包注意**：
+- `build.gradle.kts` 已声明 `noCompress += listOf("xz")`，rootfs 在包内是 **STORED**（未压缩）——
+  这既避免 aapt 二次压缩拖慢打包，也让我们能**直接从 APK 里无损取出 rootfs**（见 `ROOTFS.md`）
+- rootfs 未就位时也能打包成功，但装到手机上**跑不起来**（底座是 PLACEHOLDER）
 
 ## 产物落点（交付 / 快照 / 构建产物）
 

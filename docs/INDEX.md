@@ -115,50 +115,38 @@
 > **运行时底座路线已定：保持 targetSdk 34，集成 oonid/pr 的 `:proot-engine`**（见 `design/proot-engine-integration.md`），
 > 唯一拦路项 = dsh 子进程 spawn 是否能在 patched proot 下工作（需真机先验证）。
 
-- **代码**：全仓库 **494 个源文件 / 71,623 行 / 3.7 MB**
-  > **修正（2026-10-01，见 `reports/mc-removal-impact-review.md` §1.4 D-7）**：数字与实测不符。
-  > 实测 `find FCL/src/main/java ZipFileSystem/src -name "*.java" -o -name "*.kt" | wc -l` = **506**，
-  > `xargs wc -l | tail -1` = **77,190 行**，`du -sh FCL/src/main/java` = **3.7M**（体积一项正确）。
-  > 差值 **12** 恰好等于 `ZipFileSystem/` 的源文件数 —— 即"494"是**不含 ZipFileSystem** 的口径，
-  > 却与下面同段落的分项表（把 `ZipFileSystem/ 12` 也列了进去）自相矛盾。请统一口径。
-  > 分项实测：`com/dsh` 25、`fcllibrary` 60、`fclcore` 394、`fcl` 9、`fclauncher/utils` 2、
-  > `mio/util` 4、`ZipFileSystem` 12 —— **前六项合计 494**，故 494 应表述为"不含 ZipFileSystem"。
-  - `com/dsh/` 25 个（dsh 启动器主体，`core` 18 + `ui` 7）
+- **代码**：`com/dsh/` **42 个文件**（`core` 逻辑 + `ui` 界面）+ FCL 基座
+  - `com/dsh/` 42 个（dsh 启动器主体）
   - `com/tungsten/fcllibrary/` 60 个（UI 框架，保留 FCL 风格）
-  - `com/tungsten/fclcore/` 394 个（`fakefx` 292 / `util` 85 / `task` 12 / `event` 5）
+  - `com/tungsten/fclcore/` 394 个（`fakefx` / `util` / `task` / `event`）
   - `com/tungsten/fcl/` 9 个（`FCLApp` / `SplashActivity` / `RuntimeUtils` 等）
   - `com/tungsten/fclauncher/utils/` 2、`com/mio/util/` 4、`ZipFileSystem/` 12
-- **资源**：res **1.8 MB**（19 布局 / 17 drawable / 2 anim / 字符串 values 169 + values-zh 166）、
-  assets **仅 `dsh/`**（70 KB）、**无 native**（jniLibs / jni / jreAssets / libs.aar 全删）
+- **资源**：`FCL/src/main/res` 109 个文件 ·
+  assets **仅 `dsh/`**（scripts 3 个 + version 标记；`rootfs.tar.xz` 不入 Git）·
+  jniLibs 3 个（`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：只剩 `:FCL` + `:ZipFileSystem`
-- **脚本**：`FCL/src/main/assets/dsh/scripts/` 3 个（严格 POSIX sh）；
-  `dsh-launcher-poc/scripts/` 6 个参考/测试脚本
-- **验证**：`sh /workspace/run-compile.sh`（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL，0 error**；
-  单测 **27/27**；脚本一致性 **18/18**
+- **脚本**：`FCL/src/main/assets/dsh/scripts/` 3 个（严格 POSIX sh，**必须 LF**，见 `ENVIRONMENT.md` §1.3）
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **34/34**
 - **入口**：`SplashActivity` → 直接进 **`DshMainActivity`**（dsh 外壳，五页：实例/管理/下载/日志/设置；
   **不再有** MC 运行时门禁 / EULA / MC 主界面，也不再有并列的 `DshInstancesActivity` 等旧 Activity）
-- **待办**：
-  1. ✅ **【硬性要求】UI 跟 FCL 走**（**第七轮已收尾**）：**8 个 dsh 布局已全部由 Material → fcllibrary 控件**，
-     0 Material 残留；§2.5.5 验收命令 1 输出为空。规格见 **`design/app-shell.md` §2.5**
-     （仅 `MaterialAlertDialogBuilder` 在 `com/dsh` 仍 **21** 处，作"新代码逐步归零"的 P3 项；
-     实测 2026-10-03：`grep -rn "MaterialAlertDialogBuilder" FCL/src/main/java/com/dsh | wc -l` = 21，
-     8 个 dsh 布局里 `com.google.android.material` 出现 **0** 次）。
-  2. **同步更新文档**（部分完成）：已为 `PLAN.md`/`PACKAGING.md` 加过时横幅、更新 `ROADMAP.md`/`INDEX.md`；
-     `design/multi-version.md`、`design/ui-manifest.md`、`design/proot-chain.md`、`reports/round2~5` 仍按旧形态描述（逐步完善）
-  3. ✅ **决定 R-02（targetSdk）**：**已决策保持 targetSdk 34，不降级**，用 `:proot-engine`（PROOT_LOADER）绕过 W^X。
-     见 `design/proot-engine-integration.md` / `design/wx-exec-proot-loader.md`。
-  4. ✅ **外壳改造阶段 1~4**（骨架/五页迁移/横屏右面板/裁剪）**已完成**，见 `design/app-shell.md`、`reports/round7-*`
-  5. 🔴 **真机端到端（最大的空白）**：运行时底座改走 **`:proot-engine`** 后不再需要手工准备 proot/rootfs；
-     **唯一拦路项 = dsh 子进程 spawn 能否在 patched proot 下工作**（需真机先验证，见 `design/proot-engine-integration.md §5`、
-     `ROADMAP.md` M1）。proot/rootfs 仍是 PLACEHOLDER，**从未真机跑通**。
-  6. 可选：清理 `reports/mc-removal.md` §9.1 与 `reports/round6-optimization.md` §11.2 的死代码；重写 `.github/workflows`
+- **待办**（详见 `TASKS.md`）：
+  1. ✅ **【硬性要求】UI 跟 FCL 走**（第七轮收尾）：8 个 dsh 布局 0 Material 控件；
+     动画 16/16 对齐；T1/T2/T4 已落地
+  2. ✅ **决定 R-02（targetSdk）**：保持 targetSdk 34，用 PROOT_LOADER 绕过 W^X（不降级）
+  3. ✅ **外壳改造阶段 1~4** 完成
+  4. 🔴 **T6 真机端到端（最大的空白）**：DNS 修复是否真生效（`npm install` 能否装 0.2.x）、
+     首次解压耗时/成功率、`dsh web` 起服务 + WebView token/cookie、息屏保活
+  5. **T5 插件管理子页**（等插件体系）· **T7 rootfs 瘦身** · **T8 缓存清理 UI** ·
+     **T9 `.github/workflows` 适配**（仍是 FCL 原版 CI，会在 GitHub 上失败）· **T10 `PLAN.md`/`PACKAGING.md` 过时内容**
+  6. **电脑环境已就绪（2026-10-05）**：Windows x64 + JDK17 + Android Studio + SDK35/NDK27，
+     见 `ENVIRONMENT.md` §1；**下一步是把 rootfs 补回来然后打包验证**
 - **已修（2026-10-01，见 `reports/mc-removal-impact-review.md` §11 补丁 A/B）**：
   1. **M-01（P1）** `FCLPath.loadPaths()` 上提到 `FCLApp.onCreate`，并删除 `SplashActivity.kt` 中的重复调用
      —— 消除"必须先经过启动页"的隐式依赖（通知栏 PendingIntent 冷启动会绕过启动页）
   2. **M-02（P2）** `FCLPath.LOG_DIR` 由 `/sdcard/FCL/log` 改为 `context.getDir("log", 0)`
      —— 原路径在删权限后不可写，`fcl.log` 永远建不出来（异常被静默吞掉）
   > 验证：clean build `34/34 executed，0 error`；单测 `TOTAL=23 FAILED=0`。
-- **出 APK**：`sh /workspace/build-apk.sh`（**改完代码默认不打包**，等明确说"打包测试"再出包）
+- **出 APK**：见 `PACKAGING.md`；**改完代码默认不打包**，等明确说"打包测试"再出包
 
 ---
 
@@ -166,26 +154,38 @@
 
 | 位置 | 说明 |
 |---|---|
-| `FCL/` | App 主仓库（FoldCraftLauncher 基座，Kotlin/Java）。启动器代码在 `FCL/src/main/java/com/dsh/` |
-| `dsh/` | dsh 上游仓库（只读参考，用来确认行为与 API） |
-| `poc/` | 真实已安装的 dsh + Node 环境（用于实测行为、跑脚本验证） |
+| `FCL/src/main/java/com/dsh/` | **dsh 启动器主体**（`core` 逻辑 + `ui` 界面），共 42 个文件 |
+| `FCL/src/main/java/com/tungsten/` | FCL 基座（`fcllibrary` UI 框架 + `fclcore` 工具），保留 FCL 风格 |
+| `FCL/src/main/assets/dsh/` | 运行时底座：`scripts/`（3 个 POSIX sh）+ `rootfs/`（tar.xz 不入 Git） |
 | `docs/` | **本目录**，全部文档 |
+| `FCL/src/test/java/com/dsh/` | JVM 单测（34 项） |
+
+> `dsh/`（上游源码副本）、`poc/`、`oonid-pr-reference/` 等**参考材料不在源码仓库里**，
+> 它们在手机工作区的快照仓库 [`sqkl520/ea`](https://github.com/sqkl520/ea)。
 
 ---
 
-## 到电脑后的最短路径
+## 在电脑上开发（当前环境，2026-10-05）
 
-> ⚠️ 旧的"准备两个大文件"路径已被 proot-engine 集成取代（targetSdk 34 不降）。
-> 最新路线见 `ROADMAP.md` M1 与 `design/proot-engine-integration.md`。下面保留旧步骤仅作编译参考。
+> 已从手机沙箱搬到 **Windows x64 电脑**。工具链安装与接线见 **`ENVIRONMENT.md` §1**。
 
-1. 编译：`./gradlew :FCL:assembleDebug`（需要 Android SDK + JDK17；出 APK 用 `sh /workspace/build-apk.sh`）。
-2. 集成 `:proot-engine` 后：`pr-cli install <distro>` 拉发行版（无需手工打包 rootfs），
-   装机 → 运行时就绪 → 下载页装 dsh → 列表页启动 → WebView 出界面。
-3. 若坚持旧自研路径（不推荐）：proot 二进制 → `jniLibs/arm64-v8a/`、`rootfs.tar.xz` → `assets/dsh/rootfs/`，见 `PACKAGING.md`（已标过时）。
-4. 逐项对照 `design/proot-engine-integration.md` / `ROADMAP.md` M1 的验证清单。
+```powershell
+# 编译校验（Kotlin + Java + 资源 + Manifest）
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:compileDebugKotlin :FCL:compileDebugJavaWithJavac `
+  :FCL:processDebugResources :FCL:processDebugMainManifest
 
-> 注意：编译需要 Android SDK / NDK / Gradle 工具链，**手机上是做不了的**，
-> 所以这一步只能等换到电脑。手机上这段时间适合读文档、改代码、准备真机验证 spawn（M1 阻塞项）。
+# 单测（34 项，Gradle 原生跑）
+.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest
+
+# 打包（需先补 rootfs，见 ROOTFS.md）
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
+```
+
+> 手机沙箱里的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh` 是纯 POSIX sh，
+> 在 **`ea` 工作区快照仓库**里（不在本仓库），Windows 上跑不了 —— 直接用上面的 Gradle 命令。
+
+**当前最缺的一块**：`FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（300MB，不入 Git）。
+补法见 `ROOTFS.md` 与 `README.md`「怎么把 rootfs 补回来」——**优先从已打好的 APK 里无损取出**。
 
 ---
 
