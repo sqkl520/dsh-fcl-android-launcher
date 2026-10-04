@@ -73,25 +73,32 @@ DshMainActivity
 
 ## 4. 资源级缺口
 
-**drawable**：FCL 112 个 → 我们 32 个（缺 80，其中多数是 MC 图标）。**通用的这些需要补**：
+### 4.1 核对结论（2026-10-04）：**没有需要补的通用资源**
 
-| 资源 | 用途 |
-|---|---|
-| `bg_item` / `bg_item_clickable` | 列表行底/可点击行底 |
-| `bg_container_white_clickable` | 白色可点击容器（设置行） |
-| `bg_container_transparent_selected` | 选中态 |
-| `bg_right_menu_button` | 右侧面板按钮底（FCL 原版用） |
-| `bg_tab_top_rounded` | 页内标签栏底（配合 G1） |
-| `bg_game_menu_inset` | 菜单内凹样式 |
-| `bg_number_seekbar_track` | 数值 SeekBar 轨道（配合 G3） |
-| `ic_baseline_restore_24` / `ic_baseline_edit_24` / `ic_baseline_palette_24` | FCL 主题行的「重置 / 设置 / 从背景取色」三个图标按钮 |
-| `ic_baseline_done_24` / `arrow_upward` / `arrow_downward` / `arrow_forward` / `file` / `folder` / `cloud_download` | 列表与对话框常用图标 |
+`git ls-tree` 对比基线后，FCL 有而我们缺的 drawable 共 **71 个**，逐类用 `git grep` 查证后确认
+**没有一个是我们需要补的**：
 
-**anim**：FCL 6 个 → 我们 4 个。缺：
+| 类别 | 例子 | 为什么不补 |
+|---|---|---|
+| **FCL 自己也没用的未使用资源** | `bg_game_menu_inset`、`bg_container_transparent_selected`、`bg_right_menu_button`、`ic_baseline_file_24`、`ic_baseline_more_horiz_24`、`ic_baseline_save_24`、`ic_baseline_update_24` | 全仓库零引用（`git grep -l` 为空）——补了也无任何 UI 效果 |
+| **MC 专属** | `ic_boat`、`ic_cube`、`ic_pojav`、`ic_package_2_outlined`、`ic_dashboard_filled`、`ic_mobile_rotate_filled`、`ic_mouse_filled`、`ic_baseline_videogame_asset_24`、`ic_baseline_texture_24`、`ic_baseline_microsoft_24`、`ic_baseline_person_add_24`、`ic_baseline_host_24`、`april_fools.png` | MC 账户/整合包/控制器/渲染器/愚人节彩蛋 |
+| **MC 页面专用** | `ic_baseline_arrow_forward_24`（mod/整合包行）、`ic_baseline_arrow_upward/downward_24`（`item_view_group`）、`ic_baseline_folder_24`（`item_favorite` 分组）、`ic_outline_info_24`（本地 mod/资源包页）、`bg_item`/`bg_item_clickable`（`item_input_text` 等控制器页） | 只出现在 MC 页面 |
+| **通用但本项目位置不同** | `ic_baseline_cloud_download_24`（FCL 主页的"下载"图标入口） | 我们的下载入口在左侧菜单，不需要页内图标入口 |
 
-| 资源 | 用途 |
-|---|---|
-| `frag_start_anim` / `frag_stop_anim` | 页面切换过渡（配合 G1/G5） |
+> ⚠️ **排查时注意子串误匹配**：`git grep bg_item` 会同时命中 `bg_item_rounded`，
+> 一度让我误判"FCL 的启动器设置行用的是 `bg_item`"。查资源引用要加边界或用 `-w`。
+
+**已恢复的资源**（都是"确有使用场景"的那批）：`bg_tab_top_rounded`、`bg_number_seekbar_track`、
+`bg_container_white_clickable`、`bg_item_rounded_{top,middle,bottom}`、
+`ic_baseline_{list,done,close,earth,restore,edit,palette,jump,settings,info}_24`、`ic_start` 等。
+
+### 4.2 原始缺口清单（对照用，保留）
+
+**drawable**：FCL 112 个 → 我们 32 个（缺的即上表 71 个）。
+
+**anim**：FCL 6 个 → 我们 4 个（缺 `frag_start_anim` / `frag_stop_anim`；
+它们仅用于 **fragment 子页**，本项目页内多页用 ViewPager2 + 同一套 30dp/250ms 动画，不需要）。
+
 
 ## 5. 动画对照（用户反馈第 4 条）
 
