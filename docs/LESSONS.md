@@ -186,6 +186,52 @@ EINVAL: invalid argument, readlink '.../native-cache/node-addon-require-builtin-
 正确做法：任务跑在**进程级作用域**（本项目 `DshAppScope`），进度用 `StateFlow` 暴露，
 界面只做订阅渲染；同时给任务一个 `owner` 标识，让"同一入口重复点击"变成**幂等**而不是报错。
 
+### 3.0a FCL 的图标控件分工（踩过：我从一处用法推断成"一律"，结论错了）
+
+FCL 里两个长得很像的控件，**承载图标的方式与自带反馈完全不同**：
+
+| | `FCLImageButton`（AppCompatImageButton） | `FCLImageView`（AppCompatImageView） |
+|---|---|---|
+| 图标放哪 | `image` → **`setImageDrawable`**（XML 写 `android:src`） | `image` → **`setBackground`**（XML 写 `android:background`） |
+| 缩放 | **`setScaleType(FIT_XY)`** | 未设置（默认 FIT_CENTER） |
+| 按压反馈 | **自带 `RippleDrawable`**（颜色 `ltColor`，半径 `no_padding ? 12 : 20` dp） | 无 |
+| 典型用途 | **可点击的图标按钮**（`item_version` 的设置/删除、`item_profile` 的删除、`item_remote_version` 的 wiki/save） | **静态图标**（`item_download_task` 的取消、列表行左侧图标） |
+
+- 可点击图标按钮的 FCL 写法：`FCLImageButton` + `android:src` +
+  `android:stateListAnimator="@xml/anim_scale_large"` + `app:auto_tint="true"`
+  （尺寸多用 `wrap_content`；要紧凑时 `app:no_padding="true"`）
+- ⚠️ **教训**：我最初只看了 `item_download_task.xml` 一处，就总结出「图标按钮一律用 FCLImageView、
+  不要 FCLImageButton」——这是**从单个样本推断普遍规则**，结果把用户已经对的东西改错了。
+  正确做法是先 `git grep` 出**全部**用法再归纳（本项目最后靠 `git grep -l '@xml/anim_scale'` 才看清分布）。
+
+### 3.0b FCL 的水平进度条规范
+
+FCL 所有水平进度条**一律**这样写（已逐一核对 9 个布局，高度全是 3dp）：
+
+```xml
+<com.tungsten.fcllibrary.component.view.FCLProgressBar
+    style="@style/Widget.AppCompat.ProgressBar.Horizontal"
+    android:layout_height="3dp"
+    android:indeterminateDrawable="@drawable/bg_progress_indeterminate"
+    android:max="1000" />
+```
+
+- 用 `Widget.AppCompat.ProgressBar.Horizontal`（**不是** `?android:attr/progressBarStyleHorizontal`）
+- 不确定态要显式给 `indeterminateDrawable`，否则用系统默认样式（观感与 FCL 不一致）
+- `bg_progress_indeterminate` 是 `animation-list`（引用 `progress_indeterminate_rect1/2`）
+
+### 3.0c FCL 的动画清单（避免重复排查）
+
+FCL 的动画只有这些来源，**没有隐藏菜单**：
+
+- `res/anim/`：`fcl_spinner_popup_enter/exit`、`progress_indeterminate_rect1/2`、
+  `frag_start/stop_anim`（后两个是 fragment 子页用，本项目用 ViewPager2 不需要）
+- `res/xml/`：`anim_scale`（0.9，可点击行）、`anim_scale_large`（1.5，图标按钮 / `FCLMenuView` / 52dp 元素）
+- 代码里只有四处：`UIManager`/`FCLMultiPageUI`（切页淡入 + 上滑 30dp / 250ms）、
+  `FCLMenuView`（选中态 tint + Ripple + scale）、`FCLSpinner`（弹窗 `setAnimationStyle` + 箭头 ValueAnimator）、
+  `FCLDynamicIsland`（文字切换）
+- **FCL 的 Activity 转场是 `makeCustomAnimation(0,0)`（硬切）、对话框也没设进出场动画** —— 别在这两处"补动画"
+
 ### 3.1 改 `namespace` 的连锁影响
 
 把 `namespace` 从 `com.tungsten.fcl` 改成别的包名时：
