@@ -21,6 +21,7 @@
         android:padding="0dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent"
+        android:stateListAnimator="@xml/anim_scale"
         app:use_theme_color="true" />
 
     <com.tungsten.fcllibrary.component.view.FCLSwitch

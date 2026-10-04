@@ -157,8 +157,10 @@ class DshSetupActivity : FCLActivity() {
                 setProgress(getString(R.string.dsh_setup_step_rootfs), p.detail, null)
                 refreshStepStates()
             }
-            is DshBootstrap.Progress.Done ->
+            is DshBootstrap.Progress.Done -> {
+                binding.stateIcon.setImageResource(R.drawable.ic_baseline_done_24)
                 setProgress(getString(R.string.dsh_setup_title_done), null, 1.0)
+            }
             is DshBootstrap.Progress.Failed -> showFailure(p.reason)
             null -> Unit
         }
