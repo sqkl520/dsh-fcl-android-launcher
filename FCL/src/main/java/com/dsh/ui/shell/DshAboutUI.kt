@@ -15,6 +15,7 @@ import com.dsh.fcl.androidlauncher.databinding.ItemDshAboutBinding
 import com.dsh.fcl.androidlauncher.databinding.ItemDshAboutDescBinding
 import com.dsh.fcl.androidlauncher.databinding.UiDshAboutBinding
 import com.mio.ui.adapter.SpacingItemDecoration
+import com.mio.util.getLauncherName
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 
 /**
@@ -119,8 +120,11 @@ class DshAboutUI(context: Context) : DshPageUI(context, R.layout.ui_dsh_about) {
 
             if (position == 0) {
                 holder.itemView.setOnClickListener(null)
+                // 顶部先显示"启动器名"（自定义名或 应用名/版本 的组合，FCL 的 getLauncherName 约定），
+                // 再跟说明文字 —— 与 FCL 关于页的排布一致
                 ItemDshAboutDescBinding.bind(holder.itemView)
-                    .title.setText(context.getString(R.string.dsh_about_desc, BuildConfig.VERSION_NAME))
+                    .title.text = getLauncherName(context) + "\n\n" +
+                    context.getString(R.string.dsh_about_desc, BuildConfig.VERSION_NAME)
             } else {
                 holder.itemView.setOnClickListener { onLinkClick(position - 1) }
                 ItemDshAboutBinding.bind(holder.itemView)

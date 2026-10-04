@@ -18,6 +18,9 @@ import com.dsh.fcl.androidlauncher.BuildConfig
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.UiDshLauncherSettingsBinding
 import com.mio.ui.adapter.SpacingItemDecoration
+import com.mio.util.getLauncherName
+import com.tungsten.fcllibrary.component.dialog.EditDialog
+import androidx.core.content.edit
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.mio.dialog.ItemSelectionDialog
 import com.tungsten.fcllibrary.component.dialog.FCLColorPickerDialog
@@ -65,7 +68,9 @@ class DshLauncherSettingsPage(
         DshPaths.loadPaths(context)
         DshInstances.init()
 
-        adapter = DshLauncherSettingAdapter(context, ::onAction, ::onSwitch, ::onSeek, ::onIcon)
+        adapter = DshLauncherSettingAdapter(
+            context, { getLauncherName(context) }, ::onAction, ::onSwitch, ::onSeek, ::onIcon, ::onEdit
+        )
         binding.settingList.layoutManager = LinearLayoutManager(context)
 
         // FCL 的分组间距：组间 8dp；同组相邻行只留 1dp 细缝并绘制主题色分割线
@@ -122,6 +127,19 @@ class DshLauncherSettingsPage(
             DshLauncherSettingAdapter.ActionType.FULLSCREEN -> {
                 ThemeEngine.getInstance().applyAndSave(context, host.activity.window, checked)
                 ThemeEngine.getInstance().refreshTheme()
+            }
+            else -> Unit
+        }
+    }
+
+    /** 编辑行：目前只有「自定义启动器名」（FCL 启动器设置里的 custom_launcher_name） */
+    private fun onEdit(row: DshLauncherSettingAdapter.Row.Edit) {
+        when (row.action) {
+            DshLauncherSettingAdapter.ActionType.CUSTOM_NAME -> {
+                EditDialog(context, getLauncherName(context)) { text ->
+                    prefs.edit { putString("custom_launcher_name", text) }
+                    refreshRows()
+                }.apply { setTitle(context.getString(R.string.dsh_setting_custom_name)) }.show()
             }
             else -> Unit
         }
@@ -346,10 +364,20 @@ class DshLauncherSettingsPage(
 
     /** 语言：与 FCL 相同 —— 写入偏好后重建界面，让 attachBaseContext 重新应用 */
     private fun pickLanguage() {
+        // 顺序必须与 LocaleUtils.getLocale(index) 的 0..11 一一对应（照 FCL）
         val labels = listOf(
-            context.getString(R.string.dsh_lang_system),
-            context.getString(R.string.dsh_lang_zh_cn),
-            context.getString(R.string.dsh_lang_en),
+            context.getString(R.string.dsh_lang_system),                    // 0 跟随系统
+            context.getString(R.string.dsh_lang_english),                   // 1
+            context.getString(R.string.dsh_lang_simplified_chinese),        // 2
+            context.getString(R.string.dsh_lang_russian),                   // 3
+            context.getString(R.string.dsh_lang_brazilian_portuguese),      // 4
+            context.getString(R.string.dsh_lang_persian),                   // 5
+            context.getString(R.string.dsh_lang_ukrainian),                 // 6
+            context.getString(R.string.dsh_lang_german),                    // 7
+            context.getString(R.string.dsh_lang_traditional_chinese_hk),    // 8
+            context.getString(R.string.dsh_lang_japanese),                  // 9
+            context.getString(R.string.dsh_lang_turkish),                   // 10
+            context.getString(R.string.dsh_lang_traditional_chinese_tw),    // 11
         )
         val current = LocaleUtils.getLanguage(context)
         // FCL 的选项对话框（条目高亮主题色、条目多时自动滚动）
