@@ -168,27 +168,93 @@
                 app:use_theme_color="true"
                 tools:text="就绪 · 端口 3080" />
 
-            <com.tungsten.fcllibrary.component.view.FCLButton
-                android:id="@+id/right_btn_start"
+                    <!-- 启动 / 停止 —— 照 FCL activity_main.xml 的 start 按钮形态：
+                 无边框 clickable 容器 + 按压缩放（anim_scale）+ 图标与文字居中成链，
+                 图标用 FCLImageView + background + use_theme_color，文字 use_theme_color -->
+            <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+                android:id="@+id/right_start"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
-                android:text="@string/dsh_action_start"
+                android:clickable="true"
+                android:elevation="200dp"
+                android:focusable="true"
+                android:paddingVertical="10dp"
+                android:stateListAnimator="@xml/anim_scale"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/right_instance_hint"
-                app:ripple="true" />
+                app:layout_constraintTop_toBottomOf="@id/right_instance_hint">
 
-            <com.tungsten.fcllibrary.component.view.FCLButton
-                android:id="@+id/right_btn_webui"
+                <com.tungsten.fcllibrary.component.view.FCLImageView
+                    android:id="@+id/right_start_icon"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:background="@drawable/ic_start"
+                    app:layout_constraintBottom_toBottomOf="@id/right_start_text"
+                    app:layout_constraintEnd_toStartOf="@id/right_start_text"
+                    app:layout_constraintHorizontal_chainStyle="packed"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toTopOf="@id/right_start_text"
+                    app:use_theme_color="true" />
+
+                <com.tungsten.fcllibrary.component.view.FCLTextView
+                    android:id="@+id/right_start_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="@string/dsh_action_start"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintStart_toEndOf="@id/right_start_icon"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:use_theme_color="true" />
+
+            </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+
+            <!-- 打开界面 —— 同款形态 -->
+            <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+                android:id="@+id/right_webui"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/dsh_action_open_webui"
+                android:layout_marginTop="4dp"
+                android:clickable="true"
+                android:elevation="200dp"
+                android:focusable="true"
+                android:paddingVertical="10dp"
+                android:stateListAnimator="@xml/anim_scale"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/right_btn_start"
-                app:ripple="true" />
+                app:layout_constraintTop_toBottomOf="@id/right_start">
+
+                <com.tungsten.fcllibrary.component.view.FCLImageView
+                    android:id="@+id/right_webui_icon"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:background="@drawable/ic_baseline_earth_24"
+                    app:layout_constraintBottom_toBottomOf="@id/right_webui_text"
+                    app:layout_constraintEnd_toStartOf="@id/right_webui_text"
+                    app:layout_constraintHorizontal_chainStyle="packed"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toTopOf="@id/right_webui_text"
+                    app:use_theme_color="true" />
+
+                <com.tungsten.fcllibrary.component.view.FCLTextView
+                    android:id="@+id/right_webui_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="@string/dsh_action_open_webui"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintStart_toEndOf="@id/right_webui_icon"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:use_theme_color="true" />
+
+            </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
 
         </androidx.constraintlayout.widget.ConstraintLayout>
 

@@ -167,8 +167,8 @@ class DshMainActivity : FCLActivity(), DshShellHost {
 
     /** 右面板：当前实例卡 + 启动/停止 + 打开界面 */
     private fun setupRightPanel() {
-        binding.rightBtnWebui.setOnClickListener { openWebView() }
-        binding.rightBtnStart.setOnClickListener {
+        binding.rightWebui.setOnClickListener { openWebView() }
+        binding.rightStart.setOnClickListener {
             val inst = panelInstance ?: return@setOnClickListener
             val running = DshRuntime.runningInstanceId() == inst.id
             if (running) {
@@ -205,17 +205,31 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         if (inst == null) {
             binding.rightInstanceName.text = getString(R.string.dsh_right_no_instance)
             binding.rightInstanceHint.text = ""
-            binding.rightBtnStart.isEnabled = false
-            binding.rightBtnStart.setText(R.string.dsh_action_start)
-            binding.rightBtnWebui.isEnabled = false
+            binding.rightStart.isEnabled = false
+            binding.rightStartText.setText(R.string.dsh_action_start)
+            setStartIcon(R.drawable.ic_start)
+            binding.rightWebui.isEnabled = false
             return
         }
         val running = state is DshRuntime.State.Running && state.instanceId == inst.id
         binding.rightInstanceName.text = inst.name
         binding.rightInstanceHint.text = describeState(inst, state)
-        binding.rightBtnStart.isEnabled = inst.state == DshInstance.State.READY || running
-        binding.rightBtnStart.setText(if (running) R.string.dsh_action_stop else R.string.dsh_action_start)
-        binding.rightBtnWebui.isEnabled = running
+        binding.rightStart.isEnabled = inst.state == DshInstance.State.READY || running
+        // 图标 + 文字都随状态切换（FCL 的按钮就是"图标 + 文字"的组合形态）
+        binding.rightStartText.setText(if (running) R.string.dsh_action_stop else R.string.dsh_action_start)
+        setStartIcon(if (running) R.drawable.ic_baseline_close_24 else R.drawable.ic_start)
+        binding.rightWebui.isEnabled = running
+    }
+
+    /**
+     * 换启动/停止图标。
+     * ★ `FCLImageView` 的着色发生在**主题刷新时**（`use_theme_color` → `getBackground().setTint(color2)`），
+     * 运行期换背景图不会自动带上主题色 —— 新图标会保持 vector 自带的黑色。
+     * 这里换完立刻补一次上色；之后主题切换时控件自己的回调会继续维持。
+     */
+    private fun setStartIcon(res: Int) {
+        binding.rightStartIcon.setBackgroundResource(res)
+        binding.rightStartIcon.background?.setTint(ThemeEngine.getInstance().getTheme().color2)
     }
 
     private fun describeState(inst: DshInstance, state: DshRuntime.State): String = when {
