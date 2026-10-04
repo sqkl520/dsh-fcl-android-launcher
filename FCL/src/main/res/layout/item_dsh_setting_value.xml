@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「当前值」型设置行 —— 照搬 FCL 的 item_version_setting_value.xml：
+    label（左，单行） + value（占满剩余宽度、右对齐、超长省略）
+    + 可选编辑图标（FCLImageButton + settings 图标 + auto_tint + no_padding）
+    + 描述（12sp）
+  用于实例名称 / 模型 / profile / 端口 / API Key / 版本 / 体积 / 路径等"点开才能改"的项。
+-->
+<androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_item_rounded"
+    android:orientation="vertical"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp">
+
+    <androidx.appcompat.widget.LinearLayoutCompat
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:orientation="horizontal"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:singleLine="true"
+            app:auto_text_tint="true"
+            tools:text="模型" />
+
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/value"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginStart="5dp"
+            android:layout_marginEnd="5dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="end|center_vertical"
+            android:singleLine="true"
+            app:auto_text_tint="true"
+            tools:text="deepseek-flash" />
+
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
+            android:id="@+id/button_edit"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginStart="5dp"
+            android:src="@drawable/ic_baseline_settings_24"
+            android:visibility="gone"
+            app:auto_tint="true"
+            app:no_padding="true" />
+
+    </androidx.appcompat.widget.LinearLayoutCompat>
+
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/description"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:textSize="12sp"
+        app:auto_text_tint="true"
+        tools:text="对话使用的模型" />
+
+</androidx.appcompat.widget.LinearLayoutCompat>

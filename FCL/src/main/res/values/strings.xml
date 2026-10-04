@@ -261,4 +261,21 @@ Version %1$s</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">This will re-extract the runtime on next start. Instances and API keys are not affected.</string>
     <string name="dsh_setup_steps_header">Preparation steps</string>
+    <string name="dsh_settings_row_name">Instance name</string>
+    <string name="dsh_settings_row_port">Port</string>
+    <string name="dsh_settings_row_key">API key</string>
+    <string name="dsh_settings_row_key_status">Key status</string>
+    <string name="dsh_settings_row_version">Installed dsh</string>
+    <string name="dsh_settings_row_disk">Disk usage</string>
+    <string name="dsh_settings_row_path">Instance path</string>
+    <string name="dsh_settings_desc_name">Shown in the instance list</string>
+    <string name="dsh_settings_desc_model">Model used for conversations</string>
+    <string name="dsh_settings_desc_profile">dsh profile to boot</string>
+    <string name="dsh_settings_desc_port">Leave empty to pick a port automatically</string>
+    <string name="dsh_settings_desc_key">Stored locally, encrypted with Keystore</string>
+    <string name="dsh_settings_desc_key_status">Result of the last check</string>
+    <string name="dsh_settings_desc_path">Tap to copy</string>
+    <string name="dsh_settings_desc_verify">Run the minimal chain inside proot (9 checks)</string>
+    <string name="dsh_settings_desc_reinstall">Re-run the install script (keeps sessions and key)</string>
+    <string name="dsh_settings_desc_delete">Delete the instance directory and key; cannot be undone</string>
 </resources>

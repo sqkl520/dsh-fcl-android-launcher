@@ -13,6 +13,43 @@
 
 ---
 
+## [Unreleased · 实例详情页改 FCL 行式 + 右面板按钮照 FCL 形态（T1/T4）] - 2026-10-04
+
+> 继续 FCL 还原：把仍是"表单"的实例详情页改成 FCL 版本设置页的行式结构。
+
+### Changed
+- **实例详情设置页 `DshSettingsActivity` 改为行式结构**（照 FCL `VersionSettingPage`）：
+  新布局 `ui_dsh_instance_settings.xml`（`page_setting_list` 同构：RecyclerView）+
+  新增 `DshInstanceSettingAdapter`（分组 / 当前值行 / 按钮行）+
+  `SpacingItemDecoration`（组内 1dp 细缝+分割线、组间 8dp）+ 位置感知圆角（行底 `ltColor` tint）
+  - 新增行布局 `item_dsh_setting_value.xml`（照 FCL `item_version_setting_value.xml`：
+    label + 右对齐当前值 + 可选编辑图标 + 描述）
+  - 文本输入改用 FCL 的 `EditDialog`、单选用 FCL 的 `ItemSelectionDialog`
+    （原来的 `FCLEditText`/`FCLSpinner` 表单控件随之移除）
+  - 行：实例名称 / 模型 / profile / 端口 / API Key / 连接状态 / 测试连接 / 清除密钥 /
+    已安装 dsh / 占用空间 / 实例路径（点击复制）/ 运行时自检 / 查看日志 / 重新安装 / 删除实例
+  - **功能全部保留**（Keystore 加解密仍在 IO、分值异步刷新、确认对话框不变）
+  - 删除已无用的 `activity_dsh_settings.xml`
+- **右面板「启动/停止」「打开界面」改成 FCL 的按钮形态**（照 FCL `activity_main.xml` 的 start 按钮）：
+  无边框 `clickable` 容器 + `elevation=200dp` + `paddingVertical=10dp` + `stateListAnimator=anim_scale`，
+  内部是「`FCLImageView`（20dp，`background` 放图标，`use_theme_color`）+ `FCLTextView`（16sp bold，`use_theme_color`）」
+  的居中链式布局
+  - 启动 ↔ 停止 时**图标与文字一起切换**（`ic_start` ↔ `ic_baseline_close_24`）
+  - 换图标后立刻补一次主题上色（`FCLImageView` 的着色只在主题刷新时发生，
+    运行期换 `background` 会保持 vector 自带黑色）
+  - 恢复 FCL 图标：`ic_start`、`ic_baseline_earth_24`
+
+### Notes
+- **修正 TASKS 的一条错误前提**：T4 原写"右面板按钮改用 FCL 的 `bg_right_menu_button`"，
+  但经 `git grep` 核对，该 drawable 在 FCL 里**定义了却全仓库无人引用**（未使用资源）；
+  FCL 右面板按钮实际是上面的"图标+文字 clickable 容器"形态。已按真实写法实现
+- 新增 17 条文案（行标签与描述，中英各一份）
+
+### 验证
+- `run-compile.sh` 通过；单测 34/34
+
+---
+
 ## [0.1.0] - 归档 - 2026-10-04
 
 > 首版经过两轮真机实测的 APK，已归档到 `apk-archive/0.1.0/`。

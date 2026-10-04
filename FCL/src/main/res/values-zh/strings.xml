@@ -257,4 +257,21 @@
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">将重新解压运行环境（不会影响实例与 API Key）。</string>
     <string name="dsh_setup_steps_header">准备项</string>
+    <string name="dsh_settings_row_name">实例名称</string>
+    <string name="dsh_settings_row_port">端口</string>
+    <string name="dsh_settings_row_key">API Key</string>
+    <string name="dsh_settings_row_key_status">连接状态</string>
+    <string name="dsh_settings_row_version">已安装 dsh</string>
+    <string name="dsh_settings_row_disk">占用空间</string>
+    <string name="dsh_settings_row_path">实例路径</string>
+    <string name="dsh_settings_desc_name">显示在实例列表里的名字</string>
+    <string name="dsh_settings_desc_model">对话使用的模型</string>
+    <string name="dsh_settings_desc_profile">启动时加载的 dsh profile</string>
+    <string name="dsh_settings_desc_port">留空表示自动分配端口</string>
+    <string name="dsh_settings_desc_key">只保存在本机，Keystore 加密</string>
+    <string name="dsh_settings_desc_key_status">上一次测试或读取的结果</string>
+    <string name="dsh_settings_desc_path">点击复制到剪贴板</string>
+    <string name="dsh_settings_desc_verify">在 proot 内跑一遍最小链路（9 项）</string>
+    <string name="dsh_settings_desc_reinstall">重新执行安装脚本（保留会话与密钥）</string>
+    <string name="dsh_settings_desc_delete">删除实例目录与密钥，不可恢复</string>
 </resources>
