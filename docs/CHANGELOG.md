@@ -13,6 +13,42 @@
 
 ---
 
+## [Unreleased · 动画体系与 FCL 全面对照（修正 2 处偏离）] - 2026-10-04
+
+> 需求：再检查一下 FCL 的动画与我们有什么不同。
+
+### Added
+- `docs/reports/animation-vs-fcl.md`：**动画逐项对照报告** —— FCL 的 16 类动画来源
+  （`res/anim` 6 个、`res/xml` 2 个 scale selector、四处代码调用点）与我方现状的完整对照
+
+### Fixed
+- **图标按钮写法更正（上一轮改错）**：上一轮依据 `item_download_task.xml` 一处得出
+  「图标按钮一律用 `FCLImageView + background`、不设 stateListAnimator」，结论过度概括。
+  经完整核对，FCL 两种控件的分工是（差异源于控件实现）：
+  - `FCLImageButton`：图标走 **`android:src`**（`setImageDrawable`）、`setScaleType(FIT_XY)`、
+    **自带 `RippleDrawable`**（`ltColor`，半径 12/20dp）→ 用于**可点击的图标按钮**
+  - `FCLImageView`：图标走 **`android:background`**（`setBackground`）、无涟漪 → 用于**静态图标**
+  现日志页筛选/复制/清空、下载页刷新改回
+  `FCLImageButton + android:src + anim_scale_large + auto_tint`（照 `item_version.xml`）；
+  任务行取消保持 `FCLImageView + background`（照 `item_download_task.xml`）
+- **不定进度条补齐 FCL 写法**：任务区与前置页原先用 `style="?android:attr/progressBarStyleHorizontal"`
+  且**未设** `indeterminateDrawable`（前置页还写成 8dp）。统一为 FCL 的写法：
+  `style="@style/Widget.AppCompat.ProgressBar.Horizontal"` + `android:layout_height="3dp"`
+  + `android:indeterminateDrawable="@drawable/bg_progress_indeterminate"` + `android:max="1000"`
+  （FCL 所有水平进度条一律 3dp，已逐一核对）
+
+### Notes
+- 对照结论：FCL 的 16 类动画我们**已对齐 13 类**；未对齐的 3 类里
+  `SwipeMenuLayout`（侧滑菜单）与 `WaveProgressView`（波浪进度，MC 下载资源用）本项目无需求，
+  `AnimUtil.kt`（动画工具类）能力上被 `view.animate()` 覆盖，不需要恢复
+- 「看起来像 FCL」的关键动效——页面切换、菜单选中、按压缩放、按压涟漪、Spinner 弹窗、
+  动态岛文字、不定进度条——**现已全部对齐**
+- 另核实：FCL 的 **Activity 转场**是 `makeCustomAnimation(0,0)`（硬切）、**对话框进出场未设置**
+  （无 `setWindowAnimations`），这两处我们本来就与 FCL 一致，**不是缺口**
+- 验证：`run-compile.sh` 通过；单测 34/34
+
+---
+
 ## [Unreleased · 首启前置页 + 首页任务区（用户新需求）] - 2026-10-04
 
 > 需求：①前置都放到第一次启动的一次性卡片页，装好再进首页；②首页改成"进行中任务"区域，
@@ -58,6 +94,8 @@
 - **图标按钮加 FCL 式按压反馈**：查证 FCL 的规则 —— `anim_scale`（0.9 细微缩放）用于**可点击卡片**，
   `anim_scale_large`（1.5 倍）只用于 52dp 的大元素；此前把 `anim_scale_large` 用在 28dp 图标上属误用。
   现给日志页筛选/复制/清空、下载页刷新、任务区取消按钮统一加 `anim_scale`
+  - ⚠️ **本条已于同日更正**：`anim_scale_large` 在 FCL 里**也用于列表行内的 20–24dp 图标按钮**，
+    "只用于 52dp 大元素"是错的。已改为照 FCL 原样（可点击图标按钮 = `FCLImageButton + src + anim_scale_large`）
 - 前置页成功时状态图标切换为「完成」
 
 ---
@@ -89,6 +127,10 @@
 - **图标按钮改为 FCL 规范**（原来用 `FCLImageButton + android:src + anim_scale_large`，属自创）：
   日志页工具行、下载页刷新按钮统一改成 `FCLImageView + android:background=图标 + padding=0dp + use_theme_color`，
   **去掉 `stateListAnimator`**（FCL 的页内图标按钮不设，`anim_scale_large` 是列表卡片放大 1.5 倍的做法）
+  - ⚠️ **本条已于同日更正**：结论过度概括（依据只有 `item_download_task.xml` 一处）。
+    经完整核对，FCL 的可点击图标按钮**就是** `FCLImageButton + src + anim_scale_large`
+    （`item_version`/`item_profile`/`item_remote_version` 均如此），`FCLImageView + background`
+    用于静态图标。详见 `docs/reports/animation-vs-fcl.md`
 - 日志页「自动滚动」开关改为独占一行的 `FCLSwitch`（FCL 开关行都是 `match_parent` 一行），
   工具栏不再混排"文字按钮 / 带文字开关 / 图标按钮"
 - **恢复 FCL 的选项对话框 `ItemSelectionDialog`**（+ `com/mio/ui/DialogCard.kt`、`item_text.xml`、

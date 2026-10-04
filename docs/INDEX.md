@@ -27,6 +27,7 @@
 | `TASKS.md` | **待办清单**：已明确要做但未做的（FCL 动画还原、页内多页体系、主题自定义、真机验收等） | 想知道"接下来做什么、哪些已知未做" |
 | `reports/frontend-gap-vs-fcl.md` | **前端 vs FCL 原版逐项对照**：结构性缺口（页内多页/关于页/主题取色/文件选择/切页动画）、组件与资源缺口清单、有意保留的差异、建议顺序 | 想知道"前端还缺什么、为什么" |
 | `design/setup-flow-and-task-area.md` | **首启前置页 + 首页任务区 mockup**：一次性准备页（进度/失败/重试）与首页「进行中任务」区域的设计方案 | 做这两个功能前先看 |
+| `reports/animation-vs-fcl.md` | **动画逐项对照**：FCL 的 16 类动画来源 vs 我方现状；`FCLImageButton`/`FCLImageView` 的分工、进度条写法 | 想知道"动画差在哪、控件该用哪个" |
 | `design/fcl-ui-restoration.md` | **FCL 原汁原味 UI 还原方案**：FCL 设置结构、dsh 映射、保留/删除/替换清单、实施顺序与验收标准 | 做 UI 还原前必读 |
 
 ### `design/` — 设计文档（各功能怎么设计的，相对稳定）

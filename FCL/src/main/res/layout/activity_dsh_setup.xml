@@ -142,10 +142,11 @@
 
                     <com.tungsten.fcllibrary.component.view.FCLProgressBar
                         android:id="@+id/progress_bar"
-                        style="?android:attr/progressBarStyleHorizontal"
+                        style="@style/Widget.AppCompat.ProgressBar.Horizontal"
                         android:layout_width="0dp"
                         android:layout_height="8dp"
                         android:layout_marginTop="12dp"
+                        android:indeterminateDrawable="@drawable/bg_progress_indeterminate"
                         android:max="1000"
                         app:layout_constraintEnd_toEndOf="parent"
                         app:layout_constraintStart_toStartOf="parent"
