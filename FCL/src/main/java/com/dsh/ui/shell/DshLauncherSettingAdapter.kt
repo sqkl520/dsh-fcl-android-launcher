@@ -23,10 +23,13 @@ import com.tungsten.fcllibrary.component.theme.ThemeEngine
  */
 class DshLauncherSettingAdapter(
     private val context: Context,
+    /** 当前启动器名（自定义名或默认值），供「自定义启动器名」行显示 */
+    private val launcherName: () -> String,
     private val onAction: (Row.Action) -> Unit,
     private val onSwitch: (Row.Switch, Boolean) -> Unit,
     private val onSeek: (Row.SeekBar, Int) -> Unit,
     private val onIcon: (Row.Icons, Int) -> Unit,
+    private val onEdit: (Row.Edit) -> Unit,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -35,6 +38,7 @@ class DshLauncherSettingAdapter(
         private const val TYPE_SWITCH = 2
         private const val TYPE_SEEKBAR = 3
         private const val TYPE_ICONS = 4
+        private const val TYPE_EDIT = 5
     }
 
     sealed class Row {
@@ -64,6 +68,17 @@ class DshLauncherSettingAdapter(
             val max: Int,
             val value: () -> Int,
             val suffix: String = "",
+            val action: ActionType
+        ) : Row()
+
+        /**
+         * 编辑行（FCL 的 `Row.EditRow`）：右侧显示当前值，点击弹输入对话框。
+         * 复用 [ItemDshSettingValueBinding]（与实例详情页同一个布局）。
+         */
+        data class Edit(
+            val title: Int,
+            val description: Int,
+            val value: () -> String,
             val action: ActionType
         ) : Row()
 
@@ -98,6 +113,8 @@ class DshLauncherSettingAdapter(
         THEME_COLOR2_DARK,
         BACKGROUND_LT,
         BACKGROUND_DK,
+        // —— 编辑行 ——
+        CUSTOM_NAME,
     }
 
     /** 多图标行的动作编号（0/1/2 = 第几个图标） */
@@ -121,6 +138,11 @@ class DshLauncherSettingAdapter(
             Row.Action(
                 R.string.dsh_setting_about, R.string.dsh_about_subtitle,
                 R.string.dsh_action_open, ActionType.ABOUT
+            ),
+
+            Row.Edit(
+                R.string.dsh_setting_custom_name, R.string.dsh_setting_custom_name_desc,
+                launcherName, ActionType.CUSTOM_NAME
             ),
 
             Row.Group(R.string.dsh_setting_group_appearance),
@@ -242,6 +264,8 @@ class DshLauncherSettingAdapter(
     class SwitchHolder(val binding: ItemDshSettingSwitchBinding) : RecyclerView.ViewHolder(binding.root)
     class SeekBarHolder(val binding: ItemDshSettingSeekbarBinding) : RecyclerView.ViewHolder(binding.root)
     class IconsHolder(val binding: ItemDshSettingIconsBinding) : RecyclerView.ViewHolder(binding.root)
+    class EditHolder(val binding: com.dsh.fcl.androidlauncher.databinding.ItemDshSettingValueBinding) :
+        RecyclerView.ViewHolder(binding.root)
 
     override fun getItemCount(): Int = rows.size
 
@@ -250,6 +274,7 @@ class DshLauncherSettingAdapter(
         is Row.Switch -> TYPE_SWITCH
         is Row.SeekBar -> TYPE_SEEKBAR
         is Row.Icons -> TYPE_ICONS
+        is Row.Edit -> TYPE_EDIT
         else -> TYPE_ACTION
     }
 
@@ -260,6 +285,10 @@ class DshLauncherSettingAdapter(
             TYPE_SWITCH -> SwitchHolder(ItemDshSettingSwitchBinding.inflate(inflater, parent, false))
             TYPE_SEEKBAR -> SeekBarHolder(ItemDshSettingSeekbarBinding.inflate(inflater, parent, false))
             TYPE_ICONS -> IconsHolder(ItemDshSettingIconsBinding.inflate(inflater, parent, false))
+            TYPE_EDIT -> EditHolder(
+                com.dsh.fcl.androidlauncher.databinding.ItemDshSettingValueBinding
+                    .inflate(inflater, parent, false)
+            )
             else -> ActionHolder(ItemDshSettingBinding.inflate(inflater, parent, false))
         }
     }
@@ -303,6 +332,23 @@ class DshLauncherSettingAdapter(
                     override fun onStartTrackingTouch(sb: android.widget.SeekBar?) = Unit
                     override fun onStopTrackingTouch(sb: android.widget.SeekBar?) = Unit
                 })
+                applyRowBackground(holder.itemView, position)
+            }
+
+            is Row.Edit -> {
+                val b = (holder as EditHolder).binding
+                b.title.setText(row.title)
+                if (row.description != 0) {
+                    b.description.visibility = android.view.View.VISIBLE
+                    b.description.setText(row.description)
+                } else {
+                    b.description.visibility = android.view.View.GONE
+                }
+                b.value.text = row.value()
+                b.buttonEdit.visibility = android.view.View.VISIBLE
+                val click = android.view.View.OnClickListener { onEdit(row) }
+                b.root.setOnClickListener(click)
+                b.buttonEdit.setOnClickListener(click)
                 applyRowBackground(holder.itemView, position)
             }
 

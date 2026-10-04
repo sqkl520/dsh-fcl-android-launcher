@@ -180,9 +180,6 @@
     <string name="dsh_setting_animation_speed_desc">列表与页面动画的播放速度</string>
     <string name="dsh_setting_fullscreen">全屏（忽略刘海）</string>
     <string name="dsh_setting_fullscreen_desc">让内容延伸到屏幕边缘</string>
-    <string name="dsh_lang_system">跟随系统</string>
-    <string name="dsh_lang_zh_cn">简体中文</string>
-    <string name="dsh_lang_en">English</string>
     <string name="dsh_theme_mode_follow">跟随系统</string>
     <string name="dsh_theme_mode_light">亮色</string>
     <string name="dsh_theme_mode_dark">暗色</string>
@@ -274,4 +271,7 @@
     <string name="dsh_settings_desc_verify">在 proot 内跑一遍最小链路（9 项）</string>
     <string name="dsh_settings_desc_reinstall">重新执行安装脚本（保留会话与密钥）</string>
     <string name="dsh_settings_desc_delete">删除实例目录与密钥，不可恢复</string>
+    <string name="dsh_lang_system">跟随系统</string>
+    <string name="dsh_setting_custom_name">自定义启动器名</string>
+    <string name="dsh_setting_custom_name_desc">用于关于页；写 ${launcher_version} 会替换成版本号</string>
 </resources>

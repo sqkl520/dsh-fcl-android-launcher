@@ -184,9 +184,6 @@
     <string name="dsh_setting_animation_speed_desc">Speed of list and page animations</string>
     <string name="dsh_setting_fullscreen">Fullscreen (ignore notch)</string>
     <string name="dsh_setting_fullscreen_desc">Let content extend behind the cutout</string>
-    <string name="dsh_lang_system">Follow system</string>
-    <string name="dsh_lang_zh_cn">Simplified Chinese</string>
-    <string name="dsh_lang_en">English</string>
     <string name="dsh_theme_mode_follow">Follow system</string>
     <string name="dsh_theme_mode_light">Light</string>
     <string name="dsh_theme_mode_dark">Dark</string>
@@ -278,4 +275,18 @@ Version %1$s</string>
     <string name="dsh_settings_desc_verify">Run the minimal chain inside proot (9 checks)</string>
     <string name="dsh_settings_desc_reinstall">Re-run the install script (keeps sessions and key)</string>
     <string name="dsh_settings_desc_delete">Delete the instance directory and key; cannot be undone</string>
+    <string name="dsh_lang_system" translatable="false">Use system language</string>
+    <string name="dsh_lang_english" translatable="false">English</string>
+    <string name="dsh_lang_simplified_chinese" translatable="false">简体中文</string>
+    <string name="dsh_lang_russian" translatable="false">Русский язык</string>
+    <string name="dsh_lang_brazilian_portuguese" translatable="false">Português brasileiro</string>
+    <string name="dsh_lang_persian" translatable="false">فارسی</string>
+    <string name="dsh_lang_ukrainian" translatable="false">Українська Мова</string>
+    <string name="dsh_lang_german" translatable="false">Deutsch</string>
+    <string name="dsh_lang_traditional_chinese_hk" translatable="false">繁體中文（香港）</string>
+    <string name="dsh_lang_japanese" translatable="false">日本語</string>
+    <string name="dsh_lang_turkish" translatable="false">Türkçe</string>
+    <string name="dsh_lang_traditional_chinese_tw" translatable="false">繁體中文（台灣）</string>
+    <string name="dsh_setting_custom_name">Custom launcher name</string>
+    <string name="dsh_setting_custom_name_desc">Shown in About; ${launcher_version} is replaced by the version</string>
 </resources>

@@ -13,6 +13,31 @@
 
 ---
 
+## [Unreleased · 设置页补齐 FCL 自定义项：12 语言 + 自定义启动器名（T2）] - 2026-10-04
+
+### Added
+- 恢复 `com/mio/util/LauncherUtil.kt`（`getLauncherName()`，包名改到本项目）：
+  未设置时返回 `应用名/版本`；设置过则返回自定义名，并把其中的字面量 `${launcher_version}`
+  替换成版本号（FCL 的模板约定）。FCL 用它给游戏窗口/崩溃报告取名，本项目用于关于页与设置项
+- 启动器设置适配器新增 **编辑行**（`Row.Edit`，对应 FCL 的 `Row.EditRow`）：
+  复用 T1 的 `item_dsh_setting_value.xml`（label + 右对齐当前值 + 编辑图标），点击弹 `EditDialog`
+- 新增设置项「**自定义启动器名**」（写 `launcher` 偏好的 `custom_launcher_name`，与 FCL 同字段同写法）
+- 新增设置项行为：**语言列表由 3 项补到 12 项**（照 FCL：跟随系统 / English / 简体中文 /
+  Русский язык / Português brasileiro / فارسی / Українська Мова / Deutsch /
+  繁體中文（香港）/ 日本語 / Türkçe / 繁體中文（台灣）），
+  顺序与 `LocaleUtils.getLocale(index)` 的 0..11 一一对应
+
+### Changed
+- 关于页顶部改为显示 `getLauncherName(context)`（自定义名或 `应用名/版本`），再跟说明文字 —— 与 FCL 关于页排布一致
+
+### Removed
+- 旧的 3 条语言文案（`dsh_lang_system` / `dsh_lang_zh_cn` / `dsh_lang_en`）被 12 条新文案取代
+
+### Notes
+- 验证：`run-compile.sh` 通过；单测 34/34
+
+---
+
 ## [Unreleased · 实例详情页改 FCL 行式 + 右面板按钮照 FCL 形态（T1/T4）] - 2026-10-04
 
 > 继续 FCL 还原：把仍是"表单"的实例详情页改成 FCL 版本设置页的行式结构。
