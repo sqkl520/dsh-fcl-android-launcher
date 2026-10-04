@@ -36,6 +36,7 @@
         android:padding="0dp"
         app:layout_constraintEnd_toStartOf="@id/btn_copy"
         app:layout_constraintTop_toTopOf="parent"
+        android:stateListAnimator="@xml/anim_scale"
         app:use_theme_color="true" />
 
     <com.tungsten.fcllibrary.component.view.FCLImageView
@@ -47,6 +48,7 @@
         android:padding="0dp"
         app:layout_constraintEnd_toStartOf="@id/btn_clear"
         app:layout_constraintTop_toTopOf="@id/btn_filter"
+        android:stateListAnimator="@xml/anim_scale"
         app:use_theme_color="true" />
 
     <com.tungsten.fcllibrary.component.view.FCLImageView
@@ -58,6 +60,7 @@
         android:padding="0dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="@id/btn_filter"
+        android:stateListAnimator="@xml/anim_scale"
         app:use_theme_color="true" />
 
     <!-- ===== 自动滚动（FCL 的开关行：独占一行、match_parent） ===== -->
