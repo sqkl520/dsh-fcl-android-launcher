@@ -1,4 +1,0 @@
-# 0.1.0-SNAPSHOT 交付产物（文件名在两处相同，故只写文件名，两个目录都能直接 `sha256sum -c` 校验）
-#   - 交付/取件：<工作区>/output/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk
-#   - 版本快照：<仓库>/apk-archive/0.1.0-SNAPSHOT/dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk
-e61a5939279985b7b2ade103555927250616e3301a2d72baeca6158b710c2b00  dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk
