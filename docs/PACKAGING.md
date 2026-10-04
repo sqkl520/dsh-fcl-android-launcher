@@ -39,14 +39,18 @@ cd D:\Projects\dsh-fcl-android-launcher
 
 ## 产物落点（交付 / 快照 / 构建产物）
 
-三个位置各司其职，**不要互相混用**：
+四个位置各司其职，**不要互相混用**：
 
-| 位置 | 用途 | 是否入 Git |
-|---|---|---|
-| `<工作区>/output/` | **交付 / 取件**（设备端可访问：`<rikkahub files>/workspaces/<id>/files/output/`）；只放当前版本 | 否 |
-| `<工作区>/output/legacy/` | 已废弃的历史冒烟包（MC 时代，rootfs 只是 PLACEHOLDER，**不能用**） | 否 |
-| `<仓库>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 二进制否；`SHA256SUMS`/`README.md` 是 |
-| `<仓库>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会把它 **`mv`** 到 `output/`，不留第三份 | 否 |
+| 位置 | 用途 | 属于哪个仓库 | 是否入 Git |
+|---|---|---|---|
+| `<工作区>/output/` | **交付 / 取件**（手机设备端可访问：`<rikkahub files>/workspaces/<id>/files/output/`）；只放当前版本 | ea（工作区） | 否 |
+| `<工作区>/output/legacy/` | 已废弃的历史冒烟包（MC 时代，rootfs 只是 PLACEHOLDER，**不能用**） | ea（工作区） | 否 |
+| `<源码仓库>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 源码仓 | 二进制否；`SHA256SUMS`/`README.md` 是 |
+| `<源码仓库>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会把它 **`mv`** 到工作区的 `output/`，不留第三份 | 源码仓 | 否 |
+
+> 「工作区」= ea 仓库根（手机 `/workspace`、电脑 `D:\Projects\DSHarness-FCL-Launcher`）；
+> 「源码仓库」= 本仓库（手机的 `/workspace/FCL`、电脑的 `D:\Projects\dsh-fcl-android-launcher`）。
+> 仓库分工见 **ea 仓库根的 `REPOS.md`**（手机 `/workspace/REPOS.md`）。
 
 命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
 `dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`）。
