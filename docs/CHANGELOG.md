@@ -13,6 +13,21 @@
 
 ---
 
+## [Unreleased - rename workspace to dsh-workspace] - 2026-10-05
+
+> Outer folder renamed for identifiability: workspace -> dsh-workspace.
+> Same nested layout (dsh-workspace/android-app), same on phone/PC.
+
+### Changed
+- PC paths: D:\Projects\dsh-workspace + D:\Projects\dsh-workspace\android-app.
+- Docs updated (ENVIRONMENT / PACKAGING). No code or config changes.
+
+### Notes
+- Verified: :FCL:compileDebugKotlin BUILD SUCCESSFUL in 1m39s from new path.
+- Old empty D:\Projects\workspace shell cannot be deleted yet (OS file lock,
+  only stale build caches inside); remove after a reboot.
+
+---
 ## [Unreleased · PC dir merge: source repo nested as workspace/android-app] - 2026-10-05
 
 > Folders merged: source repo moved inside workspace as android-app, outer
