@@ -27,7 +27,7 @@
 org.gradle.java.home=C:/Program Files/Microsoft/jdk-17.0.20.101-hotspot
 
 # ② 告诉 Gradle SDK 在哪 —— 写进仓库根 local.properties（该文件 .gitignore，不进 Git）
-#    D:\Projects\workspace\android-app\local.properties
+#    D:\Projects\dsh-workspace\android-app\local.properties
 sdk.dir=D:/Android/Sdk
 
 # ③ 让脚本/其他工具也能找到 SDK（可选但推荐，用户级环境变量）
@@ -57,7 +57,7 @@ git ls-files --eol FCL/src/main/assets/dsh/scripts/
 
 ### 1.4 Android Studio 首次打开要做的
 
-1. `File → Open` 选源码根（`D:\Projects\workspace\android-app`，**不是**里面的 `FCL/`）
+1. `File → Open` 选源码根（`D:\Projects\dsh-workspace\android-app`，**不是**里面的 `FCL/`）
 2. `Settings → Build → Build Tools → Gradle → Gradle JDK` 选 **17**（Studio 自带 JBR 是 21，AGP 8.13 要 17）
 3. 首次同步会下载 Gradle 8.14.4 + 依赖，需联网，数分钟
 
