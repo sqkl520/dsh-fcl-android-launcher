@@ -13,6 +13,70 @@
 
 ---
 
+## [Unreleased · 搬到 Windows 电脑：环境搭建 + 仓库清理 + 文档同步] - 2026-10-05
+
+> 需求：把开发环境从手机沙箱搬到电脑，配好工具链，删掉电脑 coding 用不上的东西，同步文档。
+> 目标机器：Windows 10 x64（JDK 21 为系统默认，项目需 17）。
+
+### Added
+- **Windows x64 开发环境**（工具链细节见 `docs/ENVIRONMENT.md` §1）：
+  - JDK **17**（Microsoft OpenJDK 17.0.20.1，`winget install Microsoft.OpenJDK.17`）
+  - **Android Studio** 2026.1.3.7（`winget install Google.AndroidStudio`）
+  - Android SDK：`D:\Android\Sdk`（cmdline-tools + platform-tools + **platforms;android-35**
+    + **build-tools;35.0.0**），NDK **27.0.12077973**，CMake **3.22.1**
+  - 三条接线：`%USERPROFILE%\.gradle\gradle.properties` 里 `org.gradle.java.home` 指向 JDK 17；
+    仓库根 `local.properties` 写 `sdk.dir`（该文件已 gitignore）；
+    用户级环境变量 `ANDROID_SDK_ROOT` / `ANDROID_HOME`
+- `docs/ENVIRONMENT.md` **改写为双平台版**：新增 §1「Windows x64 电脑（当前环境）」——
+  组件版本与路径、三条关键接线、**行尾必须是 LF**、Android Studio 首次打开要做的两步、本平台已知坑；
+  原 arm64 沙箱内容保留为 §2/§3（qemu 包装那套**仅 arm64 需要**，Windows 明确标注不需要）
+- `docs/PACKAGING.md`：新增「**Windows 打包**」一节（Gradle 命令 + 产物路径 + 两条打包注意）
+
+### Changed
+- **`.gitattributes`：`FCL/src/main/assets/dsh/scripts/**` 声明 `text eol=lf`**；
+  本机 Git 设为 `core.autocrlf=false` + `core.eol=lf`。
+  原因：这三个脚本会被**原样打进 APK**，真机上由 proot 里的 `/bin/sh` 执行 ——
+  Windows 检出成 CRLF 后首行变 `#!/bin/sh\r`，解释器找不到，底座脚本全废（详见 `LESSONS.md` §16）
+  - 实测：三个脚本从 CRLF 转回 LF（probe.sh 5588→5443 B、setup-node-dsh.sh 5375→5234 B、
+    start-dsh.sh 10094→9845 B，差值恰等于各自行数）
+- `docs/INDEX.md`：「当前状态」的代码/资源/验证数字按实测更新（`com/dsh` 42 个文件、res 109 个文件、
+  单测 34/34）；「代码在哪」表改为反映本仓库真实结构（原表列的 `dsh/`/`poc/` 是工作区目录，不在本仓库）；
+  「到电脑后的最短路径」整节改写为「**在电脑上开发（当前环境）**」——直接给 Windows 的 Gradle 命令
+- `docs/PACKAGING.md` 顶部过时声明**修正**：原文说"运行时底座改走 `:proot-engine`，本文仅作历史参考"——
+  但项目**最终没有采用 proot-engine**，继续走自研 proot 层 + 预打包 rootfs（阶段 A~E-1 已落地）。
+  原文会误导读者以为现有 proot 链路作废，已改正
+
+### Removed
+- **MC 时代遗留、与 dsh 启动器无关**（均经引用核查后删除，历史里可取回）：
+  - `.github/workflows/`（5 个：`build.yml` 按 5 个 ABI 打包、`release.yml` 读根 CHANGELOG 建 release、
+    `check-codes.yml` + `check-codes-comment.yml` 走 reviewdog、`cleanup-artifacts.yml`）
+    —— 全是 FCL 原版，依赖已删除的 MC 资产与 secrets，一旦触发必然失败（对应 TASKS 的 T9）
+  - `.github/ISSUE_TEMPLATE/`（3 个 issue 表单，内容是 MC 整合包/渲染器/游戏版本）、
+    `.github/scripts/check-codes-comment.js`、`.github/images/`（3 张 FCL 界面截图，全仓 0 引用）
+  - `version_map.json`（FCL 的版本清单）+ `FCL/build.gradle.kts` 里的** `updateMap` 任务**与其专用 import
+    （该任务是唯一写入方，一并删除）
+  - `scripts/fetch-jna.sh`（给 MC 的 JNA natives 下载脚本，目标目录 `assets/app_runtime/` 早已删除）
+  - `private_key.pepk`（FCL 的 Play 签名密钥加密文件，本项目不用 Play 签名）
+  - 根目录 `CHANGELOG.md`（与 `docs/CHANGELOG.md` 内容逐字节相同，属重复维护；
+    按"文档主副本在 docs/"的约定**只保留 `docs/` 那份**）
+- **保留未删（有意）**：`debug-key.jks`（`assembleFordebug` 签名必需）、
+  `key-store.jks`（release 签名位，将来发版要用）、`gradlew`/`gradlew.bat`、
+  `config/checkstyle/` + `FCL:checkstyle` 任务（Java 侧 lint 仍可用）
+
+### Notes
+- **验证（Windows 实测）**：
+  - 编译：`:FCL:compileDebugKotlin` + `compileDebugJavaWithJavac` + `processDebugResources`
+    + `processDebugMainManifest` → **BUILD SUCCESSFUL in 5m37s**（34 tasks executed，0 error；
+    告警均为既有的 `No cast needed` / `onBackPressed` 弃用）
+  - 单测：`:FCL:testFordebugUnitTest` → **BUILD SUCCESSFUL in 2m31s**，
+    **TOTAL=34 tests / 0 failures / 0 errors / 0 skipped**
+    （`DshCoreLogicTest` 32 + `DshResourceFormatTest` 2，与既有记录的 34/34 一致）
+  - 行尾：`git ls-files --eol FCL/src/main/assets/dsh/scripts/` → `i/lf  w/lf  attr/text eol=lf`
+- **仍未做**：`rootfs.tar.xz`（300MB）不在仓库里，Windows 上打包前需先补回
+  （优先从已打好的 0.1.1 APK 里 `unzip -p` 无损取出，见 `README.md`）
+
+---
+
 ## [Unreleased · 工作区快照推送 + 工具链/脚本可移植化] - 2026-10-04
 
 > 需求：把工作区所有文件传到 `github.com/sqkl520/ea`，好在手机上继续做这个项目。

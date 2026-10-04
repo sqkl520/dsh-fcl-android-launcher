@@ -563,5 +563,82 @@ git show "<提交>:FCL/src/main/java/.../LauncherSettingAdapter.kt"     # 连行
 验收从"有没有 Material"扩展成三条：① 布局里 0 个 Material；② 每个页面都有 fcllibrary 控件；
 ③ 代码里 `MaterialAlertDialogBuilder` 归零。只查 ① 会漏掉"控件对了但结构不对"和"对话框还是 Material"。
 
+---
+
+## 16. Windows 上开发：脚本进了 Git 就可能是 CRLF（2026-10-05，搬到电脑时踩到）
+
+**背景**：`FCL/src/main/assets/dsh/scripts/*.sh` 会被**原样打进 APK**，真机上由 proot 里的
+`/bin/sh` 执行。本机 Git 的 `core.autocrlf=true`（Windows 常见默认），
+`* text=auto` 会把它们检成 **CRLF**。
+
+**后果**：首行变成 `#!/bin/sh\r` —— 内核找的解释器是 `/bin/sh\r`，不存在 → 脚本根本不执行。
+而且这个坑**在 Windows 上完全看不出来**（文件内容"看着"就是对的），只有装到手机上才炸。
+本项目三个脚本都中招（probe / setup-node-dsh / start-dsh），是整条底座启动链。
+
+**修复（两处都要做，缺一不可）**：
+
+```powershell
+# ① 全局配置：让 Git 认得 LF（Windows 默认 true 会到处转 CRLF）
+git config --global core.autocrlf false
+git config --global core.eol lf
+
+# ② 仓库内声明（防止别人 clone 时又按自己机器的默认来）
+#    .gitattributes 追加：
+FCL/src/main/assets/dsh/scripts/** text eol=lf
+```
+
+**注意**：改完 **`git checkout --` 不会自动把已检出的 CRLF 转回 LF** ——
+必须让文件重新过一次索引（`git rm --cached` 删索引项 + 删工作区文件 + `git checkout HEAD -- <路径>`），
+或者干脆重新 clone。验证用 `git ls-files --eol <路径>`，要看到 `i/lf  w/lf`。
+
+**推广**：凡是"文本文件要被另一个操作系统/解释器直接执行"的资产（shell 脚本、Dockerfile、
+sbatch 脚本、CI 脚本），都应该显式声明 `eol=lf`，别指望开发者机器的默认配置。
+
+---
+
+## 17. Windows 上装 Android SDK 的两个坑（2026-10-05）
+
+**① `sdkmanager --licenses` 的交互喂不进去**：
+`$yes | sdkmanager.bat --licenses` 在 PowerShell 里**无效** —— `.bat` 包装层把 stdin 吃掉了，
+它照样打印 `Accept? (y/N)` 然后跳过全部 7 个 license，后续安装包全部报
+`Skipping following packages as the license is not accepted`。
+
+正确做法是用 `cmd` 的重定向：
+
+```powershell
+1..50 | ForEach-Object { 'y' } | Out-File -Encoding ascii yes.txt
+cmd /c '"D:\Android\Sdk\cmdline-tools\latest\bin\sdkmanager.bat" --sdk_root="D:\Android\Sdk" --licenses < yes.txt'
+```
+
+（也试过手写 `licenses/android-sdk-license` 文件，**不可靠**：哈希要精确到字节、
+一行一个 32 位十六进制，多一个换行或少一个字符就会被判为"未接受"，且不报具体原因。）
+
+**② 系统默认 JDK 是 21，AGP 8.13 要 17**：
+Gradle 默认用 `JAVA_HOME`。不改的话要么报版本错，要么用错版本编。
+最省事的接线是用户级 `%USERPROFILE%\.gradle\gradle.properties`：
+
+```properties
+org.gradle.java.home=C:/Program Files/Microsoft/jdk-17.0.20.101-hotspot
+```
+
+**顺带**：Windows 上跑不了仓库外那三个 `run-*.sh`（纯 POSIX sh），直接用 Gradle 等价命令即可 ——
+`compileDebugKotlin` + `compileDebugJavaWithJavac` + `processDebugResources` + `processDebugMainManifest`
+（= `run-compile.sh` 覆盖的四项）、`testFordebugUnitTest`（= `run-tests.sh` 那 34 项）。
+Windows 上**不需要 qemu 包装**（那是 arm64 才有的坑，见 §1.3）。
+
+---
+
+## 18. 同一份内容维护两遍，迟早会分叉（2026-10-05）
+
+仓库里 `CHANGELOG.md`（根）与 `docs/CHANGELOG.md` **逐字节相同**，是两个独立文件、各自提交。
+这种"双份真相"最后一定会出现"改了这份忘了那份"，而 CHANGELOG 恰恰是项目的硬规则（每改必记）。
+
+**处理**：按项目已有的约定（"文档主副本在 `docs/`"）**只保留 `docs/` 那份**，根目录的直接删。
+判断依据不是"哪个更顺手"，而是**项目自己写明的主副本在哪**。
+
+**推广**：发现两份同名同内容文件时，先查历史确认**哪一份是被引用/被约定的**
+（例如 FCL 的 release workflow 读的是根目录那份 —— 但我们没有那个 workflow 了），
+再删掉另一份，而不是两份都留着"图省事"。
+
 
 
