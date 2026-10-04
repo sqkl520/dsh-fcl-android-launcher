@@ -2,9 +2,10 @@
 <!--
   dsh 运行/安装日志页 —— 控制台式日志视图。
 
-  工具行**按 FCL 的图标按钮规范**写（见 FCL item_download_task.xml 的取消按钮）：
-    图标按钮一律用 FCLImageView + `android:background=图标` + `padding=0dp` + `use_theme_color`，
-    尺寸统一 28dp；**不设 stateListAnimator**（FCL 的页内图标按钮不设，按压缩放是列表卡片的做法）。
+  工具行按 FCL 的图标按钮规范写（照 FCL item_version.xml）：
+    可点击的图标按钮用 **FCLImageButton + android:src + anim_scale_large + auto_tint**
+    —— FCLImageButton 自带 Ripple 涟漪（颜色 ltColor）、setScaleType(FIT_XY)，1.5 倍按压缩放
+    正是 FCL 图标按钮的既定做法（item_version / item_profile / item_remote_version 都这么写）。
   文字（状态）用 FCLTextView，开关用 FCLSwitch（FCL 的开关行都是独占一行）。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -28,40 +29,35 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="@id/btn_filter" />
 
-    <com.tungsten.fcllibrary.component.view.FCLImageView
+    <com.tungsten.fcllibrary.component.view.FCLImageButton
         android:id="@+id/btn_filter"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:background="@drawable/ic_baseline_list_24"
-        android:padding="0dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:src="@drawable/ic_baseline_list_24"
+        android:stateListAnimator="@xml/anim_scale_large"
         app:layout_constraintEnd_toStartOf="@id/btn_copy"
         app:layout_constraintTop_toTopOf="parent"
-        android:stateListAnimator="@xml/anim_scale"
-        app:use_theme_color="true" />
+        app:auto_tint="true" />
 
-    <com.tungsten.fcllibrary.component.view.FCLImageView
+    <com.tungsten.fcllibrary.component.view.FCLImageButton
         android:id="@+id/btn_copy"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:layout_marginStart="12dp"
-        android:background="@drawable/ic_baseline_content_copy_24"
-        android:padding="0dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:src="@drawable/ic_baseline_content_copy_24"
+        android:stateListAnimator="@xml/anim_scale_large"
         app:layout_constraintEnd_toStartOf="@id/btn_clear"
         app:layout_constraintTop_toTopOf="@id/btn_filter"
-        android:stateListAnimator="@xml/anim_scale"
-        app:use_theme_color="true" />
+        app:auto_tint="true" />
 
-    <com.tungsten.fcllibrary.component.view.FCLImageView
+    <com.tungsten.fcllibrary.component.view.FCLImageButton
         android:id="@+id/btn_clear"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:layout_marginStart="12dp"
-        android:background="@drawable/ic_baseline_delete_24"
-        android:padding="0dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:src="@drawable/ic_baseline_delete_24"
+        android:stateListAnimator="@xml/anim_scale_large"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="@id/btn_filter"
-        android:stateListAnimator="@xml/anim_scale"
-        app:use_theme_color="true" />
+        app:auto_tint="true" />
 
     <!-- ===== 自动滚动（FCL 的开关行：独占一行、match_parent） ===== -->
     <com.tungsten.fcllibrary.component.view.FCLSwitch

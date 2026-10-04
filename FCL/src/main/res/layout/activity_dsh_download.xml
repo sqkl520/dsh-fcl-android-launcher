@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   dsh 版本下载页。FCL 范式（见 §2.5）：页内不放大标题（页名由外壳动态岛显示），
-  动作按钮用 FCLImageButton（use_theme_color + no_padding + anim_scale_large）。
+  动作按钮用 FCLImageButton + android:src + anim_scale_large（照 FCL item_version.xml：
+  FCLImageButton 自带 Ripple 按压涟漪，FIT_XY 自适应；1.5 倍按压缩放是 FCL 图标按钮的既定做法）。
   内容：顶部刷新按钮 + "显示预览版"开关 + 版本列表 + 加载/错误态。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -13,16 +14,15 @@
     android:paddingEnd="12dp">
 
     <!-- 刷新：按 FCL 图标按钮规范（FCLImageView + background 图标 + padding 0 + use_theme_color） -->
-    <com.tungsten.fcllibrary.component.view.FCLImageView
+    <com.tungsten.fcllibrary.component.view.FCLImageButton
         android:id="@+id/btn_refresh"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:background="@drawable/ic_baseline_refresh_24"
-        android:padding="0dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:src="@drawable/ic_baseline_refresh_24"
+        android:stateListAnimator="@xml/anim_scale_large"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent"
-        android:stateListAnimator="@xml/anim_scale"
-        app:use_theme_color="true" />
+        app:auto_tint="true" />
 
     <com.tungsten.fcllibrary.component.view.FCLSwitch
         android:id="@+id/switch_prerelease"
