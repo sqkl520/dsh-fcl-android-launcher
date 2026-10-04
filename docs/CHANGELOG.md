@@ -13,6 +13,39 @@
 
 ---
 
+## [Unreleased · APK 产物整理（交付目录 / 快照 / 去重）] - 2026-10-04
+
+> 背景：环境通知 `/tool_outputs` 不是挂载点（设备端不存在），且工作区里同一个 APK 存在 **3 份**
+> 副本、另有 1 份早期冒烟包，磁盘已用 95%。
+
+### Changed
+- **交付目录统一为 `<工作区>/output/`**（设备端可见），当前的
+  `dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk` 即在此处；
+  新增 `output/README.md`（版本/包名/签名/内含 rootfs 的说明）与 `output/SHA256SUMS`
+- `build-apk.sh` 大改：
+  - 产物落点从**工作区根目录**改为 `output/`
+  - 用 **`mv`** 搬走 Gradle 产物（原来 `cp`，会同时留下「Gradle 产物 + output + 快照」三份 300MB 副本）
+  - 同步写 `output/SHA256SUMS` 与 `apk-archive/<ver>/SHA256SUMS`
+  - 明确注释**不要写 `/tool_outputs`**（非挂载点，设备端不存在）
+- `apk-archive/<ver>/SHA256SUMS`：去掉已过时的绝对路径，只写文件名 ——
+  `output/` 与 `apk-archive/<ver>/` 两处同名，均可直接 `sha256sum -c` 校验
+- `apk-archive/README.md`：补充"交付目录 vs 版本快照 vs 构建产物"三者关系的表格
+- `docs/PACKAGING.md`：新增「产物落点（交付 / 快照 / 构建产物）」一节，含命名规则与
+  `/tool_outputs` 的警示
+
+### Removed
+- 删除 Gradle 的重复产物副本（`FCL/build/outputs/apk/fordebug/...apk`，326MB，可重新生成）——
+  工作区可用空间 6.2G → 6.5G
+
+### Notes
+- 早期冒烟包归位为 `output/legacy/dsh-fcl-arm64-2026-09-29-legacy.apk`（未删除，只归位）。
+  经核验它是**MC 时代产物**：含 LWJGL / SDL2 / ANGLE / Mesa / libawt 等 MC 原生库，
+  且 `assets/dsh/rootfs` 只有 PLACEHOLDER ⇒ **跑不了 dsh**，仅验证过"能装能起外壳"。
+  已在 `output/README.md` 标注可删除（约 180MB）
+- 整理后 APK 副本：`output/`（交付）+ `apk-archive/`（快照）= 2 份，不再是 3 份
+
+---
+
 ## [Unreleased · 动画完全对齐：恢复 SwipeMenuLayout / WaveProgressView / AnimUtil] - 2026-10-04
 
 > 用户要求：**完全套用仿照 FCL 的 UI**，此前判为"不需要"的 3 项也全部加上。

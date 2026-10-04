@@ -19,6 +19,26 @@
 > 该 assets 目录内另有一份最小提示 `FCL/src/main/assets/dsh/README.md`，指向本文。
 > 出 APK 的可复现脚本：`/workspace/build-apk.sh`。
 
+## 产物落点（交付 / 快照 / 构建产物）
+
+三个位置各司其职，**不要互相混用**：
+
+| 位置 | 用途 | 是否入 Git |
+|---|---|---|
+| `<工作区>/output/` | **交付 / 取件**（设备端可访问：`<rikkahub files>/workspaces/<id>/files/output/`）；只放当前版本 | 否 |
+| `<工作区>/output/legacy/` | 已废弃的历史冒烟包（MC 时代，rootfs 只是 PLACEHOLDER，**不能用**） | 否 |
+| `<仓库>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 二进制否；`SHA256SUMS`/`README.md` 是 |
+| `<仓库>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会把它 **`mv`** 到 `output/`，不留第三份 | 否 |
+
+命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
+`dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`）。
+
+`SHA256SUMS` 里只写**文件名**（两处同名），因此 `output/` 与 `apk-archive/<version>/`
+都能直接 `sha256sum -c` 校验。
+
+> ⚠️ **不要用 `/tool_outputs`**：它不是挂载点，只是沙箱内的临时目录，设备端不存在。
+> 早期打包曾把 APK 放那里，后来统一改到 `output/`。
+
 第二轮加固（2026-09-22）后，assets 里的 `version` 与 `scripts/version` 已提到 **2**
 （子项版本变化会触发增量重解压）。改动与原因见 `reports/round2-fixes.md`。
 
