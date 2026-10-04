@@ -8,6 +8,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.dsh.core.DshVersionListItem
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ItemDshVersionBinding
+import com.mio.util.AnimUtil
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 
 /**
  * 下载页版本列表 Adapter。已安装的版本显示"已安装"角标、隐藏安装按钮。
@@ -102,6 +104,16 @@ class DshVersionAdapter(
                 b.btnInstall.setOnClickListener { onInstall(item) }
             }
         }
+
+        // 入场动画（FCL 同款：RemoteVersionListAdapter 在 onBindViewHolder 末尾调
+        // AnimUtil.playTranslationX，时长随「动画速度」设置走）。
+        // 注意这会带来 FCL 一样的观感：列表整体重绑时（切"显示预览版"/刷新）所有行一起滑入。
+        AnimUtil.playTranslationX(
+            b.root,
+            ThemeEngine.getInstance().getTheme().animationSpeed * 30L,
+            -100f,
+            0f
+        ).start()
     }
 
     override fun getItemCount(): Int = items.size

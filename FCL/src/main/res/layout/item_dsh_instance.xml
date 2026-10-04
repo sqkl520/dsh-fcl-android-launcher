@@ -7,11 +7,44 @@
     文字用 FCLTextView + app:auto_text_tint（与卡片底自动对比）
   内容：名称 + 版本/端口/状态 + 体积 + 安装阶段/进度 + 失败原因 + 启动/更多。
 -->
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<com.mio.ui.widget.SwipeMenuLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content">
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="10dp">
+
+    <!-- 左滑菜单层（靠右垫底）：实例的管理动作（设置 / 删除），与 FCL item_favorite 同构 -->
+    <com.tungsten.fcllibrary.component.view.FCLLinearLayout
+        android:id="@+id/swipe_menu"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:background="@drawable/bg_container_white"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        app:auto_linear_background_tint="true">
+
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
+            android:id="@+id/menu_settings"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="8dp"
+            android:src="@drawable/ic_baseline_settings_24"
+            app:auto_tint="true" />
+
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
+            android:id="@+id/menu_delete"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="8dp"
+            android:src="@drawable/ic_baseline_delete_24"
+            app:auto_tint="true" />
+
+    </com.tungsten.fcllibrary.component.view.FCLLinearLayout>
+
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/parent"
@@ -137,4 +170,4 @@
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+</com.mio.ui.widget.SwipeMenuLayout>
