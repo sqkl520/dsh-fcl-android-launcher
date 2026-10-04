@@ -173,7 +173,54 @@ EINVAL: invalid argument, readlink '.../native-cache/node-addon-require-builtin-
 
 ---
 
-## 3. Android / FCL 平台经验
+## 4. 版本管理与打包
+
+### 4.0 版本号与归档约定
+
+| 版本号 | versionCode | 含义 |
+|---|---|---|
+| `0.1.0-SNAPSHOT` | 100 | 首版（经两轮真机实测，已归档到 `apk-archive/0.1.0/`） |
+| `0.1.1-SNAPSHOT` | 101 | 0.1.0 之后所有未打包改动（DNS 修复 + 前置页 + 任务区 + 动画全对齐） |
+| `1.0.0` | — | 留给「能正常启动 / 下载 / 管理 dsh」之后 |
+
+发版流程：
+1. 改 `build.gradle.kts` 的 `versionName` / `versionCode`
+2. 改 `build-apk.sh` 的 `VERSION=`
+3. 打包（`build-apk.sh` 会自动落 `output/` + `apk-archive/<ver>/` + 两处 `SHA256SUMS`）
+4. 旧版留在 `apk-archive/<旧版本>/` 不动（快照，不删）
+5. `output/` 只放当前版本（旧版移走或被新版覆盖）
+6. CHANGELOG 按版本号建段
+
+### 4.1 产物落点（三处各司其职，不要混用）
+
+| 位置 | 用途 | 是否入 Git |
+|---|---|---|
+| `<工作区>/output/` | **交付/取件**（设备端可见），只放当前版本 | 否 |
+| `<工作区>/output/legacy/` | 已废弃的历史冒烟包（已标注可删） | 否 |
+| `<仓库>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 二进制否；`SHA256SUMS`/`README.md` 是 |
+| `<仓库>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 用 **`mv`** 搬到 `output/`，不留第三份 | 否 |
+
+### 4.2 关于 `/tool_outputs`（不要用）
+
+`/tool_outputs` 是**沙箱内临时目录**，设备端不存在，不是挂载点。
+早期打包曾把 APK 放那里，导致设备端取不到件。现在统一用 `/workspace/output/`。
+
+### 4.3 SHA256SUMS 写法
+
+只写**文件名**（不写路径），因为 `output/` 与 `apk-archive/<ver>/` 两处文件同名。
+两个目录都能直接 `sha256sum -c` 校验。
+
+### 4.4 build-apk.sh 的产物搬运用 `mv` 不用 `cp`
+
+原来 `cp` 到 output + `cp` 到 archive + Gradle 产物 = **三份 300MB** 副本。
+改用 `mv` 把 Gradle 产物搬到 output（Gradle 下次打包会重新生成），副本降到 2 份。
+
+### 4.5 旧产物的处理
+
+MC 时代的早期冒烟包（含 LWJGL/SDL/ANGLE/Mesa + PLACEHOLDER rootfs）：
+**不删**，移到 `output/legacy/` 加日期标注。在 README 里说明"可删除以释放空间"。
+判断依据：用 `zipfile` 看 `lib/arm64-v8a/` 有没有 `libjvm`/`lwjgl`/`libawt`，
+`assets/dsh/rootfs/` 有没有 `PLACEHOLDER.txt`。
 
 ### 3.0 长任务千万别绑在"页面级作用域"上（真机实测踩到）
 

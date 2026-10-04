@@ -4,16 +4,20 @@
 
 ```text
 apk-archive/
-└── <version>/
-    ├── dsh-fcl-android-launcher-<version>-arm64.apk
-    └── SHA256SUMS
+├── 0.1.0/                                    ← 首版（经两轮真机实测）
+│   ├── dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk
+│   └── SHA256SUMS
+├── 0.1.1-SNAPSHOT/                           ← DNS修复 + 前置页 + 任务区 + 动画全对齐
+│   ├── dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64.apk
+│   └── SHA256SUMS
+└── README.md
 ```
 
 ## 与「交付目录」的关系
 
 | 位置 | 用途 | 是否入 Git |
 |---|---|---|
-| `<工作区>/output/` | **交付 / 取件**（设备端可访问），只放当前版本 | 否（工作区文件） |
+| `<工作区>/output/` | **交付 / 取件**（设备端可访问），只放当前版本 | 否 |
 | `<仓库>/apk-archive/<version>/` | **版本快照**（保留历史版本，便于回滚） | 二进制否；`SHA256SUMS`/`README.md` 是 |
 | `<仓库>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会把它**移动**到 `output/`，不留第三份 | 否 |
 

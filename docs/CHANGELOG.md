@@ -13,7 +13,54 @@
 
 ---
 
-## [Unreleased · APK 产物整理（交付目录 / 快照 / 去重）] - 2026-10-04
+## [0.1.0] - 归档 - 2026-10-04
+
+> 首版经过两轮真机实测的 APK，已归档到 `apk-archive/0.1.0/`。
+> SHA-256：`e61a5939279985b7b2ade103555927250616e3301a2d72baeca6158b710c2b00`
+
+包含：外壳 0~4 阶段、FCL UI 还原（ThemeEngine 背景、全局设置页第一批）、
+proot 底座接入（A）、Debian rootfs（B）、proot+PROOT_LOADER 验证（C）、
+脚本对齐 + 自检（D-1）、FCL 缺口 G1~G5 全部落地、
+真机二测修复（DNS / 防重复 / FCL 规范控件 / 状态误判）、
+首启前置页 + 首页任务区、动画 16/16 全对齐。
+
+---
+
+## [0.1.1-SNAPSHOT] - 2026-10-04
+
+> 本版是 0.1.0 之后的第三个 APK，包含了 0.1.0 之后**所有未打包的改动**。
+> SHA-256：`bc96c4e70346e55051abbd661b01637f63c2a8e7a9628d8e06d3ddbece25c8d7`
+> md5：`a50dfb26ed366cda7702042c25375cde`
+
+### 相比 0.1.0 的变更
+
+#### 运行时
+- **DNS 注入**（`DshDns`）：每次走 proot 前把宿主 DNS 写进 rootfs 的 `/etc/resolv.conf`
+  —— 不修则 guest 内 `npm install` 必然 `EAI_AGAIN`
+- 安装防重复：同版本单飞、`Progress.Failed` 只清自己版本、「已开始安装」只在真发起时弹 + 同时只弹一个
+- 复用放宽：同版本未成功（BROKEN / INSTALLING）→ 复用同一实例重试（原来只认 READY）
+- 状态误判修正：`repair()` 区分实例自有 `node_modules` 与 rootfs 预装
+- 横幅：失败时显示真实原因、清掉残留进度明细
+
+#### UI
+- **首启前置页** `DshSetupActivity`（一次性、横屏双栏、准备项清单、波浪进度、失败可重试、不跳过）
+- **首页任务区** `DshTasks`（聚合解压/安装/启停/删除，照 FCL `item_download_task`）
+- 删掉旧的「底座未就绪横幅」
+- FCL 控件规范全部更正：图标按钮改回 `FCLImageButton + src + anim_scale_large`、
+  恢复 `ItemSelectionDialog`（删掉自创 `DshOptionDialog`）、行底 tint 用 `ltColor`、
+  进度条用 `Widget.AppCompat.ProgressBar.Horizontal` + 3dp + `bg_progress_indeterminate`
+- 动画 **16/16 全对齐**：恢复 `SwipeMenuLayout`（实例行左滑菜单）、
+  `WaveProgressView`（前置页波浪进度）、`AnimUtil`（列表入场动画）
+
+#### 打包
+- 版本号 `0.1.0-SNAPSHOT` → `0.1.1-SNAPSHOT`（versionCode 100 → 101）
+- APK 产物整理：交付目录统一 `output/`、`build-apk.sh` 改 `mv`（不留三份）、
+  旧产物归位 `output/legacy/`、不再用 `/tool_outputs`
+- 0.1.0 已归档到 `apk-archive/0.1.0/`
+
+### Notes
+- 验证：编译通过；单测 34/34
+- 尚未真机验证（下一版目标）
 
 > 背景：环境通知 `/tool_outputs` 不是挂载点（设备端不存在），且工作区里同一个 APK 存在 **3 份**
 > 副本、另有 1 份早期冒烟包，磁盘已用 95%。
