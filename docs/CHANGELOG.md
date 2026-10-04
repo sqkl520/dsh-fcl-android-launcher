@@ -13,6 +13,25 @@
 
 ---
 
+## [Unreleased - rename nested dirs to GitHub repo names] - 2026-10-05
+
+> Outer folder renamed for identifiability: workspace -> ea.
+> Inner source dir renamed to match its GitHub repo: android-app ->
+> dsh-fcl-android-launcher. Same nested layout, same on phone/PC:
+> ea/dsh-fcl-android-launcher.
+
+### Changed
+- PC paths: D:\Projects\ea + D:\Projects\ea\dsh-fcl-android-launcher.
+- Root scripts default SRC=./dsh-fcl-android-launcher (overridable).
+- ea .gitignore tracks the new nested name; docs updated
+  (ENVIRONMENT / PACKAGING / INDEX / REPOS / README).
+
+### Notes
+- Verified: :FCL:compileDebugKotlin BUILD SUCCESSFUL from the new path.
+- Phone side uses the same nested names: /workspace is the ea checkout
+  (repo name ea), source checkout at /workspace/dsh-fcl-android-launcher.
+
+---
 ## [Unreleased - rename workspace to dsh-workspace] - 2026-10-05
 
 > Outer folder renamed for identifiability: workspace -> dsh-workspace.
