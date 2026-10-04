@@ -1,7 +1,5 @@
 import com.android.build.api.variant.FilterConfiguration.FilterType.ABI
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Properties
 
 plugins {
@@ -195,39 +193,4 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
-}
-
-tasks.register("updateMap") {
-    doLast {
-        val list = mutableListOf<String>()
-        val mapFile = file("${rootDir}/version_map.json")
-        mapFile.forEachLine {
-            list.add(
-                when {
-                    it.contains("versionCode") -> it.replace(
-                        Regex("[0-9]+"),
-                        android.defaultConfig.versionCode.toString()
-                    )
-
-                    it.contains("versionName") -> it.replace(
-                        Regex("\\d+(\\.\\d+)+"),
-                        android.defaultConfig.versionName.toString()
-                    )
-
-                    it.contains("date") -> it.replace(
-                        Regex("\\d{4}\\.\\d{2}\\.\\d{2}"),
-                        SimpleDateFormat("yyyy.MM.dd").format(Date())
-                    )
-
-                    it.contains("url") -> it.replace(
-                        Regex("\\d+(\\.\\d+)+"),
-                        android.defaultConfig.versionName.toString()
-                    )
-
-                    else -> it
-                }
-            )
-        }
-        mapFile.writeText(list.joinToString("\n"), Charsets.UTF_8)
-    }
 }

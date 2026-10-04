@@ -1,5 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
+# ★ dsh 运行时脚本：真机上由 proot 里的 /bin/sh 执行，CRLF 会让首行
+#   `#!/bin/sh\r` 找不到解释器。手机端（Linux）检出本来就是 LF，这条主要防
+#   Windows（本机 autocrlf 曾为 true）检出成 CRLF 后直接打进 APK。
+FCL/src/main/assets/dsh/scripts/** text eol=lf
+
 # 控件转换器金样测试资源按字节比较，禁止换行符转换（否则 Windows autocrlf 检出为 CRLF 导致字节级对拍失败）
 FCL/src/test/resources/controlconverter/** -text

@@ -1,9 +1,75 @@
 # 环境准备（在**新设备**上重建开发环境）
 
-> 工具链（JDK / Android SDK / NDK）**不在本仓库里**——它们在 `/opt` 下，属于运行环境而非工程文件。
-> 换设备（例如搬到手机上的新工作区）后需要按本文重新准备。
+> 工具链（JDK / Android SDK / NDK）**不在本仓库里**，属于运行环境而非工程文件。
+> 换设备后需要按本文重新准备。
+>
+> **两种已验证的环境**：
+> - **A. Windows x64 电脑（当前主力，2026-10-05 搭建）** —— 见 §1；原生跑 cmake，**没有 qemu 那一套坑**
+> - **B. arm64 Linux（手机沙箱 / 原工作区）** —— 见 §2；SDK/NDK 里的 x86_64 工具需 qemu 包装
 
-## 1. 必需组件
+## 1. Windows x64 电脑（当前环境）
+
+### 1.1 已装组件（实测可编译）
+
+| 组件 | 版本 | 本机路径 | 说明 |
+|---|---|---|---|
+| JDK | **17**（Microsoft OpenJDK） | `C:\Program Files\Microsoft\jdk-17.0.20.101-hotspot` | AGP 8.x 要求；**注意本机默认 JDK 是 21，必须让 Gradle 用 17** |
+| Android Studio | 2026.1.3.7 | `C:\Program Files\Android\Android Studio` | 写代码用；命令行构建不依赖它 |
+| Android SDK | platform **35**、build-tools **35.0.0**、platform-tools | `D:\Android\Sdk` | 包名：`Google.AndroidStudio` + `cmdline-tools` |
+| Android NDK | **27.0.12077973** | `D:\Android\Sdk\ndk\27.0.12077973` | 只用于 `ptyjni` 桥接 |
+| CMake（SDK 自带） | **3.22.1** | `D:\Android\Sdk\cmake\3.22.1\bin\{cmake,ninja}.exe` | AGP `externalNativeBuild` 用；**x64 原生执行，无需 qemu** |
+
+### 1.2 三条关键接线（缺一样就编不了）
+
+```powershell
+# ① 让 Gradle 用 JDK 17（本机默认是 21）——写进用户级 gradle.properties
+#    %USERPROFILE%\.gradle\gradle.properties
+org.gradle.java.home=C:/Program Files/Microsoft/jdk-17.0.20.101-hotspot
+
+# ② 告诉 Gradle SDK 在哪 —— 写进仓库根 local.properties（该文件 .gitignore，不进 Git）
+#    D:\Projects\dsh-fcl-android-launcher\local.properties
+sdk.dir=D:/Android/Sdk
+
+# ③ 让脚本/其他工具也能找到 SDK（可选但推荐，用户级环境变量）
+setx ANDROID_SDK_ROOT "D:\Android\Sdk"
+setx ANDROID_HOME     "D:\Android\Sdk"
+```
+
+### 1.3 行尾：脚本必须是 LF ⚠️
+
+本机 Git 的 `core.autocrlf` **必须设为 `false`**（并配 `core.eol=lf`）：
+
+```powershell
+git config --global core.autocrlf false
+git config --global core.eol lf
+```
+
+原因：`FCL/src/main/assets/dsh/scripts/*.sh` 会被**原样打进 APK**，
+真机上由 proot 里的 `/bin/sh` 执行。Windows 检出成 CRLF 后，首行变成 `#!/bin/sh\r`，
+解释器找不到 → 底座脚本全废。`.gitattributes` 已对该目录声明 `text eol=lf` 兜底，
+但**本机全局配置也要对**，否则旧检出不会自动更正。
+
+验证（应输出 `i/lf  w/lf`）：
+
+```powershell
+git ls-files --eol FCL/src/main/assets/dsh/scripts/
+```
+
+### 1.4 Android Studio 首次打开要做的
+
+1. `File → Open` 选仓库根（`D:\Projects\dsh-fcl-android-launcher`，**不是**里面的 `FCL/`）
+2. `Settings → Build → Build Tools → Gradle → Gradle JDK` 选 **17**（Studio 自带 JBR 是 21，AGP 8.13 要 17）
+3. 首次同步会下载 Gradle 8.14.4 + 依赖，需联网，数分钟
+
+### 1.5 本平台的坑
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `sdkmanager --licenses` 卡在 `Accept? (y/N)`，管道喂 `y` 无效 | `.bat` 包装层吃掉 stdin | 用 `cmd /c "...sdkmanager.bat --licenses < yes.txt"`（PowerShell 管道不行） |
+| 首次 Gradle 构建很慢 | 下载 Gradle 发行版 + 全部依赖 | 一次性的；之后走缓存 |
+| 编译耗时长（3~9 分钟） | 全量 Kotlin/Java/资源 | 超时就直接重跑，Gradle 增量会跳过已完成任务 |
+
+## 2. arm64 Linux（手机沙箱 / 原工作区）
 
 | 组件 | 版本 | 原工作区路径 | 说明 |
 |---|---|---|---|
@@ -19,9 +85,11 @@
 export ANDROID_SDK_ROOT=/path/to/android-sdk
 ```
 
-## 2. 架构相关：x86_64 工具需要 qemu 包装
+## 3. 架构相关（**仅 arm64 Linux 需要**）：x86_64 工具需 qemu 包装
 
-本项目的开发环境是 **arm64**，而 Android SDK/NDK 里的这些工具是 **x86_64**：
+> Windows x64 电脑**不需要本节**——SDK 自带的 cmake/ninja/clang 在 x64 上是原生执行的。
+
+arm64 机器上，Android SDK/NDK 里的这些工具是 **x86_64**：
 
 - `$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/*`（clang 等）
 - `$SDK/cmake/<ver>/bin/{cmake,ninja,cpack,ctest}`
@@ -54,26 +122,37 @@ cmake → cmake.real(脚本) → cmake.real.real(真二进制)   # qemu 去执�
 - **修复**：对每个 `X.real.real` 执行 `mv -f X.real.real X.real`（保留外层包装脚本）
 - 本项目 NDK 27 曾出现 **38 个工具被双重包装**，修复后 clang 才正常
 
-## 3. 验证环境
+## 4. 验证环境
 
-```sh
-sh run-tests.sh     # 纯 JVM，34 项，最快（不需要 SDK）
-sh run-compile.sh   # Kotlin/Java/资源 + ptyjni native 检查（需要 SDK + NDK）
-sh build-apk.sh     # 出 APK（还需 rootfs，见 ROOTFS.md）
+**Windows（当前）**：
+
+```powershell
+# 编译校验（Kotlin + Java + 资源 + Manifest）
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:compileDebugKotlin :FCL:compileDebugJavaWithJavac `
+  :FCL:processDebugResources :FCL:processDebugMainManifest
+
+# 单测（Gradle 原生跑，不再需要沙箱的 MiniRunner 桩）
+.\gradlew.bat --no-daemon :FCL:testDebugUnitTest
+
+# 打包（需先补 rootfs，见 ROOTFS.md）
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
 ```
 
-三个脚本都是**位置无关**的（仓库根 = 脚本所在目录），搬到任何路径都能跑。
+**arm64 Linux（手机沙箱）**：`sh run-compile.sh` / `sh run-tests.sh` / `sh build-apk.sh`
+—— 这三个脚本在仓库外的**工作区快照仓库 `ea`** 里（不在本仓库），是纯 POSIX sh，
+在 Windows 上跑不了；Windows 直接用上面的 Gradle 命令。
 
-## 4. 已知环境坑
+## 5. 已知环境坑（两平台通用）
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 编译被 SIGTERM 打断 | 编译要 3~9 分钟，超过调用时限 | **直接重跑**，Gradle 增量会跳过已完成任务 |
 | 打包阶段超时 | 300MB `rootfs.tar.xz` 若被 aapt 二次压缩会极慢 | `build.gradle.kts` 已 `noCompress += "xz"`；仍超时就重跑 |
-| `.git`, 里出现 `.l2s.tmp_*` 软链残留 | 沙箱存储机制（中断操作的产物） | 确认无引用后可直接删；会挡住 `git gc` |
-| `~/.ssh` 不跨会话持久 | 沙箱特性 | 密钥丢了要重新生成并把公钥加到 GitHub |
+| `.git` 里出现 `.l2s.tmp_*` 软链残留 | 手机沙箱存储机制（中断操作的产物） | 确认无引用后可直接删；会挡住 `git gc` |
+| `~/.ssh` 不跨会话持久 | 手机沙箱特性 | 密钥丢了要重新生成并把公钥加到 GitHub |
+| Android 资源文件报 `InvalidFileException` | 从不区分大小写的文件系统（Windows）拷来的资源文件名重复 | 检查冲突的资源名 |
 
-## 5. 磁盘
+## 6. 磁盘
 
 | 内容 | 大小 |
 |---|---|
@@ -82,4 +161,5 @@ sh build-apk.sh     # 出 APK（还需 rootfs，见 ROOTFS.md）
 | APK（单个） | ~310MB |
 | 工作区整体（含 rootfs 构建目录） | ~5GB |
 
-> 原工作区磁盘长期在 90%+，打包前建议先清理 `FCL/build`。
+> 原工作区（手机）磁盘长期在 90%+，打包前建议先清理 `FCL/build`。
+> Windows 本机 C: 与 D: 余量充足（2026-10-05：C 92GB / D 54GB 空闲）。
