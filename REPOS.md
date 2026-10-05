@@ -147,27 +147,38 @@ sh check-sync.sh          # 手机
 
 ### APK 走 GitHub Release 附件，不进 Git
 
+**一句话：APK 只有一个渠道 —— GitHub Release 附件。**
+不经过快照仓（`apk/` 不再新增），也不经过别的地方。源码仓公开 → **手机端不用登录、不用 token**，
+点开页面直接下载安装。
+
 **为什么**：APK 是 300MB+ 的二进制。早先的做法是切成 90MB 分片提交进快照仓 ——
 但 Git 存的是"每个文件的每个版本"，**改一行代码就是一个全新的 300MB 对象**，
 旧的那份还永远留着。实测快照仓历史里已经压了 **833 MiB** 的 APK 分片（8 个 90MiB + 2 个 41MiB），
 每出一版再涨 300MB+，手机端 clone/pull 只会越来越痛。
 
-现在：
+现在的分工：
 
-| 位置 | 用途 |
+| 位置 | 用途 | 入 Git |
+|---|---|---|
+| **GitHub Release 附件** | **唯一的分发渠道**（手机从这里下） | — |
+| `<项目文件夹>/output/` | 本机交付/取件目录，只放当前版本 | 否 |
+| `apk-archive/<version>/SHA256SUMS` | 只有这一行指纹，记录"这个版本出过、指纹是多少" | **是** |
+| `apk/<version>/` | **历史存档**（0.1.0 / 0.1.1 / legacy 的分片），**只读、不再新增** | 是（历史遗留） |
+
+**下载页**：<https://github.com/sqkl520/dsh-fcl-android-launcher/releases>
+
+| Release | sha256 |
 |---|---|
-| **GitHub Release 附件** | **新的分发渠道**（源码仓公开 → 手机端免 token 直接下载） |
-| `<项目文件夹>/output/` | 本机交付/取件目录（设备端可见），只放当前版本 |
-| `apk-archive/<version>/SHA256SUMS` | 入库的只有这一行指纹，记录"这个版本出过、指纹是多少" |
-| `apk/<version>/` | **历史存档**（0.1.0 / 0.1.1 / legacy 的分片），只读、不再新增 |
+| `v0.1.0` | `e61a5939…` |
+| `v0.1.1-SNAPSHOT` | `bc96c4e7…` |
+| `v0.1.2-SNAPSHOT` | `8abaa3ea…` |
 
-取最新包：
-<https://github.com/sqkl520/dsh-fcl-android-launcher/releases>
+校验：`sha256sum` 与 `apk-archive/<version>/SHA256SUMS` 比对（Release 说明里也写了）。
+三个包都是 `--prerelease`（项目自己写着"待能正常启动/下载/管理 dsh 后才标 1.0.0"）。
 
-校验：`sha256sum` 与 `apk-archive/<version>/SHA256SUMS` 比对（Release 说明里也会写）。
-
-> **历史包袱（已决策，不急着还）**：快照仓里那 833 MiB 分片仍在历史中。
-> 清理要改写历史 + 强推，等哪天手机端 clone 真的嫌慢再动手。
+> **历史包袱（已决策，不急着还）**：快照仓里那 833 MiB 分片仍在历史中
+> （`apk/` 目录只是不再新增，历史里的旧对象还在）。清理要改写历史 + 强推，
+> 等哪天手机端 clone 真的嫌慢再动手。
 
 ---
 
