@@ -26,7 +26,7 @@
 # 前置：工具链按 ENVIRONMENT.md §1 装好；rootfs 按 ROOTFS.md 补回
 #       dsh-fcl-android-launcher/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz   ← 300MB，不入 Git
 
-cd D:\Projects\ea\dsh-fcl-android-launcher
+cd D:\Projects\dsh-fcl-android-launcher
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
 ```
 
@@ -43,17 +43,17 @@ cd D:\Projects\ea\dsh-fcl-android-launcher
 
 | 位置 | 用途 | 属于哪个仓库 | 是否入 Git |
 |---|---|---|---|
-| `<工作区>/output/` | **交付 / 取件**（手机设备端可访问：`<rikkahub files>/workspaces/<id>/files/output/`）；只放当前版本 | ea（工作区） | 否 |
-| `<工作区>/output/legacy/` | 已废弃的历史冒烟包（MC 时代，rootfs 只是 PLACEHOLDER，**不能用**） | ea（工作区） | 否 |
-| `<源码仓库>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 源码仓 | 二进制否；`SHA256SUMS`/`README.md` 是 |
-| `<源码仓库>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会把它 **`mv`** 到工作区的 `output/`，不留第三份 | 源码仓 | 否 |
+| `<项目文件夹>/output/` | **交付 / 取件**（手机设备端可访问：`<rikkahub files>/workspaces/<id>/files/output/`）；只放当前版本 | 快照仓（.gitignore 忽略） | 否 |
+| `<项目文件夹>/output/legacy/` | 已废弃的历史冒烟包（MC 时代，rootfs 只是 PLACEHOLDER，**不能用**） | 快照仓 | 否 |
+| `<项目文件夹>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 源码仓 | 二进制否；`SHA256SUMS`/`README.md` 是 |
+| `<项目文件夹>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 用 `mv` 搬到 `output/`，不留第三份 | 源码仓 | 否 |
 
-> 「工作区」= ea 仓库根（手机 `/workspace`、电脑 `D:\Projects\ea`）；
-> 「源码」= 本仓库（手机的 `/workspace/dsh-fcl-android-launcher`、电脑的 `D:\Projects\ea\dsh-fcl-android-launcher`）。
-> 仓库分工见 **ea 仓库根的 `REPOS.md`**（手机 `/workspace/REPOS.md`）。
+> 「项目文件夹」= 电脑 `D:\Projects\dsh-fcl-android-launcher` = 手机 `/workspace` ——
+> 电脑上**源码仓与快照仓共用这一个文件夹**（快照仓 = `dsh-fcl-android-launcher-workspace-snapshot`，
+> 旧名 `ea`）。仓库分工与操作方式见根下 `REPOS.md`。
 
 命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
-`dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk`）。
+`dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64.apk`）。
 
 `SHA256SUMS` 里只写**文件名**（两处同名），因此 `output/` 与 `apk-archive/<version>/`
 都能直接 `sha256sum -c` 校验。

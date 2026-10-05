@@ -8,7 +8,7 @@
 
 在**未 root** 的安卓手机上运行 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai) —— 基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) 改造的启动器
 
-![Version](https://img.shields.io/badge/version-0.1.0--SNAPSHOT-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.1.1--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
@@ -21,9 +21,10 @@
 一个安卓 App，让你**不用 root** 就能在手机上跑 dsh（DeepSeek Harness —— 对话 / 编码 agent）。
 界面沿用 FCL 的视觉风格与 GUI 框架（fcllibrary + ThemeEngine），底层用 **proot** 兜一个 Linux 环境来跑 Node.js 版 dsh。
 
-> **项目状态：0.1.0-SNAPSHOT（早期开发中）**
-> 外壳（界面骨架 / 五页 / 横屏右面板）已完成；运行时底座（proot + rootfs）仍在集成中，
-> **端到端尚未在真机跑通**。版本号规则：待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+> **项目状态：0.1.1-SNAPSHOT（早期开发中）**
+> 外壳（界面骨架 / 五页 / 横屏右面板）已完成；运行时底座（proot + rootfs + PROOT_LOADER）已集成，
+> 0.1.1 已能出完整 APK（含 rootfs）；**端到端尚未在真机跑通**（真机验证进行中）。
+> 版本号规则：待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 ---
 
@@ -67,18 +68,18 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 
 ## 构建
 
-**环境要求**：JDK 17、Android SDK 35、NDK 27（仅集成 proot 引擎时需要）
+**环境要求**：JDK 17、Android SDK 35、NDK 27（仅集成 proot 引擎时需要）；工具链接线见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) §1。
 
-```bash
-# 编译检查（不打包，覆盖 Kotlin + Java + 资源 + Manifest）
-sh run-compile.sh
-
-# 单元测试
-sh run-tests.sh
-
-# 打包 arm64 debug APK → dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk
-./gradlew --no-daemon -Darch=arm64 :FCL:assembleFordebug
+```powershell
+# 电脑（Windows，当前主力环境）直接用 Gradle：
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:compileDebugKotlin :FCL:compileDebugJavaWithJavac `
+  :FCL:processDebugResources :FCL:processDebugMainManifest    # = run-compile.sh 覆盖的四项
+.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest           # 单测（34 项）
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包 → dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64.apk
 ```
+
+手机（arm64 Linux 沙箱）上用同目录的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh`
+（纯 POSIX sh，自动识别源码目录；改用例见 `REPOS.md`）。
 
 ---
 
@@ -96,6 +97,7 @@ sh run-tests.sh
 | [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md) | W^X 限制与 PROOT_LOADER 绕过方案 |
 | [`docs/design/proot-engine-integration.md`](docs/design/proot-engine-integration.md) | 集成 oonid/pr `:proot-engine` 的架构决策 |
 | [`docs/reports/`](docs/reports/) | 各轮评审与优化报告 |
+| [`REPOS.md`](REPOS.md) | **电脑 / 手机 / 两个仓库的关系**：本仓 = 源码仓；源码以外的文件在快照仓 `dsh-fcl-android-launcher-workspace-snapshot`（电脑上两仓共用一个项目文件夹） |
 
 ---
 

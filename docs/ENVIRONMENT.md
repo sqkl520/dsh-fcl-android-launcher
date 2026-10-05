@@ -27,7 +27,7 @@
 org.gradle.java.home=C:/Program Files/Microsoft/jdk-17.0.20.101-hotspot
 
 # ② 告诉 Gradle SDK 在哪 —— 写进仓库根 local.properties（该文件 .gitignore，不进 Git）
-#    D:\Projects\ea\dsh-fcl-android-launcher\local.properties
+#    D:\Projects\dsh-fcl-android-launcher\local.properties
 sdk.dir=D:/Android/Sdk
 
 # ③ 让脚本/其他工具也能找到 SDK（可选但推荐，用户级环境变量）
@@ -57,7 +57,7 @@ git ls-files --eol FCL/src/main/assets/dsh/scripts/
 
 ### 1.4 Android Studio 首次打开要做的
 
-1. `File → Open` 选源码根（`D:\Projects\ea\dsh-fcl-android-launcher`，**不是**里面的 `FCL/`）
+1. `File → Open` 选源码根（`D:\Projects\dsh-fcl-android-launcher`，**不是**里面的 `FCL/`）
 2. `Settings → Build → Build Tools → Gradle → Gradle JDK` 选 **17**（Studio 自带 JBR 是 21，AGP 8.13 要 17）
 3. 首次同步会下载 Gradle 8.14.4 + 依赖，需联网，数分钟
 
@@ -139,8 +139,9 @@ cmake → cmake.real(脚本) → cmake.real.real(真二进制)   # qemu 去执�
 ```
 
 **arm64 Linux（手机沙箱）**：`sh run-compile.sh` / `sh run-tests.sh` / `sh build-apk.sh`
-—— 这三个脚本在仓库外的**工作区快照仓库 `ea`** 里（不在本仓库），是纯 POSIX sh，
-在 Windows 上跑不了；Windows 直接用上面的 Gradle 命令。
+—— 这三个脚本在**快照仓**里（电脑上与源码仓共用一个项目文件夹：`D:\Projects\dsh-fcl-android-launcher\*.sh`；
+手机 `/workspace/`），是纯 POSIX sh、面向 arm64 Linux；Windows 上直接跑不了，用上面的 Gradle 命令。
+两仓关系见根下 `REPOS.md`。
 
 ## 5. 已知环境坑（两平台通用）
 

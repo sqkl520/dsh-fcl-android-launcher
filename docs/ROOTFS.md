@@ -8,8 +8,8 @@
 
 - 当前版本号：`debian-bookworm-arm64-node22-dsh-0.1.6-alpha.2`（见 `rootfs-build-info/rootfs.version`）
 - 当前校验和：`5d762c30b9117830518571bc4eeadf593182cc56d1f472024ba4490aa90682a7`
-- 落点：`FCL/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（gitignore，不进 Git）
-  以及 `FCL/FCL/src/main/assets/dsh/rootfs/version`（文本，一串版本标记）
+- 落点：`FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（相对**源码仓根**；gitignore，不进 Git）
+  以及 `FCL/src/main/assets/dsh/rootfs/version`（文本，一串版本标记）
 
 ## 0. 为什么需要预打包 rootfs
 
@@ -121,10 +121,12 @@ chroot /tmp/v /bin/bash -lc '
 
 ## 8. 放回工程并更新版本标记
 
+> 路径相对**源码仓根**（电脑 `D:\Projects\dsh-fcl-android-launcher`；手机 `/workspace/dsh-fcl-android-launcher`）。
+
 ```sh
-cp rootfs.tar.xz /workspace/FCL/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz
+cp rootfs.tar.xz FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz
 echo -n 'debian-bookworm-arm64-node22-dsh-0.1.6-alpha.2' \
-  > /workspace/FCL/FCL/src/main/assets/dsh/rootfs/version
+  > FCL/src/main/assets/dsh/rootfs/version
 ```
 
 `version` 文件的内容会参与 App 侧的就绪判定（`RuntimeUtils.isLatest` 做**字符串比较** ——

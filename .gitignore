@@ -1,35 +1,50 @@
-# Gradle files
-.gradle/
-build/
+# ============================================================
+# 共用工作区忽略规则（源码仓 .git 与快照仓 .git-ws-snapshot 同目录共用）
+# 仓库各自的额外忽略见 .git/info/exclude 与 .git-ws-snapshot/info/exclude；
+# 目录与仓库对照见 REPOS.md。
+# ============================================================
 
-# Local configuration file (sdk path, etc)
+# ---- 构建产物 / 编辑器缓存（可重建） ----
+build/
+.gradle/
+.kotlin/
+.cxx/
+.idea/
+*.iml
 local.properties
 
-# Log/OS Files
+# ---- 大文件：超 GitHub 单文件 100MB 限制，且都能重建 ----
+*.apk
+!*.apk.part*
+*.tar.xz
+
+# ---- 依赖目录 ----
+node_modules/
+
+# ---- 交付 / 取件目录（本机） ----
+/output/
+
+# ---- 日志与系统垃圾 ----
 *.log
-
-# APK 归档默认不提交二进制，但保留归档说明与校验文件
-apk-archive/**/*.apk
-!apk-archive/**/SHA256SUMS
-!apk-archive/README.md
-
-# IntelliJ
-*.iml
-.idea/
-.trae/
-
-# Google Services (e.g. APIs or Firebase)
+*.hprof
+.DS_Store
 google-services.json
 
-# Android Profiling
-*.hprof
-FCL/src/main/java/com/mio/Main.kt
-.DS_Store
-AGENTS.md
+# ---- 沙箱存储实体（软链环，跨环境复制会毁数据） ----
+.l2s.*
 
-# ZCode 会话文件
-/.zcode/
-.kotlin/
-.zcodeignore
-# 本地预打包 Debian rootfs（约 279MB），用于 APK 打包，不提交 Git
+# ---- 快照仓的 git 目录（源码仓视角） ----
+/.git-ws-snapshot/
+
+# ---- 手机：嵌套的源码仓 clone ----
+/dsh-fcl-android-launcher/
+
+# ---- 源工程内的本地大文件 / 生成物 ----
 FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz
+FCL/src/main/java/com/mio/Main.kt
+
+# ---- FCL 遗留 ----
+.trae/
+/.zcode/
+.zcodeignore
+AGENTS.md

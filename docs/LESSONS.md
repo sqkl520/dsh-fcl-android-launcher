@@ -642,3 +642,24 @@ Windows 上**不需要 qemu 包装**（那是 arm64 才有的坑，见 §1.3）�
 
 
 
+
+## 19. 两个 git 仓库共用一个工作目录（2026-10-05）
+
+最终布局：电脑 `D:\Projects\dsh-fcl-android-launcher` 一个文件夹里，源码仓用自己的 `.git`，
+快照仓的 git 目录改名为 `.git-ws-snapshot/` 并设 `core.worktree` 指向同一目录 ——
+省掉了"两棵工作树互相拷贝同步"的全部麻烦（文档天然一份，不再有"同步 docs 副本"这一步）。
+
+**踩过的点（都靠实测确认）**：
+
+1. **`info/exclude` 只挡"未跟踪"，不挡"已跟踪"**：快照仓原先跟踪根 `README.md`，
+   现在根 `README.md` 属于源码仓 —— 光在 exclude 里写 `/README.md` 没用，
+   必须先 `git rm --cached README.md` 让快照仓松手，否则 `git add -A` 会把源码仓的 README 提交进快照仓。
+2. **`.gitattributes` 是"工作区级"的**：即使快照仓不跟踪 `.gitattributes`，
+   它读的仍是同一份工作区文件 —— 所以 `*.sh text eol=lf` 一条规则两个仓库同时受益
+   （PC 上编辑过的脚本被 `git add` 时自动按 LF 入库，手机拉下去不会变成 `\r` 脚本）。
+3. **别忘 `.git-ws-snapshot/` 要在源码仓侧忽略**（它不叫 `.git`，git 不会自动忽略），
+   否则源码仓 `git status` 里永远挂一个 untracked。
+4. **GitHub 的 README 展示优先级**：`.github/README.md` > 根 `README.md` > `docs/README.md`。
+   两个仓库共用一个根目录时，让快照仓把 README 放 `.github/`，源码仓用自己的根 `README.md`，互不打架。
+5. 日常操作包装成 `ws-git.sh` / `ws-git.cmd`（`--git-dir=.git-ws-snapshot --work-tree=.`），
+   普通 clone（手机）上没有 `.git-ws-snapshot` 时退化为普通 `git`。
