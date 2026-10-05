@@ -129,7 +129,7 @@ SplashActivity(LAUNCHER)
 ### 2.5.5 验收方法（怎么检查"跟 FCL 走"）
 
 ```sh
-cd /workspace/FCL/FCL/src/main/res/layout
+cd FCL/src/main/res/layout   # 在源码仓根内
 # 1) dsh 布局里不应再有 Material 控件（期望输出为空）
 grep -l "com.google.android.material" *dsh*.xml
 

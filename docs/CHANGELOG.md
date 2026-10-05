@@ -2,14 +2,45 @@
 
 本项目：**DeepSeek Harness (dsh) 安卓启动器** —— 在未 root 的安卓手机上，用 proot 跑 dsh（Node 版编码/对话 agent），基于 FoldCraftLauncher (FCL) 改造。
 
-> **仓库**：<https://github.com/sqkl520/dsh-fcl-android-launcher> ｜ **版本**：`0.1.0-SNAPSHOT`
+> **仓库**：<https://github.com/sqkl520/dsh-fcl-android-launcher> ｜ **版本**：`0.1.1-SNAPSHOT`
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/)。由于项目尚未正式发版，各段以**工作阶段/里程碑**划分，并标注对应的 git commit。
 
 > **★ 硬规则（项目约定）**：**任何代码/配置/文档的更改，都必须记入本 CHANGELOG**（在最上方的
 > `[Unreleased]` 段按 Added/Changed/Fixed/Removed/Optimized/Refactored/Notes 分类追加）。
-> 版本号规则：当前为 `0.1.0-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
+> 版本号规则：当前为 `0.1.1-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
 > **本文件只记"改了什么"**；经验 / 方法论 / 踩坑请写进 `LESSONS.md`，不要写在这里。
+
+---
+
+## [Unreleased · 电脑单文件夹双仓布局（最终版）+ 快照仓更名] - 2026-10-05
+
+> 电脑最终定为**一个项目文件夹** `D:\Projects\dsh-fcl-android-launcher`：源码仓（`.git`）与
+> 快照仓（旧名 `ea` → `dsh-fcl-android-launcher-workspace-snapshot`）**共用同一工作目录**，
+> 快照仓内容按类别直接铺在根下（不再套 `workspace/`）。手机侧布局不变：
+> `/workspace`（快照仓）+ `/workspace/dsh-fcl-android-launcher`（源码）。
+
+### Changed
+- 电脑布局：`D:\Projects` 下只保留 `dsh-fcl-android-launcher` 一个项目文件夹；
+  快照仓内容（docs / apk / dsh / poc / dsh-launcher-poc / oonid-pr-reference /
+  rootfs-build-info / _review_evidence / 根脚本 / REPOS.md / .github）按类别直接放在其根下。
+- 双仓共目录：快照仓 git 目录改为 `.git-ws-snapshot/`（`core.worktree` 指向同一目录）；
+  两个仓库各自在 `info/exclude` 里排除对方路径；共用文件（`docs/`、`REPOS.md`、`.gitignore`）
+  两边各提交一次。新增包装脚本 `ws-git.sh` / `ws-git.cmd`（普通 clone 上退化为普通 git）。
+- 快照仓 GitHub 改名：`ea` → `dsh-fcl-android-launcher-workspace-snapshot`（本地 remote 已更新）。
+- 快照仓 README 移到 `.github/README.md`（GitHub 展示优先级最高）并重写；`REPOS.md` 全量重写。
+- 根脚本 `build-apk.sh` / `run-compile.sh` / `run-tests.sh`：SRC 改为自动识别两种布局
+  （同目录有 `settings.gradle.kts` 即视为源码根，否则取 `./dsh-fcl-android-launcher`），仍可用 `SRC=` 覆盖。
+- `.gitattributes` 增加 `*.sh text eol=lf` / `*.cmd text eol=crlf` / `gradlew text eol=lf`；
+  `.gitignore` 合并两仓规则（新增 `/output/`、`/.git-ws-snapshot/`、手机嵌套目录等）。
+- 文档同步：`INDEX` / `ENVIRONMENT` / `PACKAGING` / `ROOTFS` / `design/app-shell` 的路径与仓库名更新；
+  版本标注统一为 `0.1.1-SNAPSHOT`（与已出的 APK 一致）。
+- 删除电脑上三个废弃目录：`D:\Projects\ea`、`DSHarness-FCL-Launcher`、`dsh-workspace`（残留缓存）。
+
+### Notes
+- 删除前已核验：`ea` 里残留的那份 `docs/` 无独有内容（4 个差异文件均为旧路径 + 字符损坏版本），删除无损。
+- 快照仓改名后已 `git ls-remote` 验证远端可达（HEAD 与本地一致）。
+- 已核验：新路径下编译四项（Kotlin+Java+资源+Manifest）BUILD SUCCESSFUL（1m48s，34 tasks）。
 
 ---
 
