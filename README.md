@@ -33,7 +33,7 @@
 ```
 Android App (本仓库)
    └─ proot（无 root 的 Linux 环境模拟，基于 ptrace 系统调用翻译）
-        └─ Linux rootfs（Alpine / Ubuntu 等）
+        └─ Linux rootfs（Debian 12 bookworm arm64，内置 Node 22 + 预装 dsh）
              └─ Node.js
                   └─ dsh（DeepSeek Harness）
                        └─ 通过 HTTPS 调 DeepSeek 云端 API
@@ -104,7 +104,7 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 | [`docs/PACKAGING.md`](docs/PACKAGING.md) | 打包说明（proot 二进制 / rootfs 准备） |
 | [`docs/design/app-shell.md`](docs/design/app-shell.md) | 应用外壳改造设计（含界面跟 FCL 的硬性规范） |
 | [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md) | W^X 限制与 PROOT_LOADER 绕过方案 |
-| [`docs/design/proot-engine-integration.md`](docs/design/proot-engine-integration.md) | 集成 oonid/pr `:proot-engine` 的架构决策 |
+| [`docs/design/proot-engine-integration.md`](docs/design/proot-engine-integration.md) | **【未采用的备选路线】** oonid/pr `:proot-engine` 的集成方案 —— 最终没走这条路（用自研 proot 层），留作决策记录 |
 | [`docs/reports/`](docs/reports/) | 各轮评审与优化报告 |
 | [`REPOS.md`](REPOS.md) | **仓库关系与日常工作流（先读这个）**：电脑 / 手机 / GitHub 三者关系、改文件该动哪个仓、出包流程、版本号真源、换电脑重建。本仓 = 源码仓；源码以外的文件在快照仓 `dsh-fcl-android-launcher-workspace-snapshot`（电脑上两仓共用一个项目文件夹） |
 | [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) | **APK 下载**（公开仓，免 token）——新版本以 Release 附件分发，不进 Git |
@@ -116,8 +116,11 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 本项目基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（**GPL-3.0**）改造，
 因此同样以 **GPL-3.0** 发布。详见 [`LICENSE`](LICENSE)。
 
-集成 `oonid/pr` 的 `:proot-engine` 时需注意：`:proot-engine` 与 `pr-cli` 为 MIT，
-但 patched proot 本体为 GPL-2.0-or-later。本项目已是 GPL 系，不构成新障碍。
+打包进 APK 的 `libproot.so` / `libproot-loader.so` / `libbusybox.so` 与 `ptyjni` 桥接来自
+[`oonid/pr`](https://github.com/oonid/pr)（`:proot-engine` 与 `pr-cli` 为 MIT，patched proot 本体为
+GPL-2.0-or-later）。本项目已是 GPL 系，不构成新障碍。
+> 注：`:proot-engine` 作为 **Gradle 模块**的集成方案**最终没有采用**（见
+> `docs/design/proot-engine-integration.md`）；这里指的是**二进制与 PTY 桥接的出处**。
 
 ## 致谢
 

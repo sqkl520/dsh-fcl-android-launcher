@@ -71,11 +71,11 @@ dsh/
   version              底座总版本（说明用；实际按各子项 version 增量解压）
   proot/
     version            proot 子项版本
-    libproot.so        [需你放入] proot 主程序 (arm64)
-    libproot_loader.so [需你放入] proot loader (arm64)
+    libproot.so        [已就位] proot 主程序 (arm64，来自 oonid/pr)
+    libproot_loader.so [已就位] proot loader (arm64，来自 oonid/pr)
   rootfs/
     version            rootfs 子项版本
-    rootfs.tar.xz      [需你放入] 精简 Linux rootfs（Ubuntu/Alpine arm64，建议内置 Node 22/24）
+    rootfs.tar.xz      [已就位·不入 Git] Debian 12 bookworm arm64 + Node 22 + 预装 dsh（见 ROOTFS.md）
   scripts/
     version
     setup-node-dsh.sh  已放入（打印 STAGE=... 进度；装完硬校验）
@@ -108,9 +108,12 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 
 ### 2) rootfs.tar.xz
 
-- arm64 的 Ubuntu 或 Alpine rootfs（见 PLAN.md §1 选型：默认 Ubuntu/glibc）。
-- **强烈建议在打包前把 Node 22/24 预装进 rootfs**，省去首启联网装 Node
-  （注意 `probe.sh` 会报告 rootfs 内有没有 node；没有也能用，只是安装 dsh 时要联网）。
+> **现状**：已经做好了 —— **Debian 12 bookworm arm64 + 官方 Node v22.23.3 + 预装 `@deepseek-ai/dsh`**，
+> 就在 `FCL/src/main/assets/dsh/rootfs/`（300MB，不入 Git）。丢了怎么补见 `ROOTFS.md`。
+> 下面是从零重建时的选型说明。
+
+- arm64 的 **Debian** rootfs（glibc；dsh 的原生模块只发 glibc/musl，Android 的 bionic 跑不了 —— 见 `PLAN.md §1`）。
+- **强烈建议在打包前把 Node 22/24 预装进 rootfs**，省去首启联网装 Node。
 - 打成 `.tar.xz`（`DshBootstrap` 用 `RuntimeUtils.uncompressTarXZ` 解压，会正确处理符号链接）。
 - 放到 `dsh/rootfs/rootfs.tar.xz`。
 - **包内必须是"根"的形态**（顶层就是 `bin/`、`usr/`、`etc/`…）。若不小心多套了一层目录

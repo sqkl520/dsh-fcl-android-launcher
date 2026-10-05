@@ -7,18 +7,25 @@
 
 ---
 
-## 当前所处位置（截至第七轮，2026-10-02）
+## 当前所处位置（截至 2026-10-06）
 
 **外壳改造（M0）已全部完成**（阶段 0~4，含去 Material 收尾，见 `design/app-shell.md` 与 `reports/round7-review-and-optimization.md`）：
-app 启动即进 dsh 外壳，五页可切换，无 MC 运行时门禁。**真机端到端仍是空白**——最大的原因不再是"GUI 没做好"，
-而是"运行时底座没落地"：proot/rootfs 至今是 PLACEHOLDER，且自研 proot 层过不了 W^X（targetSdk 34）。
+app 启动即进 dsh 外壳，五页可切换，无 MC 运行时门禁。
 
-**运行时底座路线已定**（见 `design/proot-engine-integration.md`）：**保持 targetSdk 34，不降级**，
-集成 oonid/pr 的 `:proot-engine`（PROOT_LOADER 绕 W^X，真机 targetSdk 35/36 验证过）。**唯一拦路项 =
-dsh 子进程 spawn 能否在 patched proot 下工作**（cargo 那条 vfork 路径 ENOSYS；gcc 的普通 fork 通），
-这必须作为集成第一步在真机上证实（详见 M1）。
+**运行时底座也已落地（代码层面，2026-10-03 阶段 A~E-1）**：自研 proot 层 + 预打包 rootfs
+（Debian 12 + Node 22 + 预装 dsh）已接进 APK，三个 jniLibs（`libproot.so` / `libproot-loader.so` /
+`libbusybox.so`）就位，`PTY` 桥接（`ptyjni`）已编进去；0.1.1 起出的包是**含完整 rootfs 的整包**。
 
-所以路线图的第一站，只有一个目标：**先验证子进程 spawn，再把它在真机上真正活一次**。
+> **⚠️ 路线更正（2026-10-06）**：`design/proot-engine-integration.md` 曾计划**集成 oonid/pr 的
+> `:proot-engine` 替换自研 proot 层**，但**最终没有采用** —— 项目继续走自研 proot 层。
+> 本文件此前多处按"要走 proot-engine"描述 M1，与代码现状（`settings.gradle.kts` 只 include `:FCL`
+> 与 `:ZipFileSystem`；无 `ProotLauncher`/`ProotHost`，而是 `ProotCommand` + `ProotProcessExecutor`）
+> 不符，已于本次更正。那份设计文档保留作**决策记录**（其中的 W^X / PROOT_LOADER 原理仍然有效）。
+> **保持 targetSdk 34、用 PROOT_LOADER 绕过 W^X 这一结论不变。**
+
+**所以现在唯一的空白是「真机端到端」**（M1 的最后一格）：底座在真机上到底能不能起来、首启解压
+300MB rootfs 要多久、`npm install` 能不能装成、`dsh web` + WebView 能不能对话。这是 M1 的阻塞项，
+也是整个项目现在唯一的关键路径。
 
 ---
 
@@ -26,8 +33,8 @@ dsh 子进程 spawn 能否在 patched proot 下工作**（cargo 那条 vfork 路
 
 | 里程碑 | 一句话目标 | 性质 | 前置 |
 |---|---|---|---|
-| **M0 外壳改造** | app 启动即进 dsh 界面，不再被迫装 MC 运行时 | 应做，**已完成**（阶段 0~4） | 无（不依赖 proot/rootfs） |
-| **M1 运行时底座落地 + 首次真机点亮** | 验证子进程 spawn → 集成 `:proot-engine` → 一台真机上端到端跑通一次 | 必做，最高优先级 | 先验证 spawn（阻塞项）→ 集成 proot-engine → 出 APK |
+| **M0 外壳改造** | app 启动即进 dsh 界面，不再被迫装 MC 运行时 | 应做，**已完成**（阶段 0~4） | 无 |
+| **M1 首次真机点亮** | 一台真机上端到端跑通一次 | 必做，最高优先级 | **只差真机验收**（底座代码已落地） |
 | **M2 稳定性达标** | 装/启/停在真机反复跑不崩不卡不串台 | 必做 | M1 |
 | **M3 体验完善** | 从"能用"到"顺手" | 应做 | M2 |
 | **M4 可测试性与工程化** | 缺陷能被自动化拦住，而非靠人工审 | 应做 | 并行于 M2/M3 |
@@ -44,7 +51,7 @@ dsh 子进程 spawn 能否在 patched proot 下工作**（cargo 那条 vfork 路
 **目标**：把 app 外壳从"MC 启动器"改成"dsh 启动器"——启动即进 dsh 界面，
 不再被迫先下载约 1GB 的 MC 运行时（JRE/LWJGL/Caciocavallo/JNA）。
 
-**为什么排在最前**：它**不依赖 M1 的运行时底座**（proot-engine / rootfs），可以立刻做。
+**为什么排在最前**：它**不依赖 M1 的运行时底座**（proot / rootfs），可以立刻做。
 做完之后，app 至少"是个 dsh 启动器"，而不是"MC 启动器 + 藏在长按里的 dsh"。
 
 **设计详见**：`design/app-shell.md`（含阶段 0~4 的分步计划与风险清单）。
@@ -66,49 +73,56 @@ dsh 子进程 spawn 能否在 patched proot 下工作**（cargo 那条 vfork 路
 
 ---
 
-## M1 · 运行时底座落地 + 首次真机点亮 🎯
+## M1 · 首次真机点亮 🎯
 
 **目标**：在一台未 root 的 arm64 真机上，完整走通一次
 「运行时底座就绪 → 下载页装 dsh → 列表页启动 → WebView 出 dsh 界面并能对话」。
 
-> ⚠️ **路线更新（2026-10-01）**：运行时底座**不再走"用户自备 proot 二进制 + rootfs.tar.xz"**的自研路径，
-> 改为**集成 oonid/pr 的 `:proot-engine`**（`targetSdk` 保持 34，不降级）。理由、API、
-> License、落地步骤见 `design/proot-engine-integration.md`；W^X 绕过原理见 `design/wx-exec-proot-loader.md`。
-> `PACKAGING.md`（自研 proot/rootfs 准备）从此**作废**，仅"在 arm64 上出 APK"一节仍适用。
+> **底座代码已落地**（2026-10-03 阶段 A~E-1）：自研 proot 层 + 预打包 rootfs（Debian 12 + Node 22 +
+> 预装 dsh），三个 jniLibs 就位，`ptyjni` 已编进去；0.1.1 起是含完整 rootfs 的整包。
+> **本里程碑现在只剩"真机验收"这一步。**
 
-**要做的事（按顺序，第一项是阻塞项）**
-1. 🔴 **验证 dsh 子进程 spawn**（唯一拦路项，集成第一步）：
-   oonid/pr 真机实测 `gcc 编译 hello world ✅`（普通 fork+execve 通）、但 `cargo build ❌`（vfork 路径 ENOSYS）。
-   dsh 的核心是频繁开子进程（`npm install` / spawn `/bin/bash` / agent 执行命令），必须确认 node 的 spawn
-   （libuv → `posix_spawn`/`fork+execvp`）不命中 cargo 那个坑。方法：装 oonid/pr APK → `pr-cli install alpine`
-   → `apk add nodejs npm` → 跑 `node -e "require('child_process').execSync('echo hi')"` 与 `npm install`。
-2. 把 `:proot-engine` 作为 Gradle 模块引入（`settings.gradle.kts` 加 `include`）
-   —— ⚠️ 这会**恢复一部分 NDK + Rust native 构建**（删 MC 时去掉了 NDK，需按 `design/proot-engine-integration.md §7-3` 恢复）。
-3. 构建 5 个 jniLibs 二进制（libproot.so / libproot-loader.so / libpr-cli.so / libbusybox.so / 可选 libbash.so）。
-4. 实现 `DshProotHost : ProotHost`（用 `DshPaths` 填 4 个目录）；把 `DshInstaller`/`DshRuntime`
-   从"自拼 proot 命令 + stdout 管道"改为 `ProotLauncher`（PTY Session）——注意 token 抓取要加 ANSI 清洗。
-5. 删 `ProotCommand` / `ProotProcessExecutor`，精简 `DshBootstrap`。
-6. 出 APK：`./gradlew --no-daemon -Darch=arm64 :FCL:assembleFordebug`（脚本 `sh /workspace/build-apk.sh`）。
-7. 装机，跑通端到端，把结果回填到本篇与 `PLAN.md`。
+### 要做的（按顺序）
 
-> 若第 1 步验证 spawn 不通 → 集成作废，退回兜底方案 A（`targetSdk = 28` 自研 proot），见 `wx-exec-proot-loader.md §6`。
+1. **装 0.1.2-SNAPSHOT 到真机** —— 包在 GitHub Release（公开仓，免 token）：
+   <https://github.com/sqkl520/dsh-fcl-android-launcher/releases/tag/v0.1.2-SNAPSHOT>
+2. **首启**：确认底座解压 300MB rootfs 的耗时与成功率（需 ≥2GB 空闲）；
+   解压后自检（`probe.sh`）必须打出 `dsh-probe-ok`，否则先把失败原因记下来。
+3. **下载页**：装一个 dsh 版本 → 实例状态到 `READY`。
+   重点看 **DNS 修复是否真生效**（`npm install` 能否装 0.2.x）——历史上这里必 `EAI_AGAIN`。
+4. **启动**：捕获 `[start-dsh] READY url=http://127.0.0.1:<port>/?token=...`，
+   `DshWebViewActivity` 渲染出 dsh Web UI。
+5. **对话**：用真实 DeepSeek key 在 WebView 里成功对话一次。
+6. **收尾**：停止后进程结束、前台通知消失、明文凭据抹除；息屏/切后台再回来的表现。
+7. 把结果（成功/失败与原因）回填到本篇、`INDEX.md`、`TASKS.md` T6。
 
-**完成判据（DoD）**
-- [ ] 运行时底座就绪（proot-engine 集成后），proot 能进发行版执行 `node -v`（版本达标）
+**就诊入口**：出问题先看应用内「设置 → 运行时自检」与日志页；
+`adb logcat` 抓 `com.dsh` 相关行。
+
+### 完成判据（DoD）
+
+- [ ] proot 能进 rootfs 执行 `node -v`（版本达标），`probe.sh` 打出 `dsh-probe-ok`
 - [ ] 下载页能装上至少一个 dsh 版本，实例状态到 `READY`
 - [ ] 启动后捕获到 `?token=` URL，`DshWebViewActivity` 正常渲染 dsh Web UI
 - [ ] 用真实 DeepSeek key 在 WebView 里成功对话一次
 - [ ] 停止能干净收尾（进程结束、前台通知消失、明文凭据抹除）
 
-**风险**：见 `design/proot-engine-integration.md §9`（子进程 spawn、native 构建复杂度、API 变动、PTY 抓取脆弱）。
+### 兜底路线（只在真机验证失败时才考虑）
 
-**依赖 / 风险**
-- proot 二进制与设备内核的 seccomp 兼容性 → 见 M2 的 `PROOT_NO_SECCOMP` 兜底。
-- `Process.pid()` 在 ART 上可能拿不到（已有告警）→ M2 处理。
-- rootfs 体积（几十~几百 MB）叠加 APK，注意首装体验。
+**若真机上 proot 起不来（W^X / seccomp / spawn 任一处不通）**，按顺序试：
+1. 加 `PROOT_NO_SECCOMP=1`（部分内核的 seccomp 兼容性兜底，见 M2）
+2. 按 `design/wx-exec-proot-loader.md` §6 的方案 A：**降 `targetSdk` 到 28** ——
+   这是最后的退路，代价是要重新过一遍 Play 的上架限制，非必要不做
+3. `design/proot-engine-integration.md` 里记录的**集成 oonid/pr `:proot-engine`** 仍是备选路线
+   （那份文档是决策记录，其中的 W^X / PROOT_LOADER 原理有效；真要启用得按它 §11 分阶段做）
+
+### 依赖 / 风险
+
+- proot 二进制与设备内核的 seccomp 兼容性 → M2 的 `PROOT_NO_SECCOMP` 兜底
+- `Process.pid()` 在 ART 上可能拿不到（已有告警）→ M2 处理
+- rootfs 体积（约 300MB×压缩 / 1.4GB 解压后）叠加 APK，注意首装体验 → T7 瘦身
 
 ---
-
 ## M2 · 稳定性达标
 
 **目标**：M1 跑通后，让核心链路在真机上**反复操作也稳**——不崩、不卡死、多实例不串台。
@@ -213,21 +227,25 @@ Android 文档才发现的（比如前台服务必崩），这类应该被测试
 
 ## 优先级速记
 
-- **可以立即做**：**死代码 / CI / 依赖清账**（与运行时底座无关，可并行推进）。
-- **关键路径**：M1 **先验证子进程 spawn**（阻塞项），过了再集成 `:proot-engine` + 出 APK + 真机点亮。
+- **关键路径**：M1 的**真机验收**（底座代码已落地，只差一台机器跑一遍）。
+- **可以并行做**：M4 测试与工程化（`T9` 已清；脚本自检还没接进 `run-tests.sh`）、
+  T7 rootfs 瘦身、T10 文档同步（`PLAN.md`/`PACKAGING.md` 的过时内容）。
 - **紧跟其后**：M2（真机稳了才敢给人用），M4 可以并行（边修边补测试）。
 - **锦上添花**：M3 打磨、M5 分发。
 - **看情况**：M6 扩展。
 
-> 一句话：**先把外壳打通（M0，让 GUI 能用），再让它在真机上活一次（M1），
+> 一句话：**外壳通了（M0 ✅）、底座也接上了（✅），现在只差它在真机上活一次（M1），
 > 然后活得稳（M2），最后活得好（M3+）。**
 
 ---
 
 ## 与其他文档的关系
 
-- 真机联调的**具体操作步骤**：见 `PLAN.md §8.5`（本文档只做规划，不重复步骤）。**注**：§8.5 目前仍是
-  旧的"自备 proot + rootfs.tar.xz"流程，集成 proot-engine 后需改写。
-- 运行时底座**怎么落地**：见 `design/proot-engine-integration.md`（proot-engine）与 `design/wx-exec-proot-loader.md`（W^X 原理）。
-- 各里程碑里"为什么这么做"的**缺陷背景**：见 `reports/round2~7` 审查报告。
-- 本文档随进展更新：里程碑达成后在对应处打勾，并把结论回填到 `PLAN.md §7` 与 `INDEX.md`。
+- 真机怎么验、验什么：见 **`TASKS.md` T6** 与 `PLAN.md §8.5`（后者是旧的自研流程记录，
+  步骤仍可参考，但"补齐 proot/rootfs 大文件"那部分已过时 —— 那些文件已经就位）。
+- 运行时底座**怎么落地**：**当前实现 = 自研 proot 层 + 预打包 rootfs**，
+  见 `PACKAGING.md`（打包）与 `ROOTFS.md`（rootfs 重建）。
+  `design/proot-engine-integration.md` 是**未采用的备选路线**（决策记录，W^X/PROOT_LOADER 原理有效），
+  `design/wx-exec-proot-loader.md` 是 W^X 原理。
+- 各里程碑里"为什么这么做"的**缺陷背景**：见 `reports/round2~11` 审查报告。
+- 本文档随进展更新：里程碑达成后在对应处打勾，并把结论回填到 `INDEX.md` 与 `TASKS.md`。
