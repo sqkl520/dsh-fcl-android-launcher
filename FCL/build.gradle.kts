@@ -66,8 +66,8 @@ android {
         applicationId = "com.dsh.fcl.androidlauncher"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 101
-        versionName = "0.1.1-SNAPSHOT"
+        versionCode = 102
+        versionName = "0.1.2-SNAPSHOT"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
