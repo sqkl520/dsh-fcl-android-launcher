@@ -181,6 +181,7 @@ EINVAL: invalid argument, readlink '.../native-cache/node-addon-require-builtin-
 |---|---|---|
 | `0.1.0-SNAPSHOT` | 100 | 首版（经两轮真机实测，已归档到 `apk-archive/0.1.0/`） |
 | `0.1.1-SNAPSHOT` | 101 | 0.1.0 之后所有未打包改动（DNS 修复 + 前置页 + 任务区 + 动画全对齐） |
+| `0.1.2-SNAPSHOT` | 102 | 0.1.1 之后三处 UI 调整（T1 实例详情行式 / T2 多语言 + 自定义启动器名 / T4 右面板按钮）；出包用于真机端到端验证 |
 | `1.0.0` | — | 留给「能正常启动 / 下载 / 管理 dsh」之后 |
 
 发版流程：

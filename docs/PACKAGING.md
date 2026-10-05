@@ -53,7 +53,7 @@ cd D:\Projects\dsh-fcl-android-launcher
 > 旧名 `ea`）。仓库分工与操作方式见根下 `REPOS.md`。
 
 命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
-`dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64.apk`）。
+`dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`）。
 
 `SHA256SUMS` 里只写**文件名**（两处同名），因此 `output/` 与 `apk-archive/<version>/`
 都能直接 `sha256sum -c` 校验。

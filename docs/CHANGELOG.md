@@ -2,14 +2,38 @@
 
 本项目：**DeepSeek Harness (dsh) 安卓启动器** —— 在未 root 的安卓手机上，用 proot 跑 dsh（Node 版编码/对话 agent），基于 FoldCraftLauncher (FCL) 改造。
 
-> **仓库**：<https://github.com/sqkl520/dsh-fcl-android-launcher> ｜ **版本**：`0.1.1-SNAPSHOT`
+> **仓库**：<https://github.com/sqkl520/dsh-fcl-android-launcher> ｜ **版本**：`0.1.2-SNAPSHOT`
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/)。由于项目尚未正式发版，各段以**工作阶段/里程碑**划分，并标注对应的 git commit。
 
 > **★ 硬规则（项目约定）**：**任何代码/配置/文档的更改，都必须记入本 CHANGELOG**（在最上方的
 > `[Unreleased]` 段按 Added/Changed/Fixed/Removed/Optimized/Refactored/Notes 分类追加）。
-> 版本号规则：当前为 `0.1.1-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
+> 版本号规则：当前为 `0.1.2-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
 > **本文件只记"改了什么"**；经验 / 方法论 / 踩坑请写进 `LESSONS.md`，不要写在这里。
+
+---
+
+## [0.1.2-SNAPSHOT] - 2026-10-05
+
+> 0.1.1 之后的三处 UI 调整打包出库，用于真机端到端验证（T6；重点：DNS 修复后
+> `npm install` 能否装 0.2.x）。本包不含新的源码逻辑改动（差量见下）。
+
+### Changed
+- 版本号 `0.1.1-SNAPSHOT` → `0.1.2-SNAPSHOT`（`versionCode 101 → 102`；`build-apk.sh` 的 `VERSION` 同步）。
+- 出包 `dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`：
+  **326,300,458 字节**（约 311 MiB），sha256 `8abaa3eab5e342d6401899a35422984e453ddacc59b161dfdf13452185c529cf`；
+  落 `output/`（交付）与 `apk-archive/0.1.2-SNAPSHOT/`（快照，两处 `SHA256SUMS`）。
+- 文档同步：本文件头、`README`（徽章/状态/构建命令）、`INDEX`（当前版本/待办）、
+  `PACKAGING`（命名示例）、`LESSONS` §4.0 版本表、`apk-archive/README`（目录树）。
+
+### Notes
+- 本包内容 = 0.1.1（`a262a7e` 打包）之后 `FCL/src` 的全部已提交改动：
+  `839e0fa`（T1 实例详情页 FCL 行式 + T4 右面板按钮）、`8b49ea9`（T2 12 语言 + 自定义启动器名）；
+  其余提交均为文档 / 仓库整理（不改 app 行为）。
+- 出包与验证（电脑 Windows x64，`:FCL:assembleFordebug` BUILD SUCCESSFUL in 2m27s / 64 tasks）：
+  aapt badging = `versionCode 102 / versionName 0.1.2-SNAPSHOT / minSdk 26 / compileSdk 35`；
+  APK 内 `assets/dsh/rootfs/rootfs.tar.xz` 为 **Stored**（314,360,800 字节），
+  解出后 sha256 = `5d762c30…`（与已核验的 rootfs 一致）。
 
 ---
 
