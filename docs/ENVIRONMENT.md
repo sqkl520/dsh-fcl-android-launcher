@@ -132,7 +132,7 @@ cmake → cmake.real(脚本) → cmake.real.real(真二进制)   # qemu 去执�
   :FCL:processDebugResources :FCL:processDebugMainManifest
 
 # 单测（Gradle 原生跑，不再需要沙箱的 MiniRunner 桩）
-.\gradlew.bat --no-daemon :FCL:testDebugUnitTest
+.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest
 
 # 打包（需先补 rootfs，见 ROOTFS.md）
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
@@ -142,6 +142,16 @@ cmake → cmake.real(脚本) → cmake.real.real(真二进制)   # qemu 去执�
 —— 这三个脚本在**快照仓**里（电脑上与源码仓共用一个项目文件夹：`D:\Projects\dsh-fcl-android-launcher\*.sh`；
 手机 `/workspace/`），是纯 POSIX sh、面向 arm64 Linux；Windows 上直接跑不了，用上面的 Gradle 命令。
 两仓关系见根下 `REPOS.md`。
+
+**电脑上的脚本入口（Windows 常用）**：`.cmd` 包装 = 调 Git Bash 跑同名 `.sh`
+
+```powershell
+.\check-sync.cmd          # 体检：版本号一致 / 两仓干净 / 共用文件一致 / 与远端同步
+.\release.cmd --dry-run   # 出包全流程（加 --dry-run 只打印不改）
+.\bootstrap.cmd --check   # 检查双仓共用工作树是否完整
+```
+
+> 完整的仓库分工、出包流程、换电脑重建步骤 → 根下 **`REPOS.md`**。
 
 ## 5. 已知环境坑（两平台通用）
 

@@ -19,6 +19,7 @@
 | **T1** | 实例详情页改 FCL 行式（`DshInstanceSettingAdapter` + 值行/按钮行） | commit `839e0fa` |
 | **T4** | 右面板按钮照 FCL 形态（图标+文字 clickable 容器；原 T4 前提「用 `bg_right_menu_button`」经核对是 FCL 未使用资源，已改按真实写法） | commit `839e0fa` |
 | **T2** | 12 种语言 + 自定义启动器名（`LauncherUtil` + 编辑行） | commit `8b49ea9` |
+| **T9** | `.github/workflows` 适配 —— **不需要做了**：FCL 原版 CI 在搬到电脑时已整体删除（`92ba6df`，远端实测 `workflows total_count: 0`） | commit `92ba6df` |
 
 ## P1 · UI 还原
 
@@ -39,7 +40,9 @@
 ### T6. 真机端到端验收（关键）
 
 > **0.1.2-SNAPSHOT 包已就绪**（2026-10-05 出包，`output/dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`，
-> sha256 `8abaa3ea…`，见 CHANGELOG）——可直接开验。
+> sha256 `8abaa3ea…`，见 CHANGELOG）；2026-10-06 起**已作为 GitHub Release 附件发布**
+> （<https://github.com/sqkl520/dsh-fcl-android-launcher/releases/tag/v0.1.2-SNAPSHOT>，公开仓免 token 可下）
+> —— 直接下载装机开验。
 
 - **DNS 修复是否真的生效**（`npm install` 能否成功装 0.2.x）
 - 首次解压 300MB rootfs 的耗时与成功率（需 ≥2GB 空闲）
@@ -54,9 +57,6 @@
 - npm cache（`/opt/dsh/npm-cache`）与 rootfs 体积显示 + 一键清理，放进设置页
 
 ## P3 · 其他
-
-### T9. `.github/workflows` 适配
-- 仓库里仍是 FCL 原版 CI（checkstyle / release），会在 GitHub 上失败或误导。
 
 ### T10. 文档同步
 - `PLAN.md` / `PACKAGING.md` 仍有过时内容（描述的是"用户自备 proot + rootfs"的旧方案）。

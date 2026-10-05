@@ -664,3 +664,71 @@ Windows 上**不需要 qemu 包装**（那是 arm64 才有的坑，见 §1.3）�
    两个仓库共用一个根目录时，让快照仓把 README 放 `.github/`，源码仓用自己的根 `README.md`，互不打架。
 5. 日常操作包装成 `ws-git.sh` / `ws-git.cmd`（`--git-dir=.git-ws-snapshot --work-tree=.`），
    普通 clone（手机）上没有 `.git-ws-snapshot` 时退化为普通 `git`。
+
+## 20. 这套"两个仓库"的布局，状态只活在磁盘上（2026-10-06）
+
+第 19 节描述的布局本身没问题，但**它没有任何可复现的说明书** ——
+`info/exclude` 在 `.git` 目录**里面**（不受版本控制，新机器 clone 下来是空的），
+`core.worktree` 是本地配置，`ws-git.*` 只是包装。换一台电脑 = 整套约定归零，
+只能靠人肉回忆 19 节里那 5 个坑。实测发现：把仓库 clone 到新目录后，
+源码仓 `git status` 会把 `apk/ dsh/ poc/ …` 全报成 untracked（手机端尤其明显）。
+
+**处理**（2026-10-06）：把"磁盘状态"变成"仓库里的文件" ——
+
+- `ws-tools/exclude.source-repo` / `exclude.snapshot-repo`：两边 exclude 的**规范副本**，进版本控制
+- `bootstrap.sh`：新机器一条命令重建整棵树（建 `.git` + 建 `.git-ws-snapshot` + 设 `core.worktree`
+  + 强制检出 + 装两边 exclude + 跑体检）
+- `bootstrap.sh --check` / `--install-excludes`：只检查 / 只重装 exclude
+
+**踩到的点**：
+
+1. **`.git-ws-snapshot` 必须是"目录本身即 git-dir"**。`git init .git-ws-snapshot` 得到的是
+   `.git-ws-snapshot/.git`（git-dir 在里面一层），`--git-dir=.git-ws-snapshot` 就会报
+   `fatal: not in a git directory`。要的是 `git init --bare .git-ws-snapshot` +
+   `config core.bare false` + `config core.worktree <目标目录>`。这一条没写下来的话，
+   新机器重建必踩。
+2. **共用的工作树必须 `checkout -f`**：先检出源码仓、再检出快照仓时，
+   快照仓的 `docs/` 等文件会与源码仓跟踪的文件路径重叠 —— 不加 `-f` 会直接拒绝。
+   实测加 `-f` 后两边各自 676 个文件全部就位、两个 `git status` 都干净。
+3. **路径比较要归一化**：Windows 上 git 报的是 `D:/Projects/...`，Git Bash 里 `pwd` 是
+   `/d/Projects/...`。`--check` 里直接字符串比较会误报"工作树指向别处" ——
+   两边都用 `git rev-parse --show-toplevel` 拿结果再比才对。
+4. **`.cmd` 一律 ASCII + CRLF**：`cmd.exe` 按当前代码页逐字节解析批处理，
+   含中文的 `.cmd` 会被拆成乱码命令（实测报 `'h' is not recognized...` 这种）。
+   注释全写英文，中文说明放对应的 `.sh` 里。
+
+## 21. 大二进制不进 Git 历史：300MB 分片 × N 个版本（2026-10-06）
+
+APK 300MB+，早先的做法是切 90MB 分片提交进快照仓。**问题不在单次提交，在历史**：
+Git 存的是"每个文件的每个版本"，改一行代码就是一个全新的 300MB 对象，旧的那份还永远留着。
+
+实测：快照仓历史里 `>10MiB` 的 blob **全部**是 `apk/*.apk.part*` —— 8 个 90MiB + 2 个 41MiB ≈ **833 MiB**，
+而代码+文档的 pack 只有 31.76 MiB。每出一版再涨 300MB+，手机端 clone/pull 只会越来越痛
+（第 1.1 节的"单次传输 146MB 上限"在这里会被反复触发）。
+
+**处理**：分发改走 **GitHub Release 附件** —— 仓库历史不再增长，源码仓公开所以手机端免 token 能下。
+`apk-archive/<version>/` 只留 `SHA256SUMS`（一行指纹，记录"这个版本出过、指纹是多少"），
+`apk/` 里的旧分片降级为**只读历史存档**，不再新增。
+
+**顺带的两条**：
+
+- `apk/output-0.1.1-ref.apk` 与 `apk/dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64/` 的分片
+  **sha256 完全相同**（`bc96c4e7…`）—— 同一份内容白占 326MB。删掉后 rootfs 的恢复来源改成
+  "从 Release 的最新 APK 里取"，比指向一个固定版本更不容易过期。
+- 同一份 APK 一度在三处各存一份（`output/`、`apk-archive/<ver>/`、`FCL/build/`），
+  加上 `FCL/build` 里还有两份 300MB 的 rootfs 中间产物 —— 工作区 3.7G 里有约 1.5G 是冗余。
+  清理后 2.4G。（`FCL/build` 随时可删，下次编译重建。）
+
+## 22. 版本号写死在 8 个地方，迟早对不上（2026-10-06）
+
+`0.1.2-SNAPSHOT` 这个字符串当时出现在：`FCL/build.gradle.kts`、`build-apk.sh`、
+`README.md` 徽章、`docs/` 里 CHANGELOG/INDEX/LESSONS/PACKAGING/TASKS 共 6 处。
+漏改任何一处，出的就是"版本号对不上的包"——而这类错误要到装到手机上才发现。
+
+**处理**：收进 `gradle.properties` 的 `dshVersion` / `dshVersionCode`（唯一真源），
+`build.gradle.kts` 缺了直接 `error()` 而不是打出空版本号；`build-apk.sh` 也从这里读。
+文档里保留 3 处"声明当前版本"（README 徽章 / INDEX / CHANGELOG —— 它们是人读的入口，
+删掉反而不好用），由 `check-sync.sh` 校验一致性，不一致就 FAIL。
+
+> 教训：**"改一处、别处自动跟着变"** 是配置该有的样子；实在要保留人工副本的，
+> 就配一条会 FAIL 的检查，而不是靠记性。

@@ -13,6 +13,52 @@
 
 ---
 
+## [Unreleased] - 2026-10-06
+
+> 工程流程整理：版本号收敛、APK 分发改为 GitHub Release、三个工作流脚本、磁盘清理。
+> **不改动 app 行为**（`FCL/src` 无实质改动），因此**未重新打包** —— 0.1.2-SNAPSHOT 的 APK 仍是
+> 2026-10-05 那一份（sha256 `8abaa3ea…`），只是换了分发渠道。
+
+### Added
+- **工作流脚本**（快照仓根）：`check-sync.sh/.cmd`（一致性体检：版本号真源、两仓 status、
+  共用文件逐 blob 一致、与远端同步）、`release.sh/.cmd`（出包全流程：体检→编译→单测→打包→
+  提交两仓→发 Release，支持 `--no-test/--no-build/--no-release/--dry-run`）、
+  `bootstrap.sh/.cmd`（新电脑重建双仓共用工作树，`--check` / `--install-excludes`）。
+- **`ws-tools/exclude.{source-repo,snapshot-repo}`**：两边 `info/exclude` 的规范副本 ——
+  `info/exclude` 在 `.git` 里不受版本控制，新机器 clone 下来是空的，必须有进仓库的副本。
+- **GitHub Release `v0.1.2-SNAPSHOT`**：APK 作为附件发布（源码仓公开 → 手机端免 token 下载）。
+- `REPOS.md` 重写为「仓库关系 + 日常工作流」：新增 §4 脚本、§5 版本与分发、§6 换电脑重建。
+
+### Changed
+- **版本号单一来源**：新增 `gradle.properties` 的 `dshVersion` / `dshVersionCode`（唯一真源）；
+  `FCL/build.gradle.kts` 从它读（缺失直接 `error()`）；`build-apk.sh` 也从它读（原先写死在脚本里）。
+- `build-apk.sh` 不再往 `apk-archive/<ver>/` 复制一份 300MB 二进制（同一份内容白占磁盘）。
+- `apk-archive/README.md` 改写：本目录**只存指纹**（`SHA256SUMS`），APK 本体走 Release。
+- 文档校准：`ENVIRONMENT.md` 单测任务名 `testDebugUnitTest` → `testFordebugUnitTest`（实际用的那个）、
+  新增电脑端 `.cmd` 脚本入口一节；`INDEX.md` 文档地图加 `REPOS.md` 条目、rootfs 恢复来源改为
+  "从 Release 最新 APK 取"；`TASKS.md` 删 T9（已完成，见下）、T6 补 Release 链接；
+  `README.md`（源码仓）构建节补 `release.cmd` 与版本真源说明、文档表补 Releases 链接；
+  `.github/README.md`（快照仓）补工作流脚本与 `ws-tools/`、APK 去向。
+- `docs/LESSONS.md` 新增 §20~§22：双仓布局"状态只活在磁盘上"的教训与重建要点、
+  大二进制不进 Git 历史的实测数据、版本号写死 8 处的教训。
+
+### Removed
+- `apk/output-0.1.1-ref.apk`（326MB）—— 与 `apk/dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64/`
+  的分片 **sha256 完全相同**（`bc96c4e7…`），同一份内容白占磁盘；rootfs 恢复来源改为 Release。
+- `apk-archive/0.1.2-SNAPSHOT/*.apk`（312MB）—— 与 `output/` 同一份，且已上传 Release。
+- `FCL/build/`（705MB，含两份 300MB rootfs 中间产物）—— 构建产物，下次编译重建。
+- `TASKS.md` T9「`.github/workflows` 适配」—— **实测已无此问题**：FCL 原版 CI 在搬到电脑时
+  已整体删除（commit `92ba6df`），远端 `workflows total_count: 0`。
+
+### Notes
+- **磁盘**：工作区 3.7G → **2.4G**（D: 空闲 125G → 126G 中已含 1.3G 释放）。
+- **未做（已决策）**：快照仓历史里仍压着 833 MiB 的旧 APK 分片。清理要改写历史 + 强推，
+  等手机端 clone 真的嫌慢再动手。
+- **未做**：`gh` CLI 由 winget 安装（`C:\Program Files\GitHub CLI`，已 `gh auth login`）；
+  脚本里对 `gh` 缺失有兜底提示（会打印手动发版步骤）。
+
+---
+
 ## [0.1.2-SNAPSHOT] - 2026-10-05
 
 > 0.1.1 之后的三处 UI 调整打包出库，用于真机端到端验证（T6；重点：DNS 修复后

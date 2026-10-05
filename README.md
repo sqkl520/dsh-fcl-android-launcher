@@ -78,8 +78,17 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包 → dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk
 ```
 
+一条命令出整版（体检 → 编译 → 单测 → 打包 → 提交两仓 → 发 GitHub Release）：
+
+```powershell
+.\release.cmd --dry-run   # 先看流程；去掉 --dry-run 就是真跑
+```
+
 手机（arm64 Linux 沙箱）上用同目录的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh`
 （纯 POSIX sh，自动识别源码目录；改用例见 `REPOS.md`）。
+
+**版本号只有一个真源**：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
+**APK 不进 Git**：新版本作为 GitHub Release 附件分发（见 [`REPOS.md`](REPOS.md) §5）。
 
 ---
 
@@ -97,7 +106,8 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 | [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md) | W^X 限制与 PROOT_LOADER 绕过方案 |
 | [`docs/design/proot-engine-integration.md`](docs/design/proot-engine-integration.md) | 集成 oonid/pr `:proot-engine` 的架构决策 |
 | [`docs/reports/`](docs/reports/) | 各轮评审与优化报告 |
-| [`REPOS.md`](REPOS.md) | **电脑 / 手机 / 两个仓库的关系**：本仓 = 源码仓；源码以外的文件在快照仓 `dsh-fcl-android-launcher-workspace-snapshot`（电脑上两仓共用一个项目文件夹） |
+| [`REPOS.md`](REPOS.md) | **仓库关系与日常工作流（先读这个）**：电脑 / 手机 / GitHub 三者关系、改文件该动哪个仓、出包流程、版本号真源、换电脑重建。本仓 = 源码仓；源码以外的文件在快照仓 `dsh-fcl-android-launcher-workspace-snapshot`（电脑上两仓共用一个项目文件夹） |
+| [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) | **APK 下载**（公开仓，免 token）——新版本以 Release 附件分发，不进 Git |
 
 ---
 
