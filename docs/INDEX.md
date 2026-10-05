@@ -8,7 +8,7 @@
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 GPL-3.0 发布。
 >
-> **当前版本：`0.1.1-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+> **当前版本：`0.1.2-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 
 > DeepSeek Harness（dsh）在**未 root 安卓手机**上的启动器/管理器。
@@ -141,8 +141,9 @@
   5. **T5 插件管理子页**（等插件体系）· **T7 rootfs 瘦身** · **T8 缓存清理 UI** ·
      **T9 `.github/workflows` 适配**（仍是 FCL 原版 CI，会在 GitHub 上失败）· **T10 `PLAN.md`/`PACKAGING.md` 过时内容**
   6. **电脑环境已就绪（2026-10-05）**：Windows x64 + JDK17 + Android Studio + SDK35/NDK27，
-     见 `ENVIRONMENT.md` §1；**rootfs 已从 0.1.1 参照 APK 无损取回并放回（299.8MB，sha256 `5d762c30…`），
-     打包前置条件已齐；下一步：明确"打包"后出包并做真机验证（T6）**
+     见 `ENVIRONMENT.md` §1；rootfs 已从 0.1.1 参照 APK 无损取回并放回（299.8MB，sha256 `5d762c30…`）。
+     **0.1.2-SNAPSHOT 已出包**（`output/dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`，
+     326,300,458 字节，sha256 `8abaa3ea…`）；**下一步：装到真机做端到端验证（T6）**
 - **已修（2026-10-01，见 `reports/mc-removal-impact-review.md` §11 补丁 A/B）**：
   1. **M-01（P1）** `FCLPath.loadPaths()` 上提到 `FCLApp.onCreate`，并删除 `SplashActivity.kt` 中的重复调用
      —— 消除"必须先经过启动页"的隐式依赖（通知栏 PendingIntent 冷启动会绕过启动页）

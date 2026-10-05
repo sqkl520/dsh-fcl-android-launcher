@@ -4,11 +4,12 @@
 
 ```text
 apk-archive/
-├── 0.1.0/                                    ← 首版（经两轮真机实测）
-│   ├── dsh-fcl-android-launcher-0.1.0-SNAPSHOT-arm64.apk
+├── 0.1.0/                                    ← 首版（经两轮真机实测）；二进制在 apk/ 分片里
 │   └── SHA256SUMS
-├── 0.1.1-SNAPSHOT/                           ← DNS修复 + 前置页 + 任务区 + 动画全对齐
-│   ├── dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64.apk
+├── 0.1.1-SNAPSHOT/                           ← DNS修复 + 前置页 + 任务区 + 动画全对齐；二进制在 apk/ 分片里
+│   └── SHA256SUMS
+├── 0.1.2-SNAPSHOT/                           ← T1/T2/T4 UI 调整；出包用于真机端到端验证
+│   ├── dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk
 │   └── SHA256SUMS
 └── README.md
 ```

@@ -37,6 +37,10 @@
 ## P2 · 运行时与稳定性
 
 ### T6. 真机端到端验收（关键）
+
+> **0.1.2-SNAPSHOT 包已就绪**（2026-10-05 出包，`output/dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`，
+> sha256 `8abaa3ea…`，见 CHANGELOG）——可直接开验。
+
 - **DNS 修复是否真的生效**（`npm install` 能否成功装 0.2.x）
 - 首次解压 300MB rootfs 的耗时与成功率（需 ≥2GB 空闲）
 - 前置页 / 首页任务区 / 实例详情页 / 右面板按钮的实际观感与行为
