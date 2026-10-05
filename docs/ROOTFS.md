@@ -134,13 +134,97 @@ echo -n 'debian-bookworm-arm64-node22-dsh-0.1.6-alpha.2' \
 
 ## 9. 体积参考
 
+**瘦身前（0.1.0 ~ 0.1.2）**：
+
 | 组成 | 大小 |
 |---|---|
 | Debian minbase + 工具链 | ~600MB |
 | Node 22 | ~200MB |
 | 预装 dsh 及依赖 | ~500MB |
-| **解压后合计** | **~1.4GB** |
-| **tar.xz 压缩后** | **~300MB** |
+| **解压后合计** | **~1.4GB（1436 MB）** |
+| **tar.xz 压缩后** | **~300MB（314,360,800 字节）** |
+
+**瘦身后（0.1.3 起）**：
+
+| 组成 | 大小 |
+|---|---|
+| `/opt`（Node 22 + 预装 dsh） | 605 MB |
+| `/usr` | 213 MB |
+| `/var` + 其余 | 44 MB |
+| **解压后合计** | **~862 MB（904,335,360 字节）** |
+| **tar.xz 压缩后** | **142 MB（148,637,136 字节，−52.7%）** |
 
 > 打包进 APK 时需在 `build.gradle.kts` 里对 `xz` 关闭二次压缩：
 > `androidResources { noCompress += "xz" }` —— 否则打包会极慢且体积更大（LESSONS §1.5）。
+
+## 10. 瘦身（2026-10-06）：在现有包上直接剔除，不重打包
+
+`rootfs.tar.xz` 里 **`/opt`（605MB）已经是绝对主体**（Node 22 + 预装 dsh），
+外围能删的主要是**编译开发环境与文档**。做法上**不要重新 debootstrap** ——
+用 GNU tar 的 `--delete` 在原包条目上直接剔，`/opt` 与所有软链原样不动：
+
+```sh
+# ① 解压成裸 tar（rootfs.tar.xz 是单层 xz + tar，约 1.4GB）
+xz -dc rootfs.tar.xz > rootfs.tar
+cp rootfs.tar rootfs-slim.tar
+
+# ② 按「精确路径」剔除（★ 目录名在 tar 里带尾斜杠，写 ./usr/lib/gcc 会报 Not found）
+tar --delete -f rootfs-slim.tar \
+  ./usr/lib/gcc ./usr/libexec/gcc ./usr/lib/python3.11 \
+  ./usr/include ./usr/share/doc ./usr/share/man ./usr/share/info \
+  ./usr/share/perl ./usr/share/perl5 \
+  ./usr/lib/aarch64-linux-gnu/perl ./usr/lib/aarch64-linux-gnu/perl-base \
+  ./usr/bin/perl ./usr/bin/perl5.36.0 ./usr/bin/perlthanks ./usr/bin/perlbug \
+  ./usr/bin/cpan ./usr/bin/perldoc \
+  ./root/.cache ./var/cache/apt ./var/lib/apt \
+  ./usr/lib/git-core ./usr/share/gitweb \
+  ./usr/bin/git ./usr/bin/git-shell ./usr/bin/scalar \
+  ./usr/lib/aarch64-linux-gnu/libasan.so.8.0.0 \
+  ./usr/lib/aarch64-linux-gnu/libtsan.so.2.0.0 \
+  ./usr/lib/aarch64-linux-gnu/liblsan.so.0.0.0 \
+  ./usr/lib/aarch64-linux-gnu/libubsan.so.1.0.0 \
+  ./usr/lib/aarch64-linux-gnu/libhwasan.so.0.0.0 \
+  ./usr/lib/aarch64-linux-gnu/libcc1.so.0.0.0 \
+  ./usr/bin/aarch64-linux-gnu-lto-dump-12 \
+  ./usr/lib/aarch64-linux-gnu/gconv \
+  ./usr/share/locale/fr ./usr/share/locale/ru ./usr/share/locale/uk \
+  ./usr/share/locale/sv ./usr/share/locale/es ./usr/share/locale/de
+
+# ③ 清掉指向已删目标的残留软链（否则留断链）
+tar --delete -f rootfs-slim.tar \
+  ./usr/lib/aarch64-linux-gnu/libasan.so.8 ./usr/lib/aarch64-linux-gnu/libtsan.so.2 \
+  ./usr/lib/aarch64-linux-gnu/liblsan.so.0 ./usr/lib/aarch64-linux-gnu/libubsan.so.1 \
+  ./usr/lib/aarch64-linux-gnu/libhwasan.so.0 ./usr/lib/aarch64-linux-gnu/libcc1.so.0 \
+  ./usr/bin/lto-dump-12 ./usr/bin/aarch64-linux-gnu-lto-dump ./usr/bin/lto-dump \
+  ./usr/bin/git-upload-archive ./usr/bin/git-receive-pack ./usr/bin/git-upload-pack \
+  ./usr/lib/bfd-plugins/liblto_plugin.so ./usr/bin/pdb3.11 ./usr/bin/pdb3
+
+# ④ 压回（-T0 用满所有核）
+xz -T0 -6 -c rootfs-slim.tar > rootfs-slim.tar.xz
+sha256sum rootfs-slim.tar.xz   # 期望 216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8ccea3f6
+```
+
+**剔了之后必须核对"没删坏"**（三条都做过，都可复现）：
+
+```sh
+# ① 关键路径还在吗
+tar -tf rootfs-slim.tar | grep -qxF ./opt/node22/bin/npm
+tar -tf rootfs-slim.tar | grep -qxF ./opt/dsh-preinstalled/node_modules/.bin/dsh
+
+# ② 有没有留下断链软链（应为 0）
+#    解析每条软链的相对目标 → 看它是否在包内；绝对目标不算断链（proot 在 guest 内翻译）
+tar -tvf rootfs-slim.tar | grep ' -> ' | awk '{print $6"\t"$8}' > links.tsv   # 字段别数错：$6=名字 $8=目标
+
+# ③ 逐条 diff 条目清单，确认"被删的都在清单里、清单里的都删干净了"
+tar -tf rootfs.tar      | LC_ALL=C sort -u > list-full.txt
+tar -tf rootfs-slim.tar | LC_ALL=C sort -u > list-slim.txt
+comm -23 list-full.txt list-slim.txt    # 这些就是被删的
+```
+
+> ⚠️ **三个坑**（都实测踩过）：
+> 1. **`--delete` 的名字必须与 tar 内完全一致**（目录带尾斜杠、软链用链接名）——
+>    不一致会报 `Not found in archive` 并以非 0 退出，脚本里要判断这行是不是"真错误"。
+> 2. **Windows 上 `tar -xJf` 解压到磁盘会因 `/etc/ssl/certs` 那批绝对软链报错退出**
+>    （`Cannot create symlink to '/lib/...'`）。用 `--delete` 路线可以完全绕开解压。
+> 3. **`comm` 比较前两边都要 `LC_ALL=C sort -u`**，否则 locale 排序不同会产出大量假差异；
+>    另外目录条目带尾斜杠，比较时先 `sed 's|/$||'` 归一化，否则又会有一批假断链。

@@ -196,9 +196,9 @@ sh check-sync.sh          # 手机
 | 缺什么 | 怎么补 |
 |---|---|
 | `local.properties`（`sdk.dir`） | 见 `docs/ENVIRONMENT.md` §1.2 |
-| rootfs（300MB，打包必需） | 见下 |
+| rootfs（**142MB**，打包必需） | 见下 |
 
-### 补 rootfs（300MB，打包必需）
+### 补 rootfs（142MB，打包必需）
 
 **优先从已发布的 APK 里无损取出**（APK 内是 STORED，取出来与原文件逐字节相同）：
 
@@ -207,8 +207,12 @@ sh check-sync.sh          # 手机
 unzip -p dsh-fcl-android-launcher-<版本>-arm64.apk assets/dsh/rootfs/rootfs.tar.xz \
   > FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz
 sha256sum FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz
-# 当前应为 5d762c30b9117830518571bc4eeadf593182cc56d1f472024ba4490aa90682a7
+# 0.1.3 起（瘦身版）：216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8ccea3f6
+# 0.1.0 ~ 0.1.2（瘦身前）：5d762c30b9117830518571bc4eeadf593182cc56d1f472024ba4490aa90682a7
 ```
+
+> ⚠️ 换了 rootfs 就是换了运行时底座 —— 记得同步改 `FCL/src/main/assets/dsh/rootfs/version`
+> （App 靠这个串判断要不要重新解压，见 `ROOTFS.md` §8）。
 
 > 更早的记录里写的是从 `apk/output-0.1.1-ref.apk` 取 —— 那个文件已删
 > （它与 `apk/dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64/` 的分片**是同一份内容**，

@@ -8,7 +8,7 @@
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 GPL-3.0 发布。
 >
-> **当前版本：`0.1.2-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+> **当前版本：`0.1.3-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 
 > DeepSeek Harness（dsh）在**未 root 安卓手机**上的启动器/管理器。
@@ -148,13 +148,16 @@
      改走 `:proot-engine`"，与代码现状不符 —— 实际是**自研 proot 层 + 预打包 rootfs**（已落地）。
      已在上述文档与 `design/proot-engine-integration.md` 顶部更正。
   7. **电脑环境已就绪（2026-10-05）**：Windows x64 + JDK17 + Android Studio + SDK35/NDK27，
-     见 `ENVIRONMENT.md` §1；rootfs 已从 0.1.1 参照 APK 无损取回并放回（299.8MB，sha256 `5d762c30…`）。
-     **0.1.2-SNAPSHOT 已出包**（`output/dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`，
-     326,300,458 字节，sha256 `8abaa3ea…`）；
-     **已作为 GitHub Release 附件发布**（`v0.1.2-SNAPSHOT`）；**下一步：装到真机做端到端验证（T6）**
+     见 `ENVIRONMENT.md` §1。
+     **0.1.2-SNAPSHOT 已出包并发布**（`v0.1.2-SNAPSHOT`，326,300,458 字节，sha256 `8abaa3ea…`）
+     —— 用旧 rootfs（299.8MB，`5d762c30…`）。
   8. **工程流程（2026-10-06）**：版本号收敛到 `gradle.properties` 单一来源；APK 分发改走
      GitHub Release 附件（不再往快照仓提交 90MB 分片）；新增 `release` / `bootstrap` / `check-sync`
      三个脚本 —— 见根下 **`REPOS.md`**（仓库关系 + 日常工作流，先读这个）
+  9. **T7 rootfs 瘦身完成（2026-10-06）**：`rootfs.tar.xz` **314,360,800 → 148,637,136 字节
+     （−52.7%）**，解压后 1436 → 862 MB；版本号随之升到 **`0.1.3-SNAPSHOT`**
+     （换了 rootfs 就是不同的包，不能与 0.1.2 同号）。
+     **下一步：0.1.3 出包 → 发 Release → 真机端到端验收（T6）**
 - **已修（2026-10-01，见 `reports/mc-removal-impact-review.md` §11 补丁 A/B）**：
   1. **M-01（P1）** `FCLPath.loadPaths()` 上提到 `FCLApp.onCreate`，并删除 `SplashActivity.kt` 中的重复调用
      —— 消除"必须先经过启动页"的隐式依赖（通知栏 PendingIntent 冷启动会绕过启动页）
