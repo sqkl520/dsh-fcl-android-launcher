@@ -30,6 +30,7 @@
 | `reports/frontend-gap-vs-fcl.md` | **前端 vs FCL 原版逐项对照**：结构性缺口（页内多页/关于页/主题取色/文件选择/切页动画）、组件与资源缺口清单、有意保留的差异、建议顺序 | 想知道"前端还缺什么、为什么" |
 | `design/setup-flow-and-task-area.md` | **首启前置页 + 首页任务区 mockup**：一次性准备页（进度/失败/重试）与首页「进行中任务」区域的设计方案 | 做这两个功能前先看 |
 | `ROOTFS.md` | **运行时 rootfs 重建步骤**（Debian+Node22+预装 dsh，含清理与自检；原工作区未留档，2026-10-04 固化） | 需要重做/瘦身 rootfs 时 |
+| `../REPOS.md`（根目录） | **仓库关系与日常工作流**：电脑/手机/GitHub 三者关系、改文件该动哪个仓、出包流程、版本号单一来源、换电脑重建 | **动手前先读这个** |
 | `ENVIRONMENT.md` | **在新设备上重建开发环境**（JDK17/SDK35/NDK27、qemu 包装与双重包装坑、已知环境坑） | 换设备/换工作区时 |
 | `reports/animation-vs-fcl.md` | **动画逐项对照**：FCL 的 16 类动画来源 vs 我方现状；`FCLImageButton`/`FCLImageView` 的分工、进度条写法 | 想知道"动画差在哪、控件该用哪个" |
 | `design/fcl-ui-restoration.md` | **FCL 原汁原味 UI 还原方案**：FCL 设置结构、dsh 映射、保留/删除/替换清单、实施顺序与验收标准 | 做 UI 还原前必读 |
@@ -139,11 +140,15 @@
   4. 🔴 **T6 真机端到端（最大的空白）**：DNS 修复是否真生效（`npm install` 能否装 0.2.x）、
      首次解压耗时/成功率、`dsh web` 起服务 + WebView token/cookie、息屏保活
   5. **T5 插件管理子页**（等插件体系）· **T7 rootfs 瘦身** · **T8 缓存清理 UI** ·
-     **T9 `.github/workflows` 适配**（仍是 FCL 原版 CI，会在 GitHub 上失败）· **T10 `PLAN.md`/`PACKAGING.md` 过时内容**
+     **T10 `PLAN.md`/`PACKAGING.md` 过时内容**
   6. **电脑环境已就绪（2026-10-05）**：Windows x64 + JDK17 + Android Studio + SDK35/NDK27，
      见 `ENVIRONMENT.md` §1；rootfs 已从 0.1.1 参照 APK 无损取回并放回（299.8MB，sha256 `5d762c30…`）。
      **0.1.2-SNAPSHOT 已出包**（`output/dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`，
-     326,300,458 字节，sha256 `8abaa3ea…`）；**下一步：装到真机做端到端验证（T6）**
+     326,300,458 字节，sha256 `8abaa3ea…`）；
+     **已作为 GitHub Release 附件发布**（`v0.1.2-SNAPSHOT`）；**下一步：装到真机做端到端验证（T6）**
+  7. **工程流程（2026-10-06）**：版本号收敛到 `gradle.properties` 单一来源；APK 分发改走
+     GitHub Release 附件（不再往快照仓提交 90MB 分片）；新增 `release` / `bootstrap` / `check-sync`
+     三个脚本 —— 见根下 **`REPOS.md`**（仓库关系 + 日常工作流，先读这个）
 - **已修（2026-10-01，见 `reports/mc-removal-impact-review.md` §11 补丁 A/B）**：
   1. **M-01（P1）** `FCLPath.loadPaths()` 上提到 `FCLApp.onCreate`，并删除 `SplashActivity.kt` 中的重复调用
      —— 消除"必须先经过启动页"的隐式依赖（通知栏 PendingIntent 冷启动会绕过启动页）
@@ -172,7 +177,8 @@
 
 ## 在电脑上开发（当前环境，2026-10-05）
 
-> 已从手机沙箱搬到 **Windows x64 电脑**。工具链安装与接线见 **`ENVIRONMENT.md` §1**。
+> 已从手机沙箱搬到 **Windows x64 电脑**。工具链安装与接线见 **`ENVIRONMENT.md` §1**；
+> 仓库关系与日常工作流（改文件该动哪个仓、出包、换电脑）见根下 **`REPOS.md`**。
 
 ```powershell
 # 编译校验（Kotlin + Java + 资源 + Manifest）
@@ -187,11 +193,13 @@
 ```
 
 > `run-compile.sh` / `run-tests.sh` / `build-apk.sh` 是纯 POSIX sh（面向 arm64 Linux），
-> 在**快照仓**里（电脑上与源码仓同一目录，手机 `/workspace/`）；Windows 上跑不了 —— 直接用上面的 Gradle 命令。
+> 在**快照仓**里（电脑上与源码仓同一目录，手机 `/workspace/`）；Windows 上直接跑不了 ——
+> 用上面的 Gradle 命令，或在 PowerShell/cmd 里走 `.cmd` 入口（`release.cmd` / `check-sync.cmd`，
+> 它们内部调 Git Bash 跑同名 `.sh`）。
 
 **曾最缺的一块（已解决）**：`FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（300MB，不入 Git）——
 2026-10-05 已从 0.1.1 参照 APK 里**无损取出并放回**（sha256 `5d762c30…`）。
-补法见 `ROOTFS.md` 与 `README.md`「怎么把 rootfs 补回来」——**优先从已打好的 APK 里无损取出**。
+现在**优先从 GitHub Release 的最新 APK 里取**（见 `ROOTFS.md` 与根下 `REPOS.md` §6）。
 
 ---
 
