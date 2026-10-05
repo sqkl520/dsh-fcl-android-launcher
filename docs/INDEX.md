@@ -2,11 +2,13 @@
 
 > ## 📦 仓库
 > **GitHub**：<https://github.com/sqkl520/dsh-fcl-android-launcher>
-> 本地源码：`dsh-fcl-android-launcher/`（手机 `/workspace/dsh-fcl-android-launcher`；基线为 FCL 上游 `f4f2624`）
+> 本地源码：`D:\Projects\dsh-fcl-android-launcher`（手机 `/workspace/dsh-fcl-android-launcher`；基线为 FCL 上游 `f4f2624`）
+> **快照仓**（源码以外的工作区文件）：[`dsh-fcl-android-launcher-workspace-snapshot`](https://github.com/sqkl520/dsh-fcl-android-launcher-workspace-snapshot)
+> （旧名 `ea`）—— 电脑上与源码仓**共用一个项目文件夹**；两仓关系与操作规则见 `REPOS.md`。
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 GPL-3.0 发布。
 >
-> **当前版本：`0.1.0-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+> **当前版本：`0.1.1-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 
 > DeepSeek Harness（dsh）在**未 root 安卓手机**上的启动器/管理器。
@@ -139,7 +141,8 @@
   5. **T5 插件管理子页**（等插件体系）· **T7 rootfs 瘦身** · **T8 缓存清理 UI** ·
      **T9 `.github/workflows` 适配**（仍是 FCL 原版 CI，会在 GitHub 上失败）· **T10 `PLAN.md`/`PACKAGING.md` 过时内容**
   6. **电脑环境已就绪（2026-10-05）**：Windows x64 + JDK17 + Android Studio + SDK35/NDK27，
-     见 `ENVIRONMENT.md` §1；**下一步是把 rootfs 补回来然后打包验证**
+     见 `ENVIRONMENT.md` §1；**rootfs 已从 0.1.1 参照 APK 无损取回并放回（299.8MB，sha256 `5d762c30…`），
+     打包前置条件已齐；下一步：明确"打包"后出包并做真机验证（T6）**
 - **已修（2026-10-01，见 `reports/mc-removal-impact-review.md` §11 补丁 A/B）**：
   1. **M-01（P1）** `FCLPath.loadPaths()` 上提到 `FCLApp.onCreate`，并删除 `SplashActivity.kt` 中的重复调用
      —— 消除"必须先经过启动页"的隐式依赖（通知栏 PendingIntent 冷启动会绕过启动页）
@@ -161,7 +164,8 @@
 | `FCL/src/test/java/com/dsh/` | JVM 单测（34 项） |
 
 > `dsh/`（上游源码副本）、`poc/`、`oonid-pr-reference/` 等**参考材料不在源码仓库里**，
-> 它们在手机工作区的快照仓库 [`sqkl520/ea`](https://github.com/sqkl520/ea)。
+> 它们在快照仓 [`dsh-fcl-android-launcher-workspace-snapshot`](https://github.com/sqkl520/dsh-fcl-android-launcher-workspace-snapshot)
+> （旧名 `ea`；电脑上与源码仓共用一个项目文件夹，见根下 `REPOS.md`）。
 
 ---
 
@@ -181,10 +185,11 @@
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
 ```
 
-> 手机沙箱里的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh` 是纯 POSIX sh，
-> 在 **`ea` 工作区快照仓库**里（不在本仓库），Windows 上跑不了 —— 直接用上面的 Gradle 命令。
+> `run-compile.sh` / `run-tests.sh` / `build-apk.sh` 是纯 POSIX sh（面向 arm64 Linux），
+> 在**快照仓**里（电脑上与源码仓同一目录，手机 `/workspace/`）；Windows 上跑不了 —— 直接用上面的 Gradle 命令。
 
-**当前最缺的一块**：`FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（300MB，不入 Git）。
+**曾最缺的一块（已解决）**：`FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（300MB，不入 Git）——
+2026-10-05 已从 0.1.1 参照 APK 里**无损取出并放回**（sha256 `5d762c30…`）。
 补法见 `ROOTFS.md` 与 `README.md`「怎么把 rootfs 补回来」——**优先从已打好的 APK 里无损取出**。
 
 ---
