@@ -8,7 +8,7 @@
 
 在**未 root** 的安卓手机上运行 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai) —— 基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) 改造的启动器
 
-![Version](https://img.shields.io/badge/version-0.1.2--SNAPSHOT-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.1.3--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
@@ -21,7 +21,7 @@
 一个安卓 App，让你**不用 root** 就能在手机上跑 dsh（DeepSeek Harness —— 对话 / 编码 agent）。
 界面沿用 FCL 的视觉风格与 GUI 框架（fcllibrary + ThemeEngine），底层用 **proot** 兜一个 Linux 环境来跑 Node.js 版 dsh。
 
-> **项目状态：0.1.2-SNAPSHOT（早期开发中）**
+> **项目状态：0.1.3-SNAPSHOT（早期开发中）**
 > 外壳（界面骨架 / 五页 / 横屏右面板）已完成；运行时底座（proot + rootfs + PROOT_LOADER）已集成，
 > 0.1.1 起能出完整 APK（含 rootfs）；**端到端尚未在真机跑通**（真机验证进行中）。
 > 版本号规则：待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
@@ -75,7 +75,7 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:compileDebugKotlin :FCL:compileDebugJavaWithJavac `
   :FCL:processDebugResources :FCL:processDebugMainManifest    # = run-compile.sh 覆盖的四项
 .\gradlew.bat --no-daemon :FCL:testFordebugUnitTest           # 单测（34 项）
-.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包 → dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包 → dsh-fcl-android-launcher-0.1.3-SNAPSHOT-arm64.apk
 ```
 
 一条命令出整版（体检 → 编译 → 单测 → 打包 → 提交两仓 → 发 GitHub Release）：

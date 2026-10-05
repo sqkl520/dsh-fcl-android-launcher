@@ -2,14 +2,58 @@
 
 本项目：**DeepSeek Harness (dsh) 安卓启动器** —— 在未 root 的安卓手机上，用 proot 跑 dsh（Node 版编码/对话 agent），基于 FoldCraftLauncher (FCL) 改造。
 
-> **仓库**：<https://github.com/sqkl520/dsh-fcl-android-launcher> ｜ **版本**：`0.1.2-SNAPSHOT`
+> **仓库**：<https://github.com/sqkl520/dsh-fcl-android-launcher> ｜ **版本**：`0.1.3-SNAPSHOT`
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/)。由于项目尚未正式发版，各段以**工作阶段/里程碑**划分，并标注对应的 git commit。
 
 > **★ 硬规则（项目约定）**：**任何代码/配置/文档的更改，都必须记入本 CHANGELOG**（在最上方的
 > `[Unreleased]` 段按 Added/Changed/Fixed/Removed/Optimized/Refactored/Notes 分类追加）。
-> 版本号规则：当前为 `0.1.2-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
+> 版本号规则：当前为 `0.1.3-SNAPSHOT`；**待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`**。
 > **本文件只记"改了什么"**；经验 / 方法论 / 踩坑请写进 `LESSONS.md`，不要写在这里。
+
+## [0.1.3-SNAPSHOT] - 2026-10-06
+
+> **T7 rootfs 瘦身**：在**不重打包**的前提下（GNU tar `--delete` 直接在原包条目上剔除），
+> 把 `rootfs.tar.xz` 从 **314,360,800 → 148,637,136 字节（−52.7%，省 158 MiB）**，
+> 解压后 1436 MB → 862 MB，条目 57,527 → 39,975。
+> **本版不改任何 Kotlin/Java 代码**，只换运行时底座 —— 因此**必须重新做真机验收（T6）**。
+
+### Changed
+- **版本号 `0.1.2-SNAPSHOT` → `0.1.3-SNAPSHOT`**（`versionCode 102 → 103`）。
+  换了 rootfs 就是**不同的包**，不能与已发布的 0.1.2 共用版本号（`build-apk.sh` 会覆写
+  `apk-archive/<ver>/SHA256SUMS`，同号会互相顶掉）。
+- `FCL/src/main/assets/dsh/rootfs/version`：`…-layout2` → `…-slim1` —— 版本串一变，
+  App 侧的 `RuntimeUtils.isLatest` 就会判定"需要重新解压"，真机上自动换成瘦身版。
+- `run-compile.sh`：ptyjni 独立检查改为**自动找 cmake/ninja**（系统 `/usr/bin` 优先，
+  其次 SDK 自带 `cmake/3.22.1/bin/{cmake,ninja}.exe`），并识别 `local.properties` 里的 `sdk.dir`。
+  原先写死 `/usr/bin/cmake`，在电脑上必然报 `No such file or directory` 而中断编译校验。
+- `build-apk.sh`：`JAVA_HOME` 只在沙箱那套路径**真的存在**时才覆盖，否则交给 Gradle
+  （电脑上由用户级 `gradle.properties` 的 `org.gradle.java.home` 指定）；SDK 路径也认 `ANDROID_HOME`。
+- `run-tests.sh`：新增第 4 段 —— **把运行时脚本自检（`test-scripts-posix.sh`，18 项）接进测试入口**。
+  此前这批用例只能手工跑，"脚本 18/18"长期只写在文档里、没有门禁。
+  同时修 Windows 上的两个环境问题：Gradle 依赖缓存路径（`/root/.gradle` → `$HOME/.gradle`）、
+  `javac` 缺 `-encoding UTF-8`（Windows 默认按 GBK 读源码，桩文件里的中文注释会直接编译失败）。
+  **并补上失败传播**：第 3 段原先没有 `|| exit`，单测 FAILED 也会继续往下跑、最后以 0 退出 ——
+  门禁形同虚设。已实测"注入一个必失败断言 → 退出码 1、第 4 段不再执行"。
+- `dsh-launcher-poc/scripts/test-scripts-posix.sh`：源码目录识别改为与根脚本同一套规则
+  （电脑=同目录有 `settings.gradle.kts`；手机=子目录），原先只认手机嵌套布局。
+
+### Notes
+- **瘦身清单**（剔除项 + 理由见 `TASKS.md` T7）：GCC 开发环境（`/usr/lib/gcc`、`/usr/include`、
+  sanitizer 库、`lto-dump`）、`/usr/lib/python3.11`、man/doc/info、perl 全家、
+  `git-core`、`node-gyp` 缓存、apt 索引与缓存、`gconv`、6 种大语种 locale。
+- **保留**：`gcc`/`g++`/`make`/`pkg-config`/`python3` 二进制（各几 MB，作保险）、
+  全部 `node_modules` 与 `/opt/node22`、apt/dpkg/openssl/ssh、`en`+`zh`+`ja`+`ko` locale。
+- **依据**：dsh 那 5 个原生模块**全部走 prebuild 分发**（`node-pty/prebuilds/linux-arm64/pty.node`、
+  koffi/sharp/两个 node-addon 各自带 linux-arm64 二进制）；预装 dsh 里 14 个 `.node`
+  **没有一个**是现场编译产物、`node-pty/build/Release/` 不存在、`src` 的 269 个 `package.json`
+  里也没有 `requiresBuild`。⇒ 运行时用不到编译器。
+- **一致性核对**：瘦包**0 条断链软链**（原包反而有 1 条历史遗留）；只删了指向已删目标的 8 条残留软链。
+- **未验证**：**没有跑过真机**。真机装上 0.1.3 后，`probe.sh` 的 `node`/`npm`/`dsh` 三项
+  与 `dsh web` 能否起服务，是"删对了"的直接证据（T6）。
+- 原 rootfs 备份在 `D:\tmp\rootfs-original.tar.xz`（314MB，可回滚）。
+
+---
 
 ---
 
@@ -83,7 +127,7 @@
 > `npm install` 能否装 0.2.x）。本包不含新的源码逻辑改动（差量见下）。
 
 ### Changed
-- 版本号 `0.1.1-SNAPSHOT` → `0.1.2-SNAPSHOT`（`versionCode 101 → 102`；`build-apk.sh` 的 `VERSION` 同步）。
+- 版本号 `0.1.1-SNAPSHOT` → `0.1.3-SNAPSHOT`（`versionCode 101 → 102`；`build-apk.sh` 的 `VERSION` 同步）。
 - 出包 `dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`：
   **326,300,458 字节**（约 311 MiB），sha256 `8abaa3eab5e342d6401899a35422984e453ddacc59b161dfdf13452185c529cf`；
   落 `output/`（交付）与 `apk-archive/0.1.2-SNAPSHOT/`（快照，两处 `SHA256SUMS`）。
