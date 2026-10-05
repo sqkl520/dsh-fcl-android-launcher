@@ -41,7 +41,7 @@
 | `design/proot-chain.md` | 可复现的 proot 启动链（rootfs 选型 + 脚本 + 实测证据） | 关心"怎么在安卓上跑起 Linux" |
 | `design/multi-version.md` | 多版本 / 多实例管理 + npm 下载 UI 设计 | 关心实例管理与版本下载 |
 | `design/wx-exec-proot-loader.md` | **W^X 执行限制与 PROOT_LOADER 绕过**（targetSdk 决策最终答案；真机实测 + 3 处认知修正） | 想知道"真机到底能不能跑、targetSdk 要不要降" |
-| `design/proot-engine-integration.md` | **集成 oonid/pr 的 `:proot-engine`**（替换自研 proot 层的架构决策；API/License/落地步骤/唯一拦路项） | 想知道"运行时底座怎么落地、下一步做什么" |
+| `design/proot-engine-integration.md` | **【未采用的备选路线】** oonid/pr `:proot-engine` 的集成方案（API/License/落地步骤/唯一拦路项）—— 最终**没走这条路**，项目用自研 proot 层；留作决策记录，其中 W^X / PROOT_LOADER 原理仍有效 | 想了解"当时为什么考虑换、后来为什么没换" |
 | `design/ui-manifest.md` | UI 拼装 + Manifest 注册 + 分层验证方法 | 关心界面与组件注册 |
 | `design/app-shell.md` | **应用外壳改造**：从 MC 启动器改为 dsh 启动器（保留 FCL 风格与底层框架，照 FCL 外壳形态）；**§2.5 = 硬性要求：界面/按钮/主题一律跟 FCL 走** | 关心"GUI 怎么改成能用的"、要动手改 UI 前必读 |
 
@@ -115,8 +115,11 @@
 > 📌 **2026-10-02 第七轮收尾**：**外壳改造（M0）全部完成**（阶段 0~4，含去 Material 收尾）；
 > 删除实例竞态、WebView 失败面板、安装超时文案、通知状态文案等 4 个 P1/P2 缺陷已修。
 > 详见 **`reports/round7-review-and-optimization.md`**（全文 `PROJECT_REVIEW_AND_OPTIMIZATION.md`）。
-> **运行时底座路线已定：保持 targetSdk 34，集成 oonid/pr 的 `:proot-engine`**（见 `design/proot-engine-integration.md`），
-> 唯一拦路项 = dsh 子进程 spawn 是否能在 patched proot 下工作（需真机先验证）。
+> **运行时底座已落地（2026-10-03 阶段 A~E-1）**：**自研 proot 层 + 预打包 rootfs**
+> （Debian 12 + Node 22 + 预装 dsh），**targetSdk 保持 34、用 PROOT_LOADER 绕 W^X**
+> （原理见 `design/wx-exec-proot-loader.md`）。
+> ⚠️ 2026-10-01 一度决定改走 oonid/pr 的 `:proot-engine`，但**最终没有采用** ——
+> `design/proot-engine-integration.md` 作为未采用的备选路线保留。**唯一剩下的空白 = 真机端到端验收**（T6）。
 
 - **代码**：`com/dsh/` **42 个文件**（`core` 逻辑 + `ui` 界面）+ FCL 基座
   - `com/dsh/` 42 个（dsh 启动器主体）
@@ -140,13 +143,16 @@
   4. 🔴 **T6 真机端到端（最大的空白）**：DNS 修复是否真生效（`npm install` 能否装 0.2.x）、
      首次解压耗时/成功率、`dsh web` 起服务 + WebView token/cookie、息屏保活
   5. **T5 插件管理子页**（等插件体系）· **T7 rootfs 瘦身** · **T8 缓存清理 UI** ·
-     **T10 `PLAN.md`/`PACKAGING.md` 过时内容**
-  6. **电脑环境已就绪（2026-10-05）**：Windows x64 + JDK17 + Android Studio + SDK35/NDK27，
+     **T10 文档同步**（主体已完成 —— "要走 `:proot-engine`"的过时表述已全仓更正，见下）
+  6. **文档路线已校正（2026-10-06）**：`ROADMAP.md` / `PLAN.md` / 本文件此前多处写"运行时底座
+     改走 `:proot-engine`"，与代码现状不符 —— 实际是**自研 proot 层 + 预打包 rootfs**（已落地）。
+     已在上述文档与 `design/proot-engine-integration.md` 顶部更正。
+  7. **电脑环境已就绪（2026-10-05）**：Windows x64 + JDK17 + Android Studio + SDK35/NDK27，
      见 `ENVIRONMENT.md` §1；rootfs 已从 0.1.1 参照 APK 无损取回并放回（299.8MB，sha256 `5d762c30…`）。
      **0.1.2-SNAPSHOT 已出包**（`output/dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`，
      326,300,458 字节，sha256 `8abaa3ea…`）；
      **已作为 GitHub Release 附件发布**（`v0.1.2-SNAPSHOT`）；**下一步：装到真机做端到端验证（T6）**
-  7. **工程流程（2026-10-06）**：版本号收敛到 `gradle.properties` 单一来源；APK 分发改走
+  8. **工程流程（2026-10-06）**：版本号收敛到 `gradle.properties` 单一来源；APK 分发改走
      GitHub Release 附件（不再往快照仓提交 90MB 分片）；新增 `release` / `bootstrap` / `check-sync`
      三个脚本 —— 见根下 **`REPOS.md`**（仓库关系 + 日常工作流，先读这个）
 - **已修（2026-10-01，见 `reports/mc-removal-impact-review.md` §11 补丁 A/B）**：
@@ -215,7 +221,8 @@
 
 > ⚠️ 第六轮把「**真机端到端仍跑不起来**」的头号嫌疑定到了平台层：
 > **targetSdk ≥ 29 时 Android 10+ 禁止 execve 应用数据目录里的文件**。
-> → **第七轮前已拍板**：**保持 targetSdk 34，用 `:proot-engine`（PROOT_LOADER）绕过**，不降级。
+> → **第七轮前已拍板**：**保持 targetSdk 34，用 PROOT_LOADER 绕过**，不降级。
+> （当时的计划是集成 oonid/pr `:proot-engine`；**最终改回自研 proot 层**，见上文「当前状态」。）
 
 ## 2026-10-02 第七轮评估与优化（最近一轮）
 
@@ -224,4 +231,4 @@
 | `PROJECT_REVIEW_AND_OPTIMIZATION.md`（全文） + `reports/round7-review-and-optimization.md`（速览） | **第七轮：评估与优化报告**（问题清单 R7-01~R7-13、修复详情、验收清单） |
 | 代码改动 | 提交 **`494f234`**：修 4 个 P1/P2 缺陷（删除竞态 / WebView 失败面板 / 安装超时文案 / 通知状态文案）+ §2.5 去 Material 收尾 + 日志环剪 + 删未引用文案 |
 | 验证 | 编译 BUILD SUCCESSFUL；单测 23/23；脚本 18/18；§2.5.5 验收命令 1 通过；未打包 |
-| 运行时底座 | **已决策：集成 oonid/pr `:proot-engine`，targetSdk 34 不降级**；唯一拦路项 = 子进程 spawn（见 `design/proot-engine-integration.md`） |
+| 运行时底座 | **已落地（自研 proot 层 + 预打包 rootfs）**，targetSdk 34 + PROOT_LOADER 绕 W^X；**只差真机验收**（该行记录的是当时的计划：集成 `:proot-engine` —— 最终未采用） |

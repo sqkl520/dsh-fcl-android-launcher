@@ -1,12 +1,25 @@
 # DeepSeek Harness 安卓启动器 —— 完整落地方案
 
-> ## ⚠️ 过时声明（2026-10-01）
-> 本文是**早期自研方案的总纲**（自带 proot rootfs + 手拼 proot 命令 + 用户自备大文件）。
-> 2026-10-01 起，**运行时底座决策已改为集成 oonid/pr 的 `:proot-engine`**（`targetSdk` 保持 34，不降级），
-> 因此本文多数章节（架构、proot 启动链、rootfs 准备、真机联调步骤）**已过时，仅供参考**。
-> 请以 **`design/proot-engine-integration.md`**（运行时底座新路线）、**`design/wx-exec-proot-loader.md`**（W^X 原理）、
-> **`ROADMAP.md`**（最新路线）、**`INDEX.md`**（当前状态）为准。
-> 本文**未做全面改写**（保留历史原貌便于追溯决策），仅在本页顶部标注过时；后续重写时再整体更新。
+> ## ⚠️ 过时声明（2026-10-01 标注，2026-10-06 更正）
+>
+> 本文是**早期方案的总纲**，写于外壳改造之前，多处描述已经落地或已改路线，
+> **保留原貌只为追溯决策**。看当前状态请看：
+>
+> | 想知道什么 | 看哪份 |
+> |---|---|
+> | 当前状态 / 版本 / 代码在哪 | `INDEX.md` |
+> | 接下来做什么、按什么顺序 | `ROADMAP.md` |
+> | 运行时底座**当前实现**（自研 proot 层 + 预打包 rootfs） | `PACKAGING.md` + `ROOTFS.md` |
+> | 仓库关系与日常流程 | 根下 `REPOS.md` |
+>
+> **两点更正**（本文与新文档冲突时以下面为准）：
+> 1. **运行时底座没有改走 `:proot-engine`** —— 2026-10-01 一度决定集成 oonid/pr 的 `:proot-engine`，
+>    但**最终没有采用**，项目继续走"自研 proot 层 + 预打包 rootfs"（阶段 A~E-1 已落地）。
+>    `design/proot-engine-integration.md` 作为**未采用的备选路线**保留。**targetSdk 保持 34、用
+>    PROOT_LOADER 绕 W^X 这个结论不变**（见 `design/wx-exec-proot-loader.md`）。
+> 2. **本文多数章节已落地或已过时**：应用外壳（§架构中"MC 启动器 + 长按进 dsh"的描述）、
+>    proot 启动链、rootfs 准备（现成 rootfs 已就位，见 `ROOTFS.md`）、真机联调步骤（§8.5）。
+>    其中 **§8.5 的"补齐 proot/rootfs 大文件"那一步已无必要**（文件已就位），其余步骤仍可参考。
 
 ---
 
@@ -318,13 +331,16 @@
 
 ## 8.5 真机联调步骤（在实机上按序执行）
 
-> ⚠️ **本节是旧的自研路径（2026-10-01 前）**，运行时底座已改为集成 `:proot-engine`（targetSdk 34 不降）。
-> 最新路线见 **`design/proot-engine-integration.md`** 与 **`ROADMAP.md` M1**；本节仅保留作历史参考。
+> ⚠️ **本节写于外壳改造之前，部分已过时**：运行时底座**没有**改走 `:proot-engine`，
+> 仍是本文描述的**自研 proot 层 + 预打包 rootfs**（已落地）。
+> **步骤 1「补齐两类平台大文件」已无必要** —— proot 三件套在 `jniLibs/`、rootfs 在
+> `assets/dsh/rootfs/`，都已就位（见 `ROOTFS.md`）。
+> 真机该验什么、怎么验，以 **`TASKS.md` T6** 与 `ROADMAP.md` M1 为准；本节其余步骤仍可参考。
 
 前置：一台 arm64 安卓真机（未 root 即可）、可编译 FCL 的开发环境（x86_64 机器最省事，
 或本沙箱这套 arm64+qemu 方案，见 §7.1 注解）。
 
-### 步骤 1：补齐两类平台大文件（旧路径，已被 proot-engine 取代）
+### 步骤 1：补齐两类平台大文件（**已无必要，均已就位**）
 1. **proot 二进制（推荐 jniLibs 方案）**：把 arm64 的 proot、proot loader 命名为
    `libproot.so`、`libproot_loader.so`，放入 `FCL/src/main/jniLibs/arm64-v8a/`。
    系统安装时自动解压到 `nativeLibraryDir` 并自带执行位，`DshPaths.resolveProotBin/Loader`

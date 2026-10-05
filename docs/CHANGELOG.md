@@ -45,6 +45,21 @@
 - `docs/LESSONS.md` 新增 §20~§22：双仓布局"状态只活在磁盘上"的教训与重建要点、
   大二进制不进 Git 历史的实测数据、版本号写死 8 处的教训。
 
+### Fixed
+- **文档路线矛盾（四处）**：`ROADMAP.md` / `PLAN.md` / `INDEX.md` 此前写"运行时底座改走
+  oonid/pr 的 `:proot-engine`"，但**代码实际走的是自研 proot 层 + 预打包 rootfs**
+  （`settings.gradle.kts` 只 include `:FCL` + `:ZipFileSystem`；是 `ProotCommand` +
+  `ProotProcessExecutor`，没有 `ProotHost`/`ProotLauncher`）。已全仓更正：
+  - `ROADMAP.md`：M1 由"验证 spawn → 集成 proot-engine → 出 APK"改写为**只差真机验收**；
+    里程碑总览 / 优先级速记 / 与其他文档的关系一并校正。
+  - `PLAN.md` / `INDEX.md`：路线表述更正，并保留"当时为何考虑换、后来为何没换"的记录。
+  - `design/proot-engine-integration.md`：顶部加**未采用**横幅（决策记录；其中 W^X /
+    PROOT_LOADER 原理与 `ptyjni` 的出处仍然有效）。
+  - `PACKAGING.md`：`[需你放入]` → `[已就位]`；rootfs 选型由"Ubuntu/Alpine"改为实际的
+    **Debian 12 bookworm + Node 22 + 预装 dsh**；`README.md` 的 rootfs 描述与许可节同步。
+  - **目标未变**：`targetSdk 34` + PROOT_LOADER 绕 W^X 这个结论不变。
+- `TASKS.md` T10（文档同步）主体完成，改为记录剩余项。
+
 ### Removed
 - `apk/output-0.1.1-ref.apk`（326MB）—— 与 `apk/dsh-fcl-android-launcher-0.1.1-SNAPSHOT-arm64/`
   的分片 **sha256 完全相同**（`bc96c4e7…`），同一份内容白占磁盘；rootfs 恢复来源改为 Release。
