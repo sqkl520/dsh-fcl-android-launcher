@@ -27,13 +27,16 @@
 - **`ws-tools/exclude.{source-repo,snapshot-repo}`**：两边 `info/exclude` 的规范副本 ——
   `info/exclude` 在 `.git` 里不受版本控制，新机器 clone 下来是空的，必须有进仓库的副本。
 - **GitHub Release `v0.1.2-SNAPSHOT`**：APK 作为附件发布（源码仓公开 → 手机端免 token 下载）。
+  同日补齐历史版本：**`v0.1.0` / `v0.1.1-SNAPSHOT` 也各发一条 Release**（附件是从仓库内分片
+  拼回并逐个核对 sha256 的整包）—— 三个版本从 0.1.0 起在 Release 页上齐全。
 - `REPOS.md` 重写为「仓库关系 + 日常工作流」：新增 §4 脚本、§5 版本与分发、§6 换电脑重建。
 
 ### Changed
 - **版本号单一来源**：新增 `gradle.properties` 的 `dshVersion` / `dshVersionCode`（唯一真源）；
   `FCL/build.gradle.kts` 从它读（缺失直接 `error()`）；`build-apk.sh` 也从它读（原先写死在脚本里）。
 - `build-apk.sh` 不再往 `apk-archive/<ver>/` 复制一份 300MB 二进制（同一份内容白占磁盘）。
-- `apk-archive/README.md` 改写：本目录**只存指纹**（`SHA256SUMS`），APK 本体走 Release。
+- `apk-archive/README.md` 改写：本目录**只存指纹**（`SHA256SUMS`），APK 本体一律在 Release；
+  `apk/README.md` 改写为「历史遗留，只读」并列出三个版本对应的 Release。
 - 文档校准：`ENVIRONMENT.md` 单测任务名 `testDebugUnitTest` → `testFordebugUnitTest`（实际用的那个）、
   新增电脑端 `.cmd` 脚本入口一节；`INDEX.md` 文档地图加 `REPOS.md` 条目、rootfs 恢复来源改为
   "从 Release 最新 APK 取"；`TASKS.md` 删 T9（已完成，见下）、T6 补 Release 链接；
