@@ -6,7 +6,8 @@
 > （[`oonid/pr`](https://github.com/oonid/pr)）在真机（三星 Android 16 / SDK 36）实测通过。
 >
 > **但有一个未决红灯**：子进程 execve 在 proot 下可能受限（`cargo build` 实测失败），
-> 而 dsh 的核心就是不停开子进程——**集成前必须先查清这条**（见 §5）。
+> 而 dsh 的核心就是不停开子进程——**这条仍需真机证实**（见 §5 与 §7 第 2 条；
+> 现在由 `TASKS.md` T6 真机验收直接回答，已知 `gcc` 的普通 fork+execve 是通的）。
 
 ---
 
@@ -132,14 +133,18 @@ oonid/pr 的静态分析结论：
 
 ## 7. 下一步（集成前的尽调清单）
 
-1. **License**：proot = GPL2（传染）；pr-cli = Rust；`:proot-engine` 整体协议——确认对我们的影响。
-2. **🔴 子进程 spawn 验证（最高优先级）**：读 oonid/pr 的 `seccomp.c` / `enter.c` 的
-   CLONE 剥离与 execve 处理，判断 node 的 `child_process.spawn`（libuv → `posix_spawn`/`fork+execvp`）
-   会不会命中 `cargo` 的 ENOSYS 坑。必要时真机起一个 Alpine + Node 实测 `child_process`。
-3. **`:proot-engine` API**：`ProotHost` / `ProotLauncher` 的接口形状，与我们
-   `ProotProcessExecutor` / `DshRuntime` / `DshPaths` 怎么对接（可能可以整段替换我们自拼的 proot 命令）。
-4. **rootfs 准备**：oonid/pr 用 pr-cli（Rust）+ OCI 镜像拉取，比我们手工打包 rootfs.tar.xz 更干净——评估能否复用。
-5. **维护状态**：提交活跃度、issue 响应。
+> **状态（2026-10-06）**：这份清单写于"打算集成 `:proot-engine`"的时候，**那条路最终没走**
+> （见 `design/proot-engine-integration.md` 顶部横幅）。项目改回自研 proot 层，
+> 只借用了 oonid/pr 的**二进制与 PTY 桥接**。所以下面第 1/3/4/5 条的"集成尽调"已不需要；
+> **第 2 条（子进程 spawn）仍然是最关键的真机待验项** —— 只是现在由 T6 真机验收直接回答。
+
+1. ~~**License**：…~~（已解决：本项目 GPL-3.0，与 proot 的 GPL-2.0-or-later 相容）
+2. **🔴 子进程 spawn 验证（最高优先级，仍未在真机证实）**：node 的 `child_process.spawn`
+   （libuv → `posix_spawn`/`fork+execvp`）会不会命中 `cargo` 那条 ENOSYS 坑。
+   **现在通过 T6 真机验收来回答**：`npm install` 能否跑通、agent 能否 spawn 命令。
+3. ~~**`:proot-engine` API**：…~~（未采用该模块）
+4. ~~**rootfs 准备**：…~~（仍用自研 rootfs.tar.xz，见 `ROOTFS.md`）
+5. ~~**维护状态**：…~~（只取二进制，不依赖其代码演进）
 
 ---
 
