@@ -39,6 +39,12 @@ android {
     val pwd = System.getenv("FCL_KEYSTORE_PASSWORD") ?: localProperty?.getProperty("pwd")
     val curseApiKey = System.getenv("CURSE_API_KEY") ?: localProperty?.getProperty("curse.api.key")
     val oauthApiKey = System.getenv("OAUTH_API_KEY") ?: localProperty?.getProperty("oauth.api.key")
+    // 版本号单一来源：根 gradle.properties 的 dshVersion / dshVersionCode（见 REPOS.md「版本号」）
+    // 缺了就直接报错，而不是悄悄用一个空版本号打包。
+    val dshVersion = providers.gradleProperty("dshVersion").orNull
+        ?: error("缺少 dshVersion：请在根 gradle.properties 里设置（版本号单一来源）")
+    val dshVersionCode = providers.gradleProperty("dshVersionCode").orNull?.toIntOrNull()
+        ?: error("缺少 dshVersionCode（整数）：请在根 gradle.properties 里设置")
     // 命令行 -Darch 优先；local.properties 仅在命令行未指定时生效
     if (System.getProperty("arch") == null && localProperty != null && localProperty.getProperty(
             "arch",
@@ -66,8 +72,8 @@ android {
         applicationId = "com.dsh.fcl.androidlauncher"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 102
-        versionName = "0.1.2-SNAPSHOT"
+        versionCode = dshVersionCode
+        versionName = dshVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
