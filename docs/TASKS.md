@@ -87,7 +87,7 @@ sha256（新版）：`216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8c
 ## P3 · 其他
 
 ### T10. 文档同步 —— **主体已完成（2026-10-06）**
-- 已做：`PLAN.md` / `ROADMAP.md` / `INDEX.md` 里"运行时底座要走 `:proot-engine`"的过时表述
+- 已做：`PLAN.md` / `ROADMAP.md` 里"运行时底座要走 `:proot-engine`"的过时表述
   全部更正为「自研 proot 层 + 预打包 rootfs」；`proot-engine-integration.md` 顶部标注**未采用**；
   `PACKAGING.md` 的 "Ubuntu/Alpine"、"需你放入" 改为现状（Debian 12 + 已就位）。
 - 剩余（低优先）：`PLAN.md` 仍是早期方案原貌（有顶部过时声明指路），彻底重写收益不大。
