@@ -9,7 +9,7 @@
 
 ## 当前所处位置（截至 2026-10-06）
 
-**外壳改造（M0）已全部完成**（阶段 0~4，含去 Material 收尾，见 `design/app-shell.md` 与 `reports/round7-review-and-optimization.md`）：
+**外壳改造（M0）已全部完成**（阶段 0~4，含去 Material 收尾，见 `design/app-shell.md`）：
 app 启动即进 dsh 外壳，五页可切换，无 MC 运行时门禁。
 
 **运行时底座也已落地（代码层面，2026-10-03 阶段 A~E-1）**：自研 proot 层 + 预打包 rootfs
@@ -67,7 +67,7 @@ app 启动即进 dsh 外壳，五页可切换，无 MC 运行时门禁。
 - [x] 实例 / 下载 / 日志 / 设置 等页可切换；菜单高亮与动态岛标题同步（五页 = 实例/管理/下载/日志/设置）
 - [x] **全程不需要装 MC 运行时**即可到达 dsh 界面并使用
 - [x] 不触发 MC 单例初始化（`ConfigHolder.init()` / `RendererManager.init()`）
-- [x] **8 个 dsh 布局 0 Material 控件**（§2.5 收尾，见 `reports/round7-review-and-optimization.md`）
+- [x] **8 个 dsh 布局 0 Material 控件**（§2.5 收尾）
 
 **依赖 / 风险**：见 `design/app-shell.md` §6（重点是"别触发 MC 单例"与"Activity → FCLCommonUI 的生命周期差异"）。
 
@@ -94,7 +94,7 @@ app 启动即进 dsh 外壳，五页可切换，无 MC 运行时门禁。
    `DshWebViewActivity` 渲染出 dsh Web UI。
 5. **对话**：用真实 DeepSeek key 在 WebView 里成功对话一次。
 6. **收尾**：停止后进程结束、前台通知消失、明文凭据抹除；息屏/切后台再回来的表现。
-7. 把结果（成功/失败与原因）回填到本篇、`INDEX.md`、`TASKS.md` T6。
+7. 把结果（成功/失败与原因）回填到本篇与 `TASKS.md` T6。
 
 **就诊入口**：出问题先看应用内「设置 → 运行时自检」与日志页；
 `adb logcat` 抓 `com.dsh` 相关行。
@@ -247,5 +247,4 @@ Android 文档才发现的（比如前台服务必崩），这类应该被测试
   见 `PACKAGING.md`（打包）与 `ROOTFS.md`（rootfs 重建）。
   `design/proot-engine-integration.md` 是**未采用的备选路线**（决策记录，W^X/PROOT_LOADER 原理有效），
   `design/wx-exec-proot-loader.md` 是 W^X 原理。
-- 各里程碑里"为什么这么做"的**缺陷背景**：见 `reports/round2~11` 审查报告。
-- 本文档随进展更新：里程碑达成后在对应处打勾，并把结论回填到 `INDEX.md` 与 `TASKS.md`。
+- 本文档随进展更新：里程碑达成后在对应处打勾，并把结论回填到 `TASKS.md`。
