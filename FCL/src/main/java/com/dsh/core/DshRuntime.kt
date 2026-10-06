@@ -44,6 +44,15 @@ object DshRuntime {
     /** 认领来的进程存活巡检间隔（见 [watchAdopted]） */
     private const val ADOPT_POLL_INTERVAL_MS = 10_000L
 
+    /** 停止时，按 pid 终止 rootfs 内 node 的宽限时间（TERM 后等这么久再 KILL，毫秒） */
+    private const val NODE_KILL_GRACE_MS = 2_000L
+
+    /** 停止时，等 proot 响应 SIGQUIT / 确认它已经退出的宽限时间（毫秒） */
+    private const val PROOT_EXIT_GRACE_MS = 1_000L
+
+    /** 脚本打印 node 真实 pid 的行：`[start-dsh] node pid: 12345`（与 start-dsh.sh 的格式一致） */
+    private val NODE_PID_LINE = Regex("""\[start-dsh]\s*node\s*pid:\s*(\d+)""")
+
     sealed class State {
         object Idle : State()
         data class Starting(val instanceId: String, val name: String) : State()
@@ -115,15 +124,85 @@ object DshRuntime {
         suspend fun terminate(graceMillis: Long)
     }
 
-    private class ProcessHandle(private val handle: ProotRunner.Handle) : Handle {
-        override val pid: Long get() = handle.pid()
-        override fun isAlive(): Boolean = handle.isAlive()
-        override suspend fun terminate(graceMillis: Long) = handle.terminate(graceMillis)
+    /** 当前实例的 node pid（rootfs 内的 node，宿主上是 proot 的子进程）。0 = 未知 */
+    @Volatile
+    private var nodePid: Long = 0
+
+    /**
+     * 给 proot 发 SIGQUIT —— 这是 proot **唯一**会响应并顺手清理子进程的信号。
+     *
+     * proot 的 event loop 把除 `SIGQUIT/SIGILL/SIGABRT/SIGFPE/SIGSEGV` 之外的所有信号都装成
+     * SIG_IGN（proot 源码 `src/tracee/event.c`："Ignore all other signals, including
+     * terminating ones (^C for instance)"），所以 **SIGTERM 对 proot 完全无效** ——
+     * 这也是真机日志里"停止 → 5s 后已停止"看着像成功了、其实只是等到 SIGKILL 的原因。
+     * 而 SIGKILL 不可捕获：proot 的 `atexit(kill_all_tracees)` 与 `--kill-on-exit` 的清理逻辑
+     * 都要求"proot 还活着、还在事件循环里"，被 KILL 时全来不及跑 → rootfs 内的 node 变孤儿、
+     * 继续占着端口，下次启动就是 EADDRINUSE（bebug.txt 05:30 停止 / 05:36 失败）。
+     *
+     * SIGQUIT 走的正是那条清理路径（proot 源码 `kill_all_tracees2`）：先
+     * `kill_all_tracees()`（对每个 tracee 发 SIGKILL）再退出事件循环。所以"先 SIGQUIT、
+     * 等一会儿、不行再 SIGKILL"能让 proot 在死之前把 node 一起带走。
+     *
+     * @return true 表示信号已发出（pid 可用）；false 表示拿不到 pid，只能靠按 pid 终止 node
+     */
+    private fun signalProotQuit(pid: Long): Boolean {
+        if (pid <= 0) return false
+        return runCatching {
+            android.os.Process.sendSignal(pid.toInt(), 3) // SIGQUIT
+            true
+        }.getOrDefault(false)
     }
 
+    private class ProcessHandle(
+        private val handle: ProotRunner.Handle
+    ) : Handle {
+        override val pid: Long get() = handle.pid()
+        override fun isAlive(): Boolean = handle.isAlive()
+
+        /**
+         * 停止 proot：**SIGQUIT → 等 → 原来的 TERM/KILL 兜底**（理由见 [signalProotQuit]）。
+         *
+         * 预算按对半分：一半等 SIGQUIT 生效，剩下的一半留给 [ProotRunner.Handle.terminate]，
+         * 所以"停止"的最坏耗时仍与改动前同量级（不会因为多了一次 SIGQUIT 而翻倍）。
+         */
+        override suspend fun terminate(graceMillis: Long) = withContext(Dispatchers.IO) {
+            if (!isAlive()) return@withContext
+            if (signalProotQuit(pid)) {
+                val quitBudget = (graceMillis / 2).coerceAtLeast(500)
+                val startedAt = System.currentTimeMillis()
+                val deadline = startedAt + quitBudget
+                while (System.currentTimeMillis() < deadline && isAlive()) {
+                    kotlinx.coroutines.delay(100)
+                }
+                if (!isAlive()) return@withContext
+                handle.terminate((graceMillis - (System.currentTimeMillis() - startedAt)).coerceAtLeast(500))
+                return@withContext
+            }
+            // 拿不到 pid（Android 的 java.lang.Process 没有 pid()）：退化为原来的 TERM→KILL。
+            // 此时"带走 node"完全依赖 [terminateNodeProcess] 那条按 pid 终止的路径。
+            handle.terminate(graceMillis)
+        }
+    }
+
+    /** 认领来的 proot（没有 Process 句柄，只能按 pid 操作）：同样先 SIGQUIT 再 TERM/KILL */
     private class PidHandle(override val pid: Long) : Handle {
         override fun isAlive(): Boolean = ProcessUtil.isAlive(pid)
-        override suspend fun terminate(graceMillis: Long) = ProcessUtil.kill(pid, graceMillis)
+        override suspend fun terminate(graceMillis: Long) = withContext(Dispatchers.IO) {
+            if (!isAlive()) return@withContext
+            if (pid > 0) {
+                runCatching { android.os.Process.sendSignal(pid.toInt(), 3) } // SIGQUIT
+                val quitBudget = (graceMillis / 2).coerceAtLeast(500)
+                val startedAt = System.currentTimeMillis()
+                val deadline = startedAt + quitBudget
+                while (System.currentTimeMillis() < deadline && isAlive()) {
+                    kotlinx.coroutines.delay(100)
+                }
+                if (!isAlive()) return@withContext
+                ProcessUtil.kill(pid, (graceMillis - (System.currentTimeMillis() - startedAt)).coerceAtLeast(500))
+                return@withContext
+            }
+            ProcessUtil.kill(pid, graceMillis)
+        }
     }
 
     @Volatile
@@ -175,6 +254,8 @@ object DshRuntime {
         stopRequestedFor = null // 新生命周期开始，清掉上一次的\"主动停止\"标记
         adoptWatcher?.cancel()  // 新一轮启动接管：旧的"认领巡检"立即失效
         if (!noSeccomp) seccompFallbackUsed.remove(instance.id) // 每次用户主动启动都重新给一次兜底机会
+        // 新生命周期：清掉上一次记下的 node pid（那是上一个实例的，留着只会误导停止逻辑）
+        nodePid = 0
 
         val pre = ProotCommand.preflight(
             context, DshPaths.ROOTFS_DIR,
@@ -220,6 +301,20 @@ object DshRuntime {
         // 先清掉上次残留的孤儿（同实例）
         ProcessUtil.killStale(instance.id)
 
+        // ★ 再清一次"上一轮的 node"（B10）：proot 被 SIGKILL 时来不及带走 rootfs 内的 node，
+        // 那个 node 会一直占着端口。这里在**同一个实例**即将启动前按 pid 精确收掉它。
+        // 只按 pid 文件认（传 hint=0）：内存里的 nodePid 可能属于另一个实例，
+        // 单实例策略下这个实例启动前刚把那个实例停掉，拿它的 pid 去杀是多余的、也可能误伤。
+        terminateNodeProcess(instance.id, 0)
+
+        // ★ 端口预检（B10 的第二半："端口被占时不要直接失败"）：实例端口是上次成功后回写的
+        // 固定值，一旦被占（旧 node 还没退干净 / 别的 App 占了），node 起来就报 EADDRINUSE 然后
+        // 整个失败。这里探测一次，被占就本次改用自动端口（0），并明确告诉用户为什么。
+        // 代价：使用者手工指定的端口在这种情况下会被换成系统分配的端口（日志与实例配置都会
+        // 显示新端口）。换来的是"能起来"，而不是一句无信息的失败。脚本侧还有一道同样的预检，
+        // 两道互相独立：即便这里的探测判定"空闲"，脚本启动瞬间端口仍可能被别人抢走。
+        val launchPort = resolveLaunchPort(instance)
+
         val instancePathInRootfs = "${ProotCommand.GUEST_ROOT}/instances/${instance.id}"
         val apiKey = DshCredentials.load(context, instance.id)
         if (apiKey == null) {
@@ -233,7 +328,7 @@ object DshRuntime {
         val argvEnv = mapOf(
             "INSTANCE_DIR" to instancePathInRootfs,
             "DSH_HOME" to "$instancePathInRootfs/home",
-            "PORT" to instance.port.toString(), // 0 = 让 dsh 自己挑
+            "PORT" to launchPort.toString(), // 0 = 让 dsh 自己挑（端口被占时见 resolveLaunchPort）
             "HOST" to "127.0.0.1",               // 只绑回环，不暴露局域网
             "PROFILE" to instance.profile,
             "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache",
@@ -262,10 +357,10 @@ object DshRuntime {
         )
 
         _state.value = State.Starting(instance.id, instance.name)
-        _running.value = Running(instance.id, instance.port, null)
+        _running.value = Running(instance.id, launchPort, null)
         DshLogBus.append(
             "[runtime] 启动 ${instance.name}（dsh ${instance.dshVersion ?: "?"}，" +
-                "profile=${instance.profile}，端口=${if (instance.port == 0) "自动" else instance.port.toString()}）"
+                "profile=${instance.profile}，端口=${if (launchPort == 0) "自动" else launchPort.toString()}）"
         )
 
         val h = try {
@@ -284,8 +379,10 @@ object DshRuntime {
         }
         handle = ProcessHandle(h)
         val pid = h.pid()
+        // pid 文件只给"孤儿认领/清理"（冷启时按 cmdline 校验）用，所以这里记的是**proot 的 pid**；
+        // node 的 pid 另有 dsh-node.pid（由脚本写，停止时用它精确终止，见 [terminateNodeProcess]）。
         if (pid > 0) {
-            ProcessUtil.writePidFile(instance.id, pid, instance.port)
+            ProcessUtil.writePidFile(instance.id, pid, launchPort)
         } else {
             // 拿不到 pid（Android 的 Process 实现没有 pid() 且反射失败）时，孤儿进程无法被认领/清理，
             // 明确记一行，避免将来\"为什么后台有个 300MB 的 node 杀不掉\"无从查起。
@@ -333,6 +430,8 @@ object DshRuntime {
 
         handle = PidHandle(meta.pid)
         nameOf[instance.id] = instance.name
+        // 认领来的实例同样要知道 node 的 pid：停止时要按它终止 rootfs 内的 node（B10）。
+        nodePid = readNodePidFile(instance.id) ?: 0
         _state.value = State.Running(instance.id, instance.name, "http://127.0.0.1:$port/", port, adopted = true)
         _running.value = Running(instance.id, port, "http://127.0.0.1:$port/")
         DshLogBus.append("[runtime] 认领仍在运行的实例 ${instance.name}（pid=${meta.pid}，端口=$port）")
@@ -392,10 +491,35 @@ object DshRuntime {
         DshLogBus.append("[runtime] 停止 $name（$reason）")
         val h = handle
         handle = null
+        val np = nodePid
+        nodePid = 0
+        // proot 进程本身拿不到 pid 时，"孤儿认领/清理"这条路是断的（挂在 [ProotRunner.Handle.pid]：
+        // Android 的 java.lang.Process 没有 pid()，反射拿不到就返回 -1）。
+        // 记一行是为了区分"系统起不到 pid"（只影响后台残留清理与状态巡检）与
+        // "node pid 也拿不到"（那才是真的无法保证停止干净）。
+        DshLogBus.append(
+            "[runtime] 停止：proot pid=${h?.pid?.takeIf { it > 0 } ?: "不可用"}，" +
+                "node pid=${np.takeIf { it > 0 } ?: "见 dsh-node.pid"}"
+        )
         _running.value = null
         scope.launch {
+            // ★ 顺序很重要（B10：停止后 rootfs 里的 node 必须真的死掉）：
+            //   1) 先按 pid 终止 node —— 这是唯一**确定性**能带走 rootfs 内进程的办法。
+            //      脚本把 node 的真实 pid 写在实例目录的 dsh-node.pid 里（proot 不伪造 getpid，
+            //      见 start-dsh.sh 的"停止语义"注释），宿主 kill 这个 pid 就是 kill 到 node 本身。
+            //   2) 再 terminate proot：它会先给 proot 发 SIGQUIT（proot 的 SIGQUIT 处理器会
+            //      kill_all_tracees() 再退出，等于把还没退的 tracee 一起带走），等一小会儿，
+            //      最后才 SIGKILL。
+            //   为什么不能只靠 terminate(proot)：proot 把除 SIGQUIT/SIGILL/SIGABRT/SIGFPE/SIGSEGV
+            //   以外的信号全装成 SIG_IGN，所以 SIGTERM 对它**完全无效**（这也是日志里
+            //   "停止 → 5s 后已停止" 其实是 SIGKILL 收尾的原因）；而 SIGKILL 不可捕获，
+            //   proot 的 atexit(kill_all_tracees) / --kill-on-exit 都来不及跑 → node 变孤儿。
+            terminateNodeProcess(instanceId, np)
+            val prootPid = h?.pid ?: 0
             runCatching { h?.terminate(5000) }
+            verifyProotGone(prootPid)
             ProcessUtil.removePidFile(instanceId)
+            deleteNodePidFile(instanceId)
             // 关键：终止是异步的（最长 5s）。期间用户可能已经启动了新实例，
             // 只有当前状态仍停在这个实例上时才允许置 Idle / 收服务，否则会把新实例的
             // Starting/Running 覆盖掉，并且误杀它的前台通知。
@@ -411,6 +535,122 @@ object DshRuntime {
                 }
             }
         }
+    }
+
+    /**
+     * 读取 rootfs 内 node 的 pid 并终止它（B10 修复的主路径）。
+     *
+     * pid 文件由 start-dsh.sh 在 `node ... &` 之后立刻写入实例目录（`dsh-node.pid`，
+     * 内容 `"<pid> <port>"`）：那是 rootfs 内 node 在**宿主上的真实 pid** ——
+     * proot 不伪造 getpid，所以脚本里的 `$!` 就是宿主 pid，App 可以直接 kill。
+     *
+     * 身份校验与 [ProcessUtil.kill] 同源：pid 会被系统复用，杀掉"已经不是 dsh"的 pid 会误伤
+     * 别的进程。node 的 cmdline 里必含 dsh 的 bin.js 路径（形如 `.../@deepseek-ai/dsh/lib/bin.js`），
+     * 读不到 cmdline（权限/进程已退）时不做校验，交给 kill 自己的 isAlive 判断。
+     *
+     * @param nodePidHint 内存里记着的 node pid；传 0 表示只认 pid 文件（启动前清理用，
+     *                    那时内存里的值可能属于另一个实例）
+     */
+    private fun terminateNodeProcess(instanceId: String, nodePidHint: Long) {
+        val pid = readNodePidFile(instanceId) ?: nodePidHint
+        if (pid <= 0) return
+        if (!ProcessUtil.isAlive(pid)) {
+            deleteNodePidFile(instanceId)
+            return
+        }
+        val cmd = ProcessUtil.cmdline(pid)
+        if (cmd != null && !looksLikeNodeProcess(cmd)) {
+            // pid 已被系统复用给别的进程：放手，交给 proot 侧收尾（绝不误杀）
+            DshLogBus.append("[runtime] pid=$pid 已不属于 dsh node（cmdline 不匹配），跳过按 pid 终止")
+            deleteNodePidFile(instanceId)
+            return
+        }
+        DshLogBus.append("[runtime] 终止实例 $instanceId 的 node（pid=$pid）")
+        ProcessUtil.killBlocking(pid, NODE_KILL_GRACE_MS, expectNode = true)
+        deleteNodePidFile(instanceId)
+    }
+
+    /**
+     * 这个 cmdline 是不是"我们的 node"。
+     * 判据取两者之一即可：dsh 的 bin.js 路径（最精确），或 rootfs 内 node 可执行文件路径。
+     * 用 `contains` 而不是精确匹配，是因为 cmdline 里带的是 rootfs 内的路径，
+     * 而不同阶段的布局（实例目录 / 预装目录）都能命中 `@deepseek-ai/dsh`。
+     */
+    private fun looksLikeNodeProcess(cmdline: String): Boolean =
+        cmdline.contains("@deepseek-ai/dsh") ||
+            cmdline.contains("node22/bin/node") ||
+            cmdline.contains("/node ")
+
+    /** node pid 文件（与 start-dsh.sh 的 NODE_PID_FILE 默认值一致：$INSTANCE_DIR/dsh-node.pid） */
+    private fun nodePidFile(instanceId: String): File = File(DshPaths.instanceDir(instanceId), "dsh-node.pid")
+
+    /** 读 node pid 文件。与 [ProcessUtil.readPidFile] 同一口径：文件只有十几个字节，同步读即可 */
+    private fun readNodePidFile(instanceId: String): Long? = runCatching {
+        val f = nodePidFile(instanceId)
+        if (!f.isFile) return@runCatching null
+        f.readText().trim().substringBefore(' ').toLongOrNull()?.takeIf { it > 0 }
+    }.getOrNull()
+
+    private fun deleteNodePidFile(instanceId: String) {
+        runCatching { nodePidFile(instanceId).delete() }
+    }
+
+    /**
+     * 本次启动到底用哪个端口（B10 第二半："端口被占别直接失败"）。
+     *
+     * 实例的 `port` 是上次成功启动后回写的**固定值**（自动端口也会被回写），下次启动直接复用；
+     * 一旦它还被占着（上一轮没退干净的 node、或别的 App），node 起来就报
+     * `EADDRINUSE` 然后整个进程退出 —— 用户只看到一句"启动失败"。
+     *
+     * 这里的处置是**改用自动端口**（返回 0，交给系统挑一个空闲端口）并明确写入日志。
+     * 为什么不"直接报错让用户改端口"：`PORT=0` 本来就是这个项目的设计（新实例默认 0），
+     * 回写机制也现成（[onProcessLine] 会把真实端口写回实例配置），所以换端口是零成本的；
+     * 而让用户去设置页改端口，等于把"系统能自己解决的事"推给人。
+     * 代价：使用者手工指定的固定端口在这种情况下会变成随机端口（日志与界面显示新端口）。
+     *
+     * 注意：探测有 TOCTOU 窗口（探完到 node bind 之间端口可能被别人抢走），所以脚本侧
+     * 还有一道同样的预检 + `FAILED reason=port-in-use` 归因，两道互相独立。
+     */
+    private fun resolveLaunchPort(instance: DshInstance): Int {
+        val wanted = instance.port
+        if (wanted <= 0) return 0
+        if (!Probe.isPortOpen(wanted, 300)) return wanted
+        DshLogBus.append(
+            "[runtime] 端口 $wanted 已被占用（可能是上一轮没退干净的 node，或其它应用），" +
+                "本次改用系统分配的端口；启动后端口会回写到实例配置"
+        )
+        return 0
+    }
+
+    /**
+     * 停止之后校验 proot 是否真的走了（B10 的"可见性"那一半）。
+     *
+     * **为什么要显式校验**：真机日志里"已停止"这一行是 App 自己写的乐观结论 ——
+     * 停止用的信号对 proot 无效（SIGTERM 被 SIG_IGN），只能靠 SIGKILL 收尾，
+     * 而 SIGKILL 之后 rootfs 里的 node 未必跟着走。只报"已停止"就会出现
+     * "启动 → 已停止 → 下次启动 EADDRINUSE"这种自相矛盾的现象（bebug.txt 正是这个形状）。
+     *
+     * 这里做两件事：
+     * 1. 给 proot 一小段宽限时间（SIGQUIT 那条清理路径需要时间跑完）；
+     * 2. 仍然活着就**明说** —— 这行日志是"停止没停干净"的唯一线索，比事后猜"端口为什么被占"便宜得多。
+     *
+     * @param prootPid 停止前记下的 proot pid；<=0（拿不到 pid）时跳过校验 —— 那种情况下
+     *                 "孤儿认领/清理"这条兜底本来也是断的，校验没有意义。
+     */
+    private suspend fun verifyProotGone(prootPid: Long) {
+        if (prootPid <= 0) return
+        val deadline = System.currentTimeMillis() + PROOT_EXIT_GRACE_MS
+        while (System.currentTimeMillis() < deadline && ProcessUtil.isAlive(prootPid)) {
+            kotlinx.coroutines.delay(100)
+        }
+        if (!ProcessUtil.isAlive(prootPid)) {
+            DshLogBus.append("[runtime] proot 已退出（pid=$prootPid）")
+            return
+        }
+        DshLogBus.append(
+            "[runtime] 警告：停止后 proot 仍存活（pid=$prootPid）；" +
+                "它可能还带着 rootfs 内的进程 —— 下次启动若端口被占，实例会自动改用其它端口"
+        )
     }
 
     /**
@@ -458,8 +698,14 @@ object DshRuntime {
     private fun failAndCleanup(instance: DshInstance, reason: String) {
         val h = handle
         handle = null
+        val np = nodePid
+        nodePid = 0
         _running.value = null
         scope.launch {
+            // 与 stop() 同源：先按 pid 收掉 rootfs 内的 node，再收 proot。
+            // 这条路径覆盖"启动超时"——超时的进程仍然是活的 node，不收掉就会占着端口，
+            // 下一次启动直接 EADDRINUSE（正是 B10 的现场）。
+            terminateNodeProcess(instance.id, np)
             runCatching { h?.terminate(3000) }
             ProcessUtil.removePidFile(instance.id)
         }
@@ -515,6 +761,11 @@ object DshRuntime {
 
     private fun onProcessLine(instance: DshInstance, line: String) {
         DshLogBus.append(line)
+        // 脚本在 `node ... &` 之后立刻打印它，并在实例目录写下同一对值（见 start-dsh.sh）。
+        // 记进内存是给"pid 文件被脚本收尾删掉、但进程还没死透"这种边角情况兜底的。
+        NODE_PID_LINE.find(line)?.let { m ->
+            m.groupValues[1].toLongOrNull()?.takeIf { it > 0 }?.let { nodePid = it }
+        }
         // 1) dsh 自己打印的带 token URL（形如 dsh web: http://127.0.0.1:3080/?token=XXX）
         // 2) start-dsh.sh 的就绪标记（形如 [start-dsh] READY url=http://...）
         val url = UrlScanner.findAuthenticatedUrl(line)
@@ -564,8 +815,11 @@ object DshRuntime {
 
         val wasStopRequested = stopRequestedFor == instance.id
         handle = null
+        // 进程已经退出：内存里的 node pid 作废（避免它被系统复用后误杀，见 ProcessUtil.kill 的身份校验）
+        nodePid = 0
         _running.value = null
         ProcessUtil.removePidFile(instance.id)
+        deleteNodePidFile(instance.id)
 
         if (wasStopRequested) {
             // 主动停止导致的退出（SIGTERM→143 等）：这是预期内的，落到 Idle，不要报成崩溃。
@@ -580,7 +834,20 @@ object DshRuntime {
         } else if (cur is State.Starting) {
             // 还没就绪就退了：先看是不是 proot/seccomp 不兼容，是的话自动兜底重试一次；
             // 否则把最后几行日志作为线索抛给界面。
-            if (!retryIfSeccompLooksGuilty(instance, code)) {
+            // ★ 端口被占（B10 的第二半）：脚本会打印 `FAILED reason=port-in-use`，node 也会打
+            //   `Error: listen EADDRINUSE`。这种失败**不是** seccomp 问题，也不该只说一句
+            //   "退出码 1"：必须让用户看到"端口被占"以及"下次会自动换端口"。
+            //   （正常情况下脚本的预检已经把端口换掉了；能走到这里说明预检之后端口又被抢走 ——
+            //   例如另一个 dsh 实例 / 别的应用在同一瞬间 bind 了同一个端口。）
+            val portInUse = recentLogTail().any {
+                it.contains("reason=port-in-use") || it.contains("EADDRINUSE")
+            }
+            if (portInUse) {
+                // 文案不放进 strings.xml（本轮改动范围只允许三个文件）：直接给一句可操作的中文。
+                val reason = "端口被占用（EADDRINUSE）。重试启动会自动改用系统分配的端口。"
+                setStateIfOwned(instance.id) { State.Failed(instance.id, instance.name, reason) }
+                DshLogBus.append("[runtime] 启动失败：$reason")
+            } else if (!retryIfSeccompLooksGuilty(instance, code)) {
                 val reason = appendLastLinesHint(
                     appContext?.getString(R.string.dsh_reason_exited_early, code)
                         ?: "进程提前退出（code=$code）"
@@ -697,21 +964,38 @@ object ProcessUtil {
         File("/proc/$pid/cmdline").readText().replace('\u0000', ' ')
     }.getOrNull()
 
-    suspend fun kill(pid: Long, graceMillis: Long = 5000) = withContext(Dispatchers.IO) {
-        if (!isAlive(pid)) return@withContext
+    suspend fun kill(pid: Long, graceMillis: Long = 5000, expectNode: Boolean = false) =
+        withContext(Dispatchers.IO) { killBlocking(pid, graceMillis, expectNode) }
+
+    /**
+     * [kill] 的阻塞版。
+     *
+     * **为什么要有阻塞版**：停止路径里有两处不在协程里 —— [DshRuntime.startLocked]（`@Synchronized`，
+     * 启动前要先把上一轮残留的 node 收掉，否则它占着端口）与认领巡检。它们都在 IO 线程上执行
+     * （见 DshLauncher 的 `withContext(Dispatchers.IO)`），阻塞等待 TERM→KILL 的宽限期是安全的。
+     */
+    fun killBlocking(pid: Long, graceMillis: Long = 5000, expectNode: Boolean = false) {
+        if (!isAlive(pid)) return
         // ★ 身份校验（第五轮修复）：pid 是会被系统复用的。停止"认领来的孤儿进程"时（PidHandle），
         // 我们手里只有一个上次记下的 pid；如果那个进程早就退出了、pid 又被别的进程用掉，
         // 直接发 SIGTERM/SIGKILL 就会误杀无辜。cmdline 能读到就必须确认它是 proot，否则放手。
+        // [expectNode] = true 时改为确认"它是我们 rootfs 内的 node"（B10 按 pid 终止 node 用）。
         val cmd = cmdline(pid)
-        if (cmd != null && !cmd.contains("proot")) {
+        val identityOk = if (expectNode) {
+            cmd == null || cmd.contains("@deepseek-ai/dsh") ||
+                cmd.contains("node22/bin/node") || cmd.contains("/node ")
+        } else {
+            cmd == null || cmd.contains("proot")
+        }
+        if (!identityOk) {
             DshLogBus.append("[runtime] pid=$pid 已不属于 dsh（cmdline 不匹配），跳过清理")
             removePidFileByPid(pid)
-            return@withContext
+            return
         }
         runCatching { android.os.Process.sendSignal(pid.toInt(), 15) } // SIGTERM
         val deadline = System.currentTimeMillis() + graceMillis
         while (System.currentTimeMillis() < deadline && isAlive(pid)) {
-            kotlinx.coroutines.delay(200)
+            Thread.sleep(200)
         }
         if (isAlive(pid)) {
             runCatching { android.os.Process.sendSignal(pid.toInt(), 9) } // SIGKILL
