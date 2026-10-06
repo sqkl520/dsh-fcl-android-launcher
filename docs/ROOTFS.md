@@ -1,6 +1,6 @@
 # 运行时 rootfs 的重建步骤
 
-> ⚠️ 这份文档是**事后补写**的：原工作区里 rootfs 是**用临时命令**构建的，没有留脚本。
+> ⚠️ 这份文档是**事后补写**的：最初的 rootfs 是**用临时命令**构建的，没有留下脚本。
 > 下面把当时验证过的步骤固化下来（配合 `docs/LESSONS.md` §2 的坑）。
 
 产物：`rootfs.tar.xz`（约 **300MB**），内含 **Debian 12 bookworm arm64** +
@@ -28,7 +28,7 @@ apt-get update && apt-get install -y debootstrap qemu-user-static xz-utils curl
 ## 2. debootstrap 出最小 Debian
 
 ```sh
-export R=/workspace/dsh-rootfs-build/rootfs
+export R=$HOME/dsh-rootfs-build/rootfs
 mkdir -p "$R"
 debootstrap --arch=arm64 --variant=minbase \
   --include=ca-certificates,bash,coreutils,procps,curl,xz-utils \
@@ -100,7 +100,7 @@ rm -rf "$R/root/.npm" "$R/tmp/"* 2>/dev/null || true
 ```sh
 cd "$R"
 # --numeric-owner 保留 uid/gid；排除 .l2s（双保险）
-tar --numeric-owner --exclude='.l2s.*' -cJf /workspace/dsh-rootfs-build/rootfs.tar.xz .
+tar --numeric-owner --exclude='.l2s.*' -cJf "$HOME/dsh-rootfs-build/rootfs.tar.xz" .
 
 sha256sum rootfs.tar.xz | tee rootfs.tar.xz.sha256
 ```
@@ -121,7 +121,7 @@ chroot /tmp/v /bin/bash -lc '
 
 ## 8. 放回工程并更新版本标记
 
-> 路径相对**源码仓根**（电脑 `D:\Projects\dsh-fcl-android-launcher`；手机 `/workspace/dsh-fcl-android-launcher`）。
+> 路径相对**仓库根**。
 
 ```sh
 cp rootfs.tar.xz FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz
