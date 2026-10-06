@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 
@@ -147,16 +148,108 @@ class ProotProcessExecutor(
  */
 object ProotRunner {
 
+    /**
+     * 把反射/`Number` 里拿到的 pid 统一成 `Long`，拿不到返回 **-1**。
+     *
+     * ★ 这就是 B10 的根因所在，所以单独抽成纯函数、单独上单测：
+     * 反射调用返回的是**装箱对象**。`Process.pid()` 若声明为 `int`，`Method.invoke` 交回来的是
+     * `java.lang.Integer`，而 `Integer as Long` 在 Kotlin 里**不是**"转成 Long"，是**类型断言**——
+     * 必然抛 `ClassCastException`。旧写法 `m.invoke(process) as Long` 正是这样：
+     * 异常被外层 `runCatching` 吞掉 → **永远返回 -1** → `dsh.pid` 从来没写出来过 →
+     * 孤儿认领/清理这条路径**从未生效**（bebug.txt 05:30:28 那条"无法取得 proot 进程 pid"）。
+     *
+     * 为什么必须用 `Number` 而不是逐个 `is Int`/`is Long`：Kotlin 的 `Number` 覆盖了
+     * `Integer`/`Long`/`Short`/`Byte`，一次收全，不会再漏掉某种装箱类型。
+     * 负值/0 **原样透出**，不"修正"成正数：调用方是 `if (pid > 0) 写文件 else 打警告`，
+     * 悄悄改成 1 会写出假 pid，下次清理时误杀别人的进程。
+     */
+    @JvmStatic
+    fun toPid(raw: Any?): Long = (raw as? Number)?.toLong() ?: -1L
+
+    /**
+     * 列出"当前进程此刻的所有直接子进程 pid"（所有线程的并集）。
+     *
+     * 用途：`start()` 之前先拍一张快照，作为 [findChildPidFromProc] 的排除集。
+     * 为什么不直接用"第一个子进程"：启动器可以**同时**有别的子进程 ——
+     * 例如正在跑自检的 `runOnce`、或另一个实例的 proot。不排除就会认错进程，
+     * 进而写出假 pid，下次清理时误杀无辜（`killBlocking` 的 cmdline 校验是最后一道防线，
+     * 但不该指望它兜住"一开始就选错"）。
+     */
+    @JvmStatic
+    fun snapshotChildPids(procRoot: String = "/proc"): Set<Long> {
+        val selfTask = File(procRoot, "self/task")
+        val tids = selfTask.listFiles()?.mapNotNull { it.name.toLongOrNull() } ?: return emptySet()
+        val out = HashSet<Long>()
+        for (tid in tids) {
+            val text = runCatching { File(selfTask, "$tid/children").readText() }.getOrNull() ?: continue
+            text.split(' ', '\n', '\t').mapNotNullTo(out) { it.trim().toLongOrNull() }
+        }
+        return out
+    }
+
+    /**
+     * 从 `/proc` 里找一个进程的子进程 pid（**B10 的第二层兜底**）。
+     *
+     * 为什么需要它：`api-versions.xml`（android-35）里 `java/lang/Process` 只有
+     * `destroy`/`exitValue`/`isAlive`/`waitFor`…，**没有 `pid()`** —— 那是 Java 9+ 的 API。
+     * `android.jar` 里能编过只是编译期假象（android.jar 是全量 API 存根），
+     * 运行期 `getMethod("pid")` 抛 `NoSuchMethodException`。所以光修装箱 bug 还不够：
+     * 真机上那条反射路径**根本不会成功**。
+     *
+     * 原理：Linux 的 `/proc/<pid>/task/<tid>/children` 是该线程的**直接子进程**列表
+     * （空格分隔，内核 `CONFIG_PROC_CHILDREN` 打开时才有；Android 内核有）。
+     * 我们刚 start 的 proot 就是我们进程的子进程 → 与启动前快照求差集即得。
+     *
+     * @param procRoot    `/proc` 根目录。做成参数是为了**能用假目录喂单测**（/proc 没法在测试里造）
+     * @param excludePids 启动前已存在的子进程 pid（见 [snapshotChildPids]）
+     * @return 新出现的子进程 pid；取不到返回 -1
+     */
+    @JvmStatic
+    fun findChildPidFromProc(procRoot: String = "/proc", excludePids: Set<Long> = emptySet()): Long {
+        val selfTask = File(procRoot, "self/task")
+        val tids = selfTask.listFiles()?.mapNotNull { it.name.toLongOrNull() } ?: return -1L
+        // LinkedHashSet：保持 tid 顺序稳定（同一 tid 多次出现的 pid 不重排），让结果可复现
+        val children = LinkedHashSet<Long>()
+        for (tid in tids) {
+            val text = runCatching { File(selfTask, "$tid/children").readText() }.getOrNull() ?: continue
+            text.split(' ', '\n', '\t')
+                .mapNotNull { it.trim().toLongOrNull() }
+                .forEach { children.add(it) }
+        }
+        return children.firstOrNull { it > 0 && it !in excludePids } ?: -1L
+    }
+
     /** 启动后的句柄 */
-    class Handle(val process: Process) {
+    class Handle(
+        val process: Process,
+        /** 启动前的子进程快照 —— `/proc` 兜底要拿它做差集 */
+        private val preExistingChildren: Set<Long> = emptySet()
+    ) {
         /**
-         * 进程 pid。
-         * 注意：**Android Runtime 的 java.lang.Process 没有 pid()**（那是 Java 9+ 的 API），
-         * 所以这里用反射，拿不到就返回 -1（此时孤儿清理会退化为按实例 pid 文件缺失处理）。
+         * 进程 pid。**两条路径**：先反射（桌面 JVM 有 `pid()`），失败再走 `/proc` 兜底（真机走这条）。
+         *
+         * 缓存成功值：pid 不会变，而 `/proc` 兜底要扫 task 目录，不该每次调用都扫。
+         * **不缓存 -1**：进程刚 start 时 `/proc` 目录可能还没建好，缓存了 -1 就永远拿不到了。
          */
-        fun pid(): Long = runCatching {
-            val m = Process::class.java.getMethod("pid")
-            m.invoke(process) as Long
+        @Volatile
+        private var cachedPid: Long = 0
+
+        fun pid(): Long {
+            val c = cachedPid
+            if (c > 0) return c
+            val resolved = pidViaReflection() ?: pidViaProc()
+            if (resolved > 0) cachedPid = resolved
+            return resolved
+        }
+
+        /** 路径一：反射 `Process.pid()`（桌面 JVM 有；真机大概率 `NoSuchMethodException`） */
+        private fun pidViaReflection(): Long? = runCatching {
+            Process::class.java.getMethod("pid").invoke(process)
+        }.getOrNull()?.let { raw -> toPid(raw).takeIf { it > 0 } }
+
+        /** 路径二：`/proc` 兜底（真机唯一可靠的路径） */
+        private fun pidViaProc(): Long = runCatching {
+            findChildPidFromProc(excludePids = preExistingChildren)
         }.getOrDefault(-1L)
 
         fun isAlive(): Boolean = runCatching { process.isAlive }.getOrDefault(false)
@@ -184,8 +277,15 @@ object ProotRunner {
         onLine: (String) -> Unit,
         onExit: (Int) -> Unit
     ): Handle {
+        // ★ 顺序很重要：**先拍子进程快照，再 start**。
+        //   `/proc` 兜底靠"新出现的子进程 = 我们刚启动的 proot"来认人；快照在 start 之后拍的话，
+        //   proot 自己已经在集合里了，差集永远为空 → 又回到拿不到 pid 的老问题。
+        val preExisting = snapshotChildPids()
         val process = spec.toProcessBuilder().start()
-        val handle = Handle(process)
+        val handle = Handle(process, preExisting)
+        // 立刻解析一次 pid 并缓存：此刻进程一定还活着、/proc 目录一定在。
+        // 拖到调用方（DshRuntime 写 dsh.pid）再解析也行，但那时进程可能已经退出，白扫一遍。
+        runCatching { handle.pid() }
         scope.launch(Dispatchers.IO) {
             try {
                 BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
