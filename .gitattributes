@@ -3,7 +3,7 @@
 
 # ★ dsh 运行时脚本：真机上由 proot 里的 /bin/sh 执行，CRLF 会让首行
 #   `#!/bin/sh\r` 找不到解释器。手机端（Linux）检出本来就是 LF，这条主要防
-#   Windows（本机 autocrlf 曾为 true）检出成 CRLF 后直接打进 APK。
+#   Windows（autocrlf 为 true 时）检出成 CRLF 后直接打进 APK。
 FCL/src/main/assets/dsh/scripts/** text eol=lf
 
 # 仓库根脚本 / 手机端脚本（build-apk.sh、run-*.sh、apk/*.sh…）：同上，必须 LF

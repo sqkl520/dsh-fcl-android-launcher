@@ -141,7 +141,7 @@ npm install
 |---|---|
 | 仓库 | <https://github.com/oonid/pr> |
 | commit | `fcf25cb2396361f0be2edfc96fdd61a6e738c9d9` |
-| 本地参考副本 | `/workspace/oonid-pr-reference`（不参与 FCL 构建） |
+| 本地参考副本 | 仓库内 `oonid-pr-reference/`（不参与 FCL 构建） |
 
 已接入项目的产物（随 APK 的 `jniLibs/arm64-v8a/` 提供）：
 

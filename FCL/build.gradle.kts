@@ -39,7 +39,7 @@ android {
     val pwd = System.getenv("FCL_KEYSTORE_PASSWORD") ?: localProperty?.getProperty("pwd")
     val curseApiKey = System.getenv("CURSE_API_KEY") ?: localProperty?.getProperty("curse.api.key")
     val oauthApiKey = System.getenv("OAUTH_API_KEY") ?: localProperty?.getProperty("oauth.api.key")
-    // 版本号单一来源：根 gradle.properties 的 dshVersion / dshVersionCode（见 REPOS.md「版本号」）
+    // 版本号单一来源：根 gradle.properties 的 dshVersion / dshVersionCode
     // 缺了就直接报错，而不是悄悄用一个空版本号打包。
     val dshVersion = providers.gradleProperty("dshVersion").orNull
         ?: error("缺少 dshVersion：请在根 gradle.properties 里设置（版本号单一来源）")
