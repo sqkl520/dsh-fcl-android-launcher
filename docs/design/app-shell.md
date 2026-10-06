@@ -284,7 +284,7 @@ SplashActivity（LAUNCHER，保留但瘦身）
 | **4（可选）裁剪** | 移除不可达的 MC Activity 注册与其资源、考虑剔除 MC native/资源 | 多处 | 减体积 | 待做 |
 
 > **阶段 1~3 已实施（2026-10-01 ~ 10-02）**。决策：外壳**整体横屏**（FCL 原版形态），
-> 右面板常驻；`DshWebViewActivity` 保持 `sensor` 可自由旋转。详见 `../CHANGELOG.md`。
+> 右面板常驻；`DshWebViewActivity` 保持 `sensor` 可自由旋转。
 
 **建议先做阶段 0**：改动最小，能立刻验证"这个方向对不对"，再决定要不要投入 1~3。
 

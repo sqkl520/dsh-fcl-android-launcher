@@ -44,7 +44,7 @@
 #     只有 SIGQUIT（异常路径）与 SIGKILL（不可捕获）能杀掉它；
 #   · SIGKILL 下 proot 来不及做任何清理：它的 `atexit(kill_all_tracees)` 与 `--kill-on-exit`
 #     都要求"proot 还活着、还在事件循环里"，于是 node 变孤儿、端口一直被占，
-#     下次启动就报 EADDRINUSE（见 bebug.txt 05:30→05:36 的时序）。
+#     下次启动就报 EADDRINUSE。
 #   · 本脚本的 `trap ... TERM` 在这条链路上**永远不会被触发**：启动器杀的是 proot 的 pid，
 #     而本脚本跑在 proot 的另一个 pid（root tracee）上，根本收不到那个信号。
 # 两条互相独立的修复（任一条生效都能带走 node）：

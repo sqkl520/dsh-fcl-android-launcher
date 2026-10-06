@@ -73,19 +73,13 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 ```powershell
 # 电脑（Windows，当前主力环境）直接用 Gradle：
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:compileDebugKotlin :FCL:compileDebugJavaWithJavac `
-  :FCL:processDebugResources :FCL:processDebugMainManifest    # = run-compile.sh 覆盖的四项
-.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest           # 单测（34 项）
+  :FCL:processDebugResources :FCL:processDebugMainManifest
+.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest           # 单测
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包 → dsh-fcl-android-launcher-0.1.3-SNAPSHOT-arm64.apk
 ```
 
-一条命令出整版（体检 → 编译 → 单测 → 打包 → 提交两仓 → 发 GitHub Release）：
-
-```powershell
-.\release.cmd --dry-run   # 先看流程；去掉 --dry-run 就是真跑
-```
-
 手机（arm64 Linux 沙箱）上用同目录的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh`
-（纯 POSIX sh，自动识别源码目录）。
+（纯 POSIX sh，自动识别源码目录）；一条命令出整版用 `sh release.sh`。
 
 **版本号只有一个真源**：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
 **APK 不进 Git**：新版本作为 GitHub Release 附件分发（见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)）。
@@ -94,19 +88,20 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 
 ## 文档
 
-> 完整文档索引见 [`docs/INDEX.md`](docs/INDEX.md)
+> 完整文档索引见 [`docs/README.md`](docs/README.md)
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | 变更日志（按阶段/里程碑记录） |
+| [`docs/README.md`](docs/README.md) | **文档总览**：全部文档的索引与当前状态 |
 | [`docs/PLAN.md`](docs/PLAN.md) | 项目总纲与总体方案 |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | 里程碑规划 M1~M6 |
 | [`docs/PACKAGING.md`](docs/PACKAGING.md) | 打包说明（proot 二进制 / rootfs 准备） |
+| [`docs/ROOTFS.md`](docs/ROOTFS.md) | rootfs 构建与瘦身（Debian + Node + 预装 dsh 的完整步骤） |
+| [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | 开发环境：JDK / Android SDK / NDK 要求与接线 |
+| [`docs/TASKS.md`](docs/TASKS.md) | 待办清单 |
 | [`docs/design/app-shell.md`](docs/design/app-shell.md) | 应用外壳改造设计（含界面跟 FCL 的硬性规范） |
 | [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md) | W^X 限制与 PROOT_LOADER 绕过方案 |
 | [`docs/design/proot-engine-integration.md`](docs/design/proot-engine-integration.md) | **【未采用的备选路线】** oonid/pr `:proot-engine` 的集成方案 —— 最终没走这条路（用自研 proot 层），留作决策记录 |
-| [`docs/reports/`](docs/reports/) | 各轮评审与优化报告 |
-| [`docs/INDEX.md`](docs/INDEX.md) | **文档总览**：全部文档的索引与当前状态 |
 | [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) | **APK 下载**（公开仓，免 token）——新版本以 Release 附件分发，不进 Git |
 
 ---

@@ -137,7 +137,7 @@ object DshRuntime {
      * 这也是真机日志里"停止 → 5s 后已停止"看着像成功了、其实只是等到 SIGKILL 的原因。
      * 而 SIGKILL 不可捕获：proot 的 `atexit(kill_all_tracees)` 与 `--kill-on-exit` 的清理逻辑
      * 都要求"proot 还活着、还在事件循环里"，被 KILL 时全来不及跑 → rootfs 内的 node 变孤儿、
-     * 继续占着端口，下次启动就是 EADDRINUSE（bebug.txt 05:30 停止 / 05:36 失败）。
+     * 继续占着端口，下次启动就是 EADDRINUSE。
      *
      * SIGQUIT 走的正是那条清理路径（proot 源码 `kill_all_tracees2`）：先
      * `kill_all_tracees()`（对每个 tracee 发 SIGKILL）再退出事件循环。所以"先 SIGQUIT、
@@ -628,7 +628,7 @@ object DshRuntime {
      * **为什么要显式校验**：真机日志里"已停止"这一行是 App 自己写的乐观结论 ——
      * 停止用的信号对 proot 无效（SIGTERM 被 SIG_IGN），只能靠 SIGKILL 收尾，
      * 而 SIGKILL 之后 rootfs 里的 node 未必跟着走。只报"已停止"就会出现
-     * "启动 → 已停止 → 下次启动 EADDRINUSE"这种自相矛盾的现象（bebug.txt 正是这个形状）。
+     * "启动 → 已停止 → 下次启动 EADDRINUSE"这种自相矛盾的现象。
      *
      * 这里做两件事：
      * 1. 给 proot 一小段宽限时间（SIGQUIT 那条清理路径需要时间跑完）；
