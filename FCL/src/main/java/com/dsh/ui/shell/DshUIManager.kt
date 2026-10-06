@@ -97,6 +97,65 @@ class DshUIManager(
             it.onCreate()
         }
 
+    /**
+     * **只读**访问器：只返回**已经创建过**的页面实例，没有就返回 null。
+     *
+     * ★ 为什么不复用上面的 [getUI]：`getUI` 在实例不存在时会**创建并 `onCreate()`** 一个页面。
+     *   而 [titleOf] 是外壳**每次切页都要调**的查询 —— 若走 `getUI`，就变成
+     *   "为了拿一个标题把页面建出来"：
+     *   1. 页面的 `onCreate` 不是廉价的（建列表/起协程订阅 StateFlow/拉数据），
+     *      一次切页的标题查询不该有这种副作用；
+     *   2. 更糟的是它会**打乱"页面随 ViewPager 生命周期创建/回收"**这条既定模型 ——
+     *      提前建出来的 contentView 会被塞进 [registry]，而它并没有被 Adapter bind 过，
+     *      随后 [Adapter.onViewRecycled] 会把它当成"已绑定页面"销毁，出现"建了又立刻回收"的空转。
+     *   取标题是纯查询，纯查询不许有副作用，所以这里另开一个只读入口。
+     */
+    private fun uiAt(position: Int): FCLCommonUI? =
+        if (position in registry.indices) registry[position] else null
+
+    /**
+     * 当前页。**未创建过则返回 null —— 不为了取标题而创建页面**（理由见 [uiAt]）。
+     *
+     * 返回类型是 [DshPageUI] 而不是 `FCLCommonUI`：返回链的第 ③④ 级只对 dsh 页面有意义。
+     * ⚠️ `DshPlaceholderUI` 继承的是 `FCLCommonUI` **而不是** `DshPageUI`，
+     * 所以这里必须用 `as?` 安全转换（用 `as` 会在占位页上直接抛 `ClassCastException`）。
+     */
+    fun currentPage(): DshPageUI? = uiAt(pager.currentItem) as? DshPageUI
+
+    /** 当前页在 [titles] 里的下标（= ViewPager2 的当前项，与外壳菜单高亮同源） */
+    val currentPosition: Int get() = pager.currentItem
+
+    /**
+     * 返回链的 **②③④ 级**（① 在 Activity 的 `onKeyDown`，⑤ 在 Activity 的兜底）。
+     * 顺序照搬 FCL，不可调换：
+     *
+     * 1. **守卫**：当前页不是 [DshPageUI]、或 `isShowing()` 为 false → **不消费**。
+     *    `isShowing()` 的实现是 `contentView.isShown()`（见 `FCLCommonUI`）—— 不显示的 UI
+     *    不该消费返回键；首帧还没布局完成时它也是 false，此时落到第 ⑤ 级兜底是正确行为。
+     * 2. **临时页栈**：当前页是 [DshMultiPageUI] 且还有可弹的临时页 → 弹一层并消费。
+     * 3. **页内自定义回退**：交给 [DshPageUI.onPageBack]（默认 false）。
+     *
+     * @return true = 已消费（调用方不要再往下走）；false = 不消费，交给第 ⑤ 级兜底
+     */
+    fun onBackPressed(): Boolean {
+        val page = currentPage() ?: return false
+        if (!page.isShowing()) return false
+        if (page is DshMultiPageUI && page.canReturnTempPage()) {
+            page.dismissCurrentTempPage()
+            return true
+        }
+        return page.onPageBack()
+    }
+
+    /**
+     * 第 [position] 页的标题：**页面自己声明优先，否则回落到 tab 标题**。
+     *
+     * 用 [uiAt] 而不是 [getUI] —— 理由见 [uiAt] 的注释（取标题不能有创建页面的副作用）。
+     * 所以未创建过的页会直接回落到 tab 标题，这正是我们想要的：外壳标题不因"页面还没建"而空缺。
+     */
+    fun titleOf(position: Int): CharSequence =
+        (uiAt(position) as? DshPageUI)?.pageTitle() ?: context.getString(titles[position])
+
     private inner class Adapter : RecyclerView.Adapter<Adapter.Holder>() {
         inner class Holder(val container: FrameLayout) : RecyclerView.ViewHolder(container) {
             var bound = 0

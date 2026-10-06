@@ -5,6 +5,20 @@ import com.tungsten.fcllibrary.component.FCLActivity
 /**
  * 外壳对页面开放的能力。页面（[DshPageUI]）通过它完成跨 tab 跳转、打开详情 Activity 等，
  * 不再各自 `startActivity` 到并列的功能 Activity（那套在阶段 2 已并入外壳）。
+ *
+ * ## 为什么这里**没有**返回链 / 标题源的方法（有意为之，别顺手补）
+ * 返回链的 ① 级在 [DshMainActivity.onKeyDown]、②③④ 级在 [DshUIManager.onBackPressed]、
+ * ⑤ 级在 [DshMainActivity] 的兜底；标题源在 [DshUIManager.titleOf]。
+ * 这两件事**都只由外壳自己驱动**：
+ * - 页面想让返回键先退自己 → 覆写 `DshPageUI.onPageBack()`（反向调用，页面不需要拿 host）；
+ * - 页内临时页 → `DshMultiPageUI` 自己持有栈，外壳只是转发调用；
+ * - 标题 → 页面覆写 `DshPageUI.pageTitle()` 让外壳**来取**（pull），
+ *   而不是页面 push 给外壳 —— 所以也不需要 `host.setTitle()` 这类方法。
+ *
+ * 也就是说，本接口是"页面 **主动要**外壳做事"的能力面；返回与标题是外壳**主动问**页面。
+ * 两个方向不同，所以不往这里加方法 —— 加了反而会让"谁驱动返回链"变得含糊。
+ * 将来若真有页面需要主动触发返回（例如页内自带一个返回按钮），再按那时**确实存在**的调用方
+ * 加一个 `fun onBack()`，而不是现在预留。
  */
 interface DshShellHost {
 
