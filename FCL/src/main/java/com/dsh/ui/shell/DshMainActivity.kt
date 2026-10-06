@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.View
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
@@ -92,16 +93,30 @@ class DshMainActivity : FCLActivity(), DshShellHost {
                 menus.forEach { if (it !== selected && it.isSelected) it.setSelected(false) }
             }
         }
-        // FCL 的返回项：交给本 Activity 的返回逻辑（非实例页 → 回实例页；否则退出）
-        binding.back.setOnClickListener { onBackPressedDispatcher.onBackPressed() }
+        // FCL 的返回项：**复用外壳同一条返回链**（见 [handleBack]）。
+        //
+        // ★ 为什么不再用 `onBackPressedDispatcher.onBackPressed()`：那条路会**绕开** [onKeyDown]，
+        //   于是"系统返回键"和"点左菜单返回"走的是两条不同的入口，等于返回链有两套入口。
+        //   两边一旦漂移（比如只在一处加了临时页弹栈），表现就是"按返回键能退、点按钮退不了"
+        //   这类极难定位的问题。这里统一成：按钮 → handleBack()，与按键走完全相同的 ②③④⑤ 级。
+        //   handleBack() 返回 false = 第 ⑤ 级判定"已在首页、没有可退的" → 这才 finish。
+        binding.back.setOnClickListener { if (!handleBack()) finish() }
 
         uiManager.pageSelectedListener = { pos ->
-            binding.title.setTextWithAnim(getString(uiManager.titles[pos]))
+            // 标题走 uiManager.titleOf：页面自己声明优先（pageTitle()），否则回落到 tab 标题。
+            // 所以这里不用再 getString —— 回落已经发生在 titleOf 内部。
+            binding.title.setTextWithAnim(uiManager.titleOf(pos).toString())
             if (!menus[pos].isSelected) menus[pos].setSelected(true)
         }
 
         binding.instances.setSelected(true)
-        binding.title.refresh(getString(uiManager.titles[0]))
+        binding.title.refresh(uiManager.titleOf(0).toString())
+
+        // ⚠️ **刻意不接** `DshMultiPageUI.setOnTempPageTitleChanged`。
+        // 临时页打开/关闭时，页面会把它的标题**上报**出来，但外壳**故意不渲染**：
+        // 这是 FCL 原味 —— 临时页不覆盖 tab 栏、也不改 Activity 标题。
+        // 外壳标题永远按"当前 tab"决定。后人若"顺手补上"这条回调，会让标题随临时页跳动，
+        // 偏离 FCL 行为 —— 这是**有意为之**，不是漏接。
 
         // 详情页（实例设置 / WebView）可带 EXTRA_OPEN_TAB 跳回指定 tab
         intent?.getIntExtra(EXTRA_OPEN_TAB, -1)?.takeIf { it >= 0 }?.let { openTab(it) }
@@ -275,12 +290,65 @@ class DshMainActivity : FCLActivity(), DshShellHost {
             }
     }
 
-    override fun onBackPressed() {
-        if (binding.uiLayout.currentItem != DshShellHost.TAB_INSTANCES) {
-            binding.instances.setSelected(true)
-        } else {
-            super.onBackPressed()
+    /**
+     * 返回链第 **①** 级：Activity 的返回入口。
+     *
+     * ★ 为什么是 `onKeyDown` 而不是覆写 `onBackPressed`：
+     * `onBackPressed` 在 API 33+ 由 `onBackPressedDispatcher` 接管（`ComponentActivity` 的实现就是
+     * 直接转发给它），覆写它会让"系统返回"和"我们自己调的返回"落到两条不同的路径上。
+     * FCL 用的是 `onKeyDown`，我们照搬：**按键先到 `onKeyDown`**，只有我们没消费时才落到
+     * `super` → 框架的 `onBackPressed()` → dispatcher，链路始终只有一条。
+     *
+     * 能这么做的前提（已核对，不是想当然）：本 App 的 manifest **没有**开
+     * `android:enableOnBackInvokedCallback`，而 targetSdk 是 34（该属性到 targetSdk 35 才默认 true），
+     * 所以系统**把手势返回也当成 KEYCODE_BACK 键事件**送进来，硬件键与手势都进得了这个方法。
+     * 哪天要开预测式返回（或把 targetSdk 提到 35），就必须改走 `onBackInvokedDispatcher`
+     * 并把这条链挂上去，否则手势返回会绕过整个返回链。
+     *
+     * ## 为什么"消费了就不调 `super`"是必须的（不是随手写的）
+     * `Activity.onKeyDown` 对 BACK 会调 `event.startTracking()`，作用是**登记"这个键我要看抬起"**；
+     * 被登记过的键，它的**抬起**会让 `Activity.onKeyUp` 再触发一次 `onBackPressed()`
+     * （`onKeyUp` 只对 `isTracking()` 的抬起放行）。而登记的前提是这次按下**走到了 `super`**。
+     *
+     * 由此得出两条实现约束：
+     * 1. **消费了就 `return true` 且不调 `super`** —— 没走 super 就不会被登记，
+     *    抬起时不会再触发一次返回，**一次按键只消费一次**。
+     * 2. **`repeatCount == 0` 这道闸门同时管住了长按** —— 长按产生的重复按下事件
+     *    （`repeatCount > 0`）我们不处理、落到 `super`，而框架登记"跟踪"时会检查
+     *    "这是首次按下（`repeatCount == 0`）**且** 按键处理方置了跟踪标记"，重复事件两条都不满足，
+     *    所以**登记不会补上**，松手时不会多出一次 `onBackPressed()`。
+     *    （否则表现会是"在非首页长按返回：先回首页，松手时整个外壳被退掉"。）
+     *
+     * 换句话说：`repeatCount == 0` 既是"长按不重复触发"，也是"抬起不重复消费"的同一道闸门 ——
+     * 这也是为什么这里不需要额外判断 `repeatCount > 0` 后再单独吃掉事件。
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && event?.repeatCount == 0) {
+            if (handleBack()) return true
         }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /**
+     * 返回链的第 **②③④⑤** 级（第 ① 级是上面的 [onKeyDown]，两者共用这一份实现，
+     * 所以左菜单的返回按钮也走这里 —— 一个入口，不会漂移）。
+     *
+     * @return true = 已消费，调用方不要继续；false = 没得退了（已在首页），
+     *         由调用方决定退出方式（按键 → `super.onKeyDown` 交给系统；按钮 → `finish()`）
+     */
+    private fun handleBack(): Boolean {
+        // ②③④：交给当前页 —— 页内临时页栈 → 子类自定义回退。
+        // 不显示的页、或不是 DshPageUI 的页不会消费（守卫在 DshUIManager.onBackPressed 里）。
+        if (uiManager.onBackPressed()) return true
+
+        // ⑤a：全局兜底 —— 不在首页就回首页（FCL 原味：外壳永远有一个可退回的"根 tab"）
+        if (uiManager.currentPosition != DshShellHost.TAB_INSTANCES) {
+            switchTab(DshShellHost.TAB_INSTANCES)
+            return true
+        }
+
+        // ⑤b：已在首页，没有可退的 —— 不消费，交给调用方
+        return false
     }
 
     /** 动态壁纸跟随界面暂停/恢复（FCL 同款） */
