@@ -138,20 +138,11 @@ cmake → cmake.real(脚本) → cmake.real.real(真二进制)   # qemu 去执�
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
 ```
 
-**arm64 Linux**：`sh run-compile.sh` / `sh run-tests.sh` / `sh build-apk.sh`
-—— 这三个脚本在仓库根目录，是纯 POSIX sh、面向 arm64 Linux；Windows 上直接跑不了，
-   用上面的 Gradle 命令。
+在 arm64 Linux 上也可以用仓库根目录的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh`
+（纯 POSIX sh，自动识别源码目录）—— 它们和上面三条 Gradle 命令做的是同一件事。
+Windows 上直接跑不了这些 `.sh`，用上面的 Gradle 命令即可。
 
-
-**Windows 上的脚本入口**：`.cmd` 包装 = 调 Git Bash 跑同名 `.sh`
-
-```powershell
-.\check-sync.cmd          # 体检：版本号一致 / 两仓干净 / 共用文件一致 / 与远端同步
-.\release.cmd --dry-run   # 出包全流程（加 --dry-run 只打印不改）
-.\bootstrap.cmd --check   # 检查双仓共用工作树是否完整
-```
-
-
+---
 
 ## 5. 已知环境坑（两平台通用）
 
@@ -159,18 +150,16 @@ cmake → cmake.real(脚本) → cmake.real.real(真二进制)   # qemu 去执�
 |---|---|---|
 | 编译被 SIGTERM 打断 | 编译要 3~9 分钟，超过调用时限 | **直接重跑**，Gradle 增量会跳过已完成任务 |
 | 打包阶段超时 | 300MB `rootfs.tar.xz` 若被 aapt 二次压缩会极慢 | `build.gradle.kts` 已 `noCompress += "xz"`；仍超时就重跑 |
-| `.git` 里出现 `.l2s.tmp_*` 软链残留 | 某些容器/沙箱存储机制留下的（中断操作的产物） | 确认无引用后可直接删；会挡住 `git gc` |
-| `~/.ssh` 不跨会话持久 | 部分容器/沙箱环境的特性 | 密钥丢了要重新生成并把公钥加到 GitHub |
 | Android 资源文件报 `InvalidFileException` | 从不区分大小写的文件系统（Windows）拷来的资源文件名重复 | 检查冲突的资源名 |
+| `~/.ssh` 不跨会话持久 | 部分容器/沙箱环境的特性 | 密钥丢了要重新生成并把公钥加到 GitHub |
 
 ## 6. 磁盘
 
 | 内容 | 大小 |
 |---|---|
-| rootfs 解压后（apt 依赖树展开） | ~1.4GB |
-| 构建产物与缓存（`FCL/build`、`.gradle`） | ~700MB |
-| APK（单个） | ~310MB |
-| 工作区整体（含 rootfs 构建目录） | ~5GB |
-
 | rootfs 解压后（瘦身后） | ~860MB |
+| 构建产物与缓存（`FCL/build`、`.gradle`） | ~700MB |
+| APK（单个） | ~155MB |
+
 > 打包前建议先清理 `FCL/build`（可随时重建）。
+> rootfs 从零重建时需要额外 ~1.5GB 暂存空间（见 `ROOTFS.md`）。
