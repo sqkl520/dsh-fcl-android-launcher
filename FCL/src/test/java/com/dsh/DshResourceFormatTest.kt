@@ -78,7 +78,11 @@ class DshResourceFormatTest {
         // DshLogsUI（控制台式日志页）：信息行与筛选统计，参数都是 Int
         "dsh_logs_info" to arrayOf<Any>(120, 300),
         "dsh_logs_hidden" to arrayOf<Any>(180),
-        "dsh_logs_truncated" to arrayOf<Any>(40)
+        "dsh_logs_truncated" to arrayOf<Any>(40),
+
+        // 实例详情页 / 日志范围标示：%1$s 都是实例名（用户起的名字，什么都可能有）
+        "dsh_logs_scope_instance" to arrayOf<Any>("dsh 0.1.5"),
+        "dsh_instance_detail_title" to arrayOf<Any>("dsh 0.1.5")
     )
 
     @Test

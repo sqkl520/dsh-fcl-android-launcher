@@ -66,11 +66,26 @@ class DshWebViewActivity : FCLActivity() {
             render(DshRuntime.state.value)
         }
         findViewById<View>(R.id.btn_logs).setOnClickListener {
-            startActivity(
-                com.dsh.ui.shell.DshMainActivity.intentForTab(
-                    this, com.dsh.ui.shell.DshShellHost.TAB_LOGS
+            // 跳到"这个实例的日志"。
+            //
+            // ★ 为什么不再用 `intentForTab(TAB_LOGS)`：外壳**已经没有"日志"这个 tab** ——
+            //   日志按实例归属收进了实例详情页（App 级那份在「设置」里）。
+            //   所以这里必须压出**当前运行实例**的详情页并落在「日志」那一段。
+            //
+            // 拿不到实例 id 时（[DshRuntime.runningInstanceId] 为 null：实例已经停了，
+            // 而 WebView 还没被销毁）**回落到设置页**：此时"这个实例的日志"没有指向，
+            // 但用户点「日志」的意图是"看出什么事了"，App 级日志是唯一说得通的落点。
+            val id = DshRuntime.runningInstanceId()
+            val intent = if (id != null) {
+                com.dsh.ui.shell.DshMainActivity.intentForInstance(
+                    this, id, com.dsh.ui.shell.DshInstanceDetailPage.TAB_LOGS
                 )
-            )
+            } else {
+                com.dsh.ui.shell.DshMainActivity.intentForTab(
+                    this, com.dsh.ui.shell.DshShellHost.TAB_SETTINGS
+                )
+            }
+            startActivity(intent)
         }
         findViewById<View>(R.id.btn_stop).setOnClickListener {
             DshRuntime.stop("用户从界面停止")
@@ -119,7 +134,7 @@ class DshWebViewActivity : FCLActivity() {
             }
 
             override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
-                msg?.let { DshLogBus.append("[web] ${it.message()} @${it.sourceId()}:${it.lineNumber()}") }
+                msg?.let { logWeb("[web] ${it.message()} @${it.sourceId()}:${it.lineNumber()}") }
                 return true
             }
         }
@@ -242,7 +257,7 @@ class DshWebViewActivity : FCLActivity() {
         loadedUrl = url
         if (running.url == null) {
             // 没拿到 token：先试 cookie 是否还有效；不行会走 401 兜底提示
-            DshLogBus.append("[web] 未捕获到 token URL，尝试用已保存的 cookie 访问 $url")
+            logWeb("[web] 未捕获到 token URL，尝试用已保存的 cookie 访问 $url")
         }
         showWeb()
         webView.loadUrl(url)
@@ -279,7 +294,20 @@ class DshWebViewActivity : FCLActivity() {
         findViewById<View>(R.id.btn_retry).visibility = View.VISIBLE
         findViewById<View>(R.id.btn_logs).visibility = View.VISIBLE
         findViewById<View>(R.id.btn_stop).visibility = View.VISIBLE
-        DshLogBus.append("[web] $message")
+        logWeb("[web] $message")
+    }
+
+    /**
+     * WebView 是"当前运行中的实例"的界面，所以 `[web]` 行要归到那个实例自己的日志里 ——
+     * 用户在实例详情页看到的 WebView 报错，应该和它的运行日志在同一条流上。
+     *
+     * 拿不到实例 id 时（[DshRuntime.runningInstanceId] 为 null：还没启动、已停止、或状态已复位）
+     * **回落全局流**：这时"这条属于谁"没有答案，猜一个实例等于往别人的日志里塞行。
+     * 注意本 Activity 可能是在实例已经停掉之后才收到 401/加载失败回调的，所以 null 是常态而非异常。
+     */
+    private fun logWeb(line: String) {
+        val id = DshRuntime.runningInstanceId()
+        if (id == null) DshLogBus.append(line) else DshLogBus.appendFor(id, line)
     }
 
     override fun onPause() {

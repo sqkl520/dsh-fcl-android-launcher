@@ -45,7 +45,12 @@ import kotlinx.coroutines.withContext
  * | 动画速度 | `ThemeEngine.setAnimationSpeed` + 持久化 |
  * | 忽略刘海（全屏） | `ThemeEngine.applyAndSave(context, window, checked)` |
  * | 日志导出 | 复制 dsh 日志到剪贴板 |
- * 实例级配置（API Key / 模型 / profile / 端口）由 `DshSettingsActivity` 独立承载。
+ *
+ * 本页**只放设置项**，不放导航项：原先「运行日志 / dsh 版本管理 / 实例管理」三行只是
+ * 跳去外壳的其他 tab，等于页内第二份导航菜单，已删除 —— 日志改由设置页内的「日志」子页承载，
+ * 版本与实例本来就有主入口。
+ *
+ * 实例级配置（API Key / 模型 / profile / 端口）在**实例页的实例详情**里，不再是独立页面。
  */
 class DshLauncherSettingsPage(
     context: Context,
@@ -113,9 +118,6 @@ class DshLauncherSettingsPage(
             DshLauncherSettingAdapter.ActionType.THEME_COLOR2_DARK ->
                 pickColor(_getColor2Dark(), { ThemeEngine.getInstance().applyColor2Dark(it) }, { applyAndSaveColor2Dark(it) })
             DshLauncherSettingAdapter.ActionType.RUNTIME_CHECK -> verifyRuntime()
-            DshLauncherSettingAdapter.ActionType.OPEN_LOGS -> host.switchTab(DshShellHost.TAB_LOGS)
-            DshLauncherSettingAdapter.ActionType.OPEN_DOWNLOAD -> host.switchTab(DshShellHost.TAB_DOWNLOAD)
-            DshLauncherSettingAdapter.ActionType.OPEN_INSTANCE -> host.switchTab(DshShellHost.TAB_INSTANCES)
             DshLauncherSettingAdapter.ActionType.ABOUT -> showAbout()
             DshLauncherSettingAdapter.ActionType.EXPORT_LOGS -> exportLogs()
             else -> Unit

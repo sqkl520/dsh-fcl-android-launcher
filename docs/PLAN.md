@@ -202,6 +202,9 @@
 - `DshVersionAdapter.kt`（92）— 版本行（DiffUtil、安装中态）
 - `DshLogsActivity.kt`（94）— 日志页（revision 重绘、自动滚动开关、复制、落盘路径）
 - `DshSettingsActivity.kt`（241）— **新增**：实例设置页（API Key / 名称 / 模型 / profile / 端口 / 自检 / 重装 / 删除）
+  > ⚠️ **已不存在**（2026-10-07）：改成**实例页内的临时页**（页内 3 tab：运行 / 日志 / 配置），
+  > 不再有独立 Activity。API Key 行也已从详情页移除（Key 交给 dsh 自己的页面填）。
+  > （注意与阶段 2 那个同名的"设置页 Activity"区分 —— 那一个是外壳设置 tab 的前身。）
 - `DshWebViewActivity.kt`（272）— WebView（完整状态机、401 兜底、cookie 持久化、安全收紧）
 
 ### 4.4 脚本
@@ -320,7 +323,8 @@
 4. **真机联调**：补齐 proot 二进制（jniLibs）+ rootfs.tar.xz → 首启解压 → 下载页装 dsh → 启动 → WebView 出 UI。
 5. **打磨**
    - ~~设置页：API key 录入 UI（接 `DshCredentials`）、模型选择、端口~~ ✅ 已完成
-     （第二轮：新增 `ui/DshSettingsActivity`，含"测试连接"与 Keystore 加密存取）
+     （第二轮：新增实例设置页，含"测试连接"与 Keystore 加密存取）
+     > ⚠️ 2026-10-07 起该页面已并入**实例详情临时页**；API Key 行已移除（交给 dsh 自己的页面填）。
    - ~~实例重命名、体积清理入口、错误提示~~ ✅ 已完成（第二轮；重命名/体积在设置页，错误提示落到行内 + 对话框）
    - 仍未做：下载断点续传、Landlock 弱隔离提示、实例配置导出/导入。
    - 若要做正式入口：在主界面加独立按钮/菜单项（现为长按"设置"的隐藏入口）。

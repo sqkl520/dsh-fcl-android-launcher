@@ -57,13 +57,7 @@
             android:screenOrientation="sensorLandscape"
             tools:ignore="LockedOrientationActivity" />
 
-        <!-- dsh 详情页：实例设置 / WebView（均经 DshMainActivity 的 singleTop 复用外壳实例） -->
-        <activity
-            android:name="com.dsh.ui.DshSettingsActivity"
-            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
-            android:screenOrientation="sensorLandscape"
-            android:windowSoftInputMode="adjustResize"
-            tools:ignore="LockedOrientationActivity" />
+        <!-- dsh WebUI（独立 Activity：要整屏，且 dsh 自己管键盘/滚动，放外壳里反而互相干扰） -->
         <activity
             android:name="com.dsh.ui.DshWebViewActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
