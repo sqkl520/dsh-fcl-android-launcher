@@ -33,6 +33,9 @@
         <string name="dsh_action_install">Install</string>
         <string name="dsh_action_logs">Logs</string>
         <string name="dsh_action_more">More</string>
+        <!-- 详情页「运行」tab 的动作行。不复用 dsh_action_open_webui：那条是旧主界面布局里的
+             静态按钮文案，等旧布局退役后要一起删；详情页需要一条独立的、可随页面走的条目 -->
+        <string name="dsh_action_open_web">Open UI</string>
         <string name="dsh_action_prepare_runtime">Prepare runtime</string>
         <string name="dsh_action_refresh">Refresh</string>
         <string name="dsh_action_reinstall">Reinstall</string>
@@ -70,6 +73,15 @@
         <string name="dsh_install_skipped">%1$s is already installed — you can start it now</string>
         <string name="dsh_instance_gone">This instance no longer exists</string>
         <string name="dsh_instance_subtitle">v%1$s · port %2$s · %3$s</string>
+        <!-- 实例详情页：一个实例 = 一个页面，页内再用 tab 切运行/日志/配置。
+             标题带上实例名，是因为从通知或外壳菜单直接跳进来时用户看不到来源列表 -->
+        <string name="dsh_instance_detail_title">Instance: %1$s</string>
+        <string name="dsh_instance_detail_tab_run">Run</string>
+        <string name="dsh_instance_detail_tab_logs">Logs</string>
+        <string name="dsh_instance_detail_tab_config">Config</string>
+        <string name="dsh_instance_status_row">Status</string>
+        <!-- 详情页是在实例已消失（在别处被删）时也可能被打开的页面，需要一句兜底文案 -->
+        <string name="dsh_instance_detail_empty">This instance no longer exists</string>
         <string name="dsh_instances_empty">No instances yet.\nTap "Download" to install a dsh version.</string>
         <string name="dsh_instances_title">DeepSeek Harness</string>
         <string name="dsh_key_absent">API key: not configured</string>
@@ -92,6 +104,10 @@
         <string name="dsh_logs_copied">Logs copied to clipboard</string>
         <string name="dsh_logs_empty">No logs yet</string>
         <string name="dsh_logs_path">File: %1$s</string>
+        <!-- 日志页顶部的范围标示：同一个日志组件要同时服务"全部实例"与"单个实例"两种视角，
+             不标出来用户无法判断自己看的是谁的日志 -->
+        <string name="dsh_logs_scope_app">App log (all instances)</string>
+        <string name="dsh_logs_scope_instance">Log of %1$s</string>
         <string name="dsh_logs_title">Runtime log</string>
         <string name="dsh_name_required">Name can\'t be empty</string>
         <string name="dsh_no_key_hint">No API key configured for this instance; the UI will start but chats will fail.</string>
@@ -143,12 +159,8 @@
         <string name="dsh_webview_stopped">dsh is not running. Go back and start the instance.</string>
         <string name="dsh_webview_stopping">Stopping dsh…</string>
         <string name="dsh_tab_instances">Instances</string>
-    <string name="dsh_tab_manage">Manage</string>
-    <string name="dsh_tab_download">Download</string>
-    <string name="dsh_tab_logs">Logs</string>
+    <string name="dsh_tab_versions">Versions</string>
     <string name="dsh_tab_settings">Settings</string>
-    <string name="dsh_manage_title">Manage</string>
-    <string name="dsh_manage_placeholder">Plugin management is coming soon.</string>
 
     <!-- 关于页（阶段 2 设置页内，暂存备用） -->
     <string name="dsh_about_full_name" translatable="false">DeepSeek Harness FCL Android Launcher</string>
@@ -207,6 +219,8 @@ Version %1$s</string>
     <string name="dsh_about_link_proot">proot engine (oonid/pr)</string>
     <string name="dsh_about_link_license">License: GPL-3.0</string>
     <string name="dsh_settings_tab_launcher">Launcher</string>
+    <!-- 设置页的第二个子页：主 tab 里的「日志」降级到这里，看的是 App 级日志 -->
+    <string name="dsh_settings_tab_logs">Logs</string>
     <string name="dsh_about_tab">About</string>
     <string name="color_picker_title">Pick a color</string>
     <string name="color_picker_arrow">→</string>

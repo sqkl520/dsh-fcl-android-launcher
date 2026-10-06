@@ -96,9 +96,6 @@ class DshLauncherSettingAdapter(
         LANGUAGE,
         THEME_MODE,
         RUNTIME_CHECK,
-        OPEN_LOGS,
-        OPEN_DOWNLOAD,
-        OPEN_INSTANCE,
         EXPORT_LOGS,
         ABOUT,
         // —— 开关行 ——
@@ -224,20 +221,14 @@ class DshLauncherSettingAdapter(
                 R.string.dsh_setting_runtime_check, R.string.dsh_setting_runtime_check_desc,
                 R.string.dsh_action_verify_runtime, ActionType.RUNTIME_CHECK
             ),
-            Row.Action(
-                R.string.dsh_setting_logs, R.string.dsh_setting_logs_desc,
-                R.string.dsh_action_open, ActionType.OPEN_LOGS
-            ),
 
+            // 这里原本还有「运行日志 / dsh 版本管理 / 实例管理」三行跳转 —— 已删除。
+            // 原因：它们不做任何事，只是 `host.switchTab(...)`，等于在设置页里又摆了一份
+            // 左菜单（实例 / 版本 / 设置）。同一组目的地有两个入口，用户不知道该记哪一个；
+            // 日志更是直接改成了本设置页的「日志」子页，从设置里点进去比跳出去更短。
             Row.Group(R.string.dsh_setting_group_dsh),
-            Row.Action(
-                R.string.dsh_setting_download, R.string.dsh_setting_download_desc,
-                R.string.dsh_action_open, ActionType.OPEN_DOWNLOAD
-            ),
-            Row.Action(
-                R.string.dsh_setting_instance, R.string.dsh_setting_instance_desc,
-                R.string.dsh_action_open, ActionType.OPEN_INSTANCE
-            ),
+            // 组里只剩这一行，仍然保留组头：它做的是**动作**（把日志复制到剪贴板），
+            // 不是导航；"与 dsh 相关"这个语义仍在，去掉组头会让它掉进上一组、读起来像运行环境的一部分。
             Row.Action(
                 R.string.dsh_setting_export_logs, R.string.dsh_setting_export_logs_desc,
                 R.string.dsh_action_copy, ActionType.EXPORT_LOGS

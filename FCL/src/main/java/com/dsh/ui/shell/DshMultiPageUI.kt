@@ -238,6 +238,21 @@ abstract class DshMultiPageUI(
     /** 注册标题回调：栈只**上报**标题，不改外壳标题（外壳默认不渲染，FCL 原味） */
     fun setOnTempPageTitleChanged(l: (CharSequence?) -> Unit) = tempStack.setOnTitleChanged(l)
 
+    /**
+     * 注册"某一层临时页被摘掉"的上报（见 [DshTempPageStack.setOnPageDismissed]）。
+     *
+     * ## 为什么基类必须转发这一条
+     * 临时页**不是**子类弹的 —— 外壳的返回链第 ③ 级直接调 [dismissCurrentTempPage]，
+     * 完全不经过子类。所以子类没法靠"自己调弹栈时顺手清理"来收尾：它得知道**栈自己**摘掉了谁。
+     * 这条上报就是那个唯一可靠的信号（`removeView` 之后立刻触发，弹栈 / 清栈 / 宿主销毁三条路径都覆盖）。
+     *
+     * 典型用途：临时页承载的是带协程作用域的页面对象（本项目里是 [DshPageUI]），
+     * 页面被摘掉后必须有人调 `destroy()` 取消它 —— 否则页面没了、订阅还在跑。
+     *
+     * 传 `null` 取消注册。
+     */
+    fun setOnTempPageDismissed(l: ((View) -> Unit)?) = tempStack.setOnPageDismissed(l)
+
     override fun destroy() {
         // 顺序有讲究：**先清临时页，再销毁 tab 子页**。
         // 临时页是压在子页之上的视图，且栈内部持有对 pager（内容区）的引用；先清栈能保证

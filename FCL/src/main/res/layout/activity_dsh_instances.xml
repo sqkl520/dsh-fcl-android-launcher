@@ -1,20 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  dsh 实例列表页（首页）。FCL 范式（见 docs/design/app-shell.md §2.5）：
-  FCL 的页面不在页内放标题、也不放页面级动作行 —— 页名由外壳底部的 FCLDynamicIsland 显示，
-  页面切换/日志/下载等入口都在左侧菜单里，页内保持干净。
+  dsh 实例列表 —— 现在是「实例」tab 的**子页**内容（不是那一页本身）。
+  「实例」tab 本体是个多页容器（只为拿它的临时页栈来承载实例详情），本布局是它唯一的子页：
+  **进行中任务区** + 实例列表 + 空态提示。
 
-  内容：**进行中任务区**（所有正在跑的任务；无任务时整块隐藏）+ 实例列表 + 空态提示。
+  FCL 范式（见 docs/design/app-shell.md §2.5）：FCL 的页面不在页内放标题、也不放页面级动作行 ——
+  页名由外壳底部的 FCLDynamicIsland 显示，页面切换等入口都在左侧菜单里，页内保持干净。
+
   原「运行时底座未就绪」横幅已移除：它的职责由「首启准备运行环境页」（未就绪时）与
   任务区（进行中/失败时）承担，留着会出现同一件事两处显示、且失败原因被覆盖。
+
+  左右留白 10dp 与侧边菜单 / 右面板 / 详情页列表对齐（FCL 的列表留白规范那一档）。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:paddingStart="12dp"
+    android:paddingStart="10dp"
     android:paddingTop="10dp"
-    android:paddingEnd="12dp">
+    android:paddingEnd="10dp">
 
     <!-- ===== 进行中任务区 ===== -->
     <com.tungsten.fcllibrary.component.view.FCLConstraintLayout

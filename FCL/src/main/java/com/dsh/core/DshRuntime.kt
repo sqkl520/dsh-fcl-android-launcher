@@ -184,8 +184,11 @@ object DshRuntime {
         }
     }
 
-    /** 认领来的 proot（没有 Process 句柄，只能按 pid 操作）：同样先 SIGQUIT 再 TERM/KILL */
-    private class PidHandle(override val pid: Long) : Handle {
+    /**
+     * 认领来的 proot（没有 Process 句柄，只能按 pid 操作）：同样先 SIGQUIT 再 TERM/KILL。
+     * [instanceId] 只用于日志归属（这个句柄属于哪个实例），不参与进程操作。
+     */
+    private class PidHandle(override val pid: Long, private val instanceId: String) : Handle {
         override fun isAlive(): Boolean = ProcessUtil.isAlive(pid)
         override suspend fun terminate(graceMillis: Long) = withContext(Dispatchers.IO) {
             if (!isAlive()) return@withContext
@@ -198,10 +201,14 @@ object DshRuntime {
                     kotlinx.coroutines.delay(100)
                 }
                 if (!isAlive()) return@withContext
-                ProcessUtil.kill(pid, (graceMillis - (System.currentTimeMillis() - startedAt)).coerceAtLeast(500))
+                ProcessUtil.kill(
+                    pid,
+                    (graceMillis - (System.currentTimeMillis() - startedAt)).coerceAtLeast(500),
+                    logInstanceId = instanceId
+                )
                 return@withContext
             }
-            ProcessUtil.kill(pid, graceMillis)
+            ProcessUtil.kill(pid, graceMillis, logInstanceId = instanceId)
         }
     }
 
@@ -287,7 +294,8 @@ object DshRuntime {
 
         // 同一实例已经在跑：直接复用
         if (runningInstanceId() == instance.id) {
-            DshLogBus.append("[runtime] ${instance.name} 已在运行，复用现有进程")
+            // 实例级：讲的是"这个实例自己已经在跑"，属于它本次生命周期的一部分
+            DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已在运行，复用现有进程")
             return StartOutcome.Started
         }
         // 别的实例在跑：先停
@@ -318,7 +326,9 @@ object DshRuntime {
         val instancePathInRootfs = "${ProotCommand.GUEST_ROOT}/instances/${instance.id}"
         val apiKey = DshCredentials.load(context, instance.id)
         if (apiKey == null) {
-            DshLogBus.append(
+            // 实例级：缺的是**这个实例**的密钥，用户要在该实例的详情页看到原因
+            DshLogBus.appendFor(
+                instance.id,
                 "[runtime] 警告：${instance.name} 未配置可用 API Key，界面能起但对话会失败"
             )
         } else {
@@ -358,7 +368,10 @@ object DshRuntime {
 
         _state.value = State.Starting(instance.id, instance.name)
         _running.value = Running(instance.id, launchPort, null)
-        DshLogBus.append(
+        // 实例级：本次启动的参数（版本/profile/端口）是"这个实例自己的运行记录"，
+        // 用户点开它的日志页第一眼就该看到
+        DshLogBus.appendFor(
+            instance.id,
             "[runtime] 启动 ${instance.name}（dsh ${instance.dshVersion ?: "?"}，" +
                 "profile=${instance.profile}，端口=${if (launchPort == 0) "自动" else launchPort.toString()}）"
         )
@@ -372,7 +385,8 @@ object DshRuntime {
             )
         } catch (e: Exception) {
             val reason = e.message ?: e.toString()
-            DshLogBus.append("[runtime] 启动失败：$reason")
+            // 实例级：启动失败归因给这个实例（"为什么它起不来"是这个实例页最该回答的问题）
+            DshLogBus.appendFor(instance.id, "[runtime] 启动失败：$reason")
             _state.value = State.Failed(instance.id, instance.name, reason)
             _running.value = null
             return StartOutcome.Failed(reason)
@@ -386,7 +400,11 @@ object DshRuntime {
         } else {
             // 拿不到 pid（Android 的 Process 实现没有 pid() 且反射失败）时，孤儿进程无法被认领/清理，
             // 明确记一行，避免将来\"为什么后台有个 300MB 的 node 杀不掉\"无从查起。
-            DshLogBus.append("[runtime] 警告：无法取得 proot 进程 pid，孤儿进程自动清理/认领将不可用")
+            // 实例级：这条警告是"这个实例的后台残留将无法自动清理"，属于它的运行环境问题
+            DshLogBus.appendFor(
+                instance.id,
+                "[runtime] 警告：无法取得 proot 进程 pid，孤儿进程自动清理/认领将不可用"
+            )
         }
 
         // 启动超时看门狗。★ 先取消上一次：兜底重试会再走一遍这里，若不取消，
@@ -402,7 +420,8 @@ object DshRuntime {
             val st = _state.value
             if (st is State.Starting && st.instanceId == instance.id) {
                 val reason = context.getString(R.string.dsh_reason_start_timeout, STARTUP_TIMEOUT_MS / 1000)
-                DshLogBus.append("[runtime] 启动超时：$reason")
+                // 实例级：超时是"这个实例起不来"，实例页要能看到原因
+                DshLogBus.appendFor(instance.id, "[runtime] 启动超时：$reason")
                 failAndCleanup(instance, reason)
             }
         }
@@ -428,12 +447,14 @@ object DshRuntime {
         if (runningInstanceId() != null) return false
         stopRequestedFor = null
 
-        handle = PidHandle(meta.pid)
+        handle = PidHandle(meta.pid, instance.id)
         nameOf[instance.id] = instance.name
         // 认领来的实例同样要知道 node 的 pid：停止时要按它终止 rootfs 内的 node（B10）。
         nodePid = readNodePidFile(instance.id) ?: 0
         _state.value = State.Running(instance.id, instance.name, "http://127.0.0.1:$port/", port, adopted = true)
         _running.value = Running(instance.id, port, "http://127.0.0.1:$port/")
+        // ★ 保持全局：这是**认领巡检**（App 冷启时跨实例的恢复动作 —— "上次被系统杀掉时它还活着，
+        // 直接复用"），不是某个实例自己跑出来的输出。归到全局才能看清"这次冷启到底认领/清理了什么"。
         DshLogBus.append("[runtime] 认领仍在运行的实例 ${instance.name}（pid=${meta.pid}，端口=$port）")
         watchAdopted(instance, meta.pid, port)
         return true
@@ -456,6 +477,7 @@ object DshRuntime {
                 if (st !is State.Running || !st.adopted || st.instanceId != instance.id) return@launch
                 if (ProcessUtil.isAlive(pid)) continue
                 if (Probe.isPortOpen(port, 800)) continue
+                // ★ 保持全局：同属**认领巡检**（上一行的同一条线索），跨实例的存活判定
                 DshLogBus.append("[runtime] 认领的实例 ${instance.name} 已不再运行（pid=$pid 已退出，端口 $port 已关闭）")
                 ProcessUtil.removePidFile(instance.id)
                 handle = null
@@ -488,7 +510,8 @@ object DshRuntime {
         val name = nameOf[instanceId] ?: instanceId
         stopRequestedFor = instanceId // 标记：接下来的进程退出是\"我们要它停\"，不是崩溃
         _state.value = State.Stopping(instanceId, name)
-        DshLogBus.append("[runtime] 停止 $name（$reason）")
+        // 实例级：停止动作发生在该实例的生命周期里，实例页要能看到"谁在什么时候停了它"
+        DshLogBus.appendFor(instanceId, "[runtime] 停止 $name（$reason）")
         val h = handle
         handle = null
         val np = nodePid
@@ -497,7 +520,8 @@ object DshRuntime {
         // Android 的 java.lang.Process 没有 pid()，反射拿不到就返回 -1）。
         // 记一行是为了区分"系统起不到 pid"（只影响后台残留清理与状态巡检）与
         // "node pid 也拿不到"（那才是真的无法保证停止干净）。
-        DshLogBus.append(
+        DshLogBus.appendFor(
+            instanceId,
             "[runtime] 停止：proot pid=${h?.pid?.takeIf { it > 0 } ?: "不可用"}，" +
                 "node pid=${np.takeIf { it > 0 } ?: "见 dsh-node.pid"}"
         )
@@ -517,7 +541,7 @@ object DshRuntime {
             terminateNodeProcess(instanceId, np)
             val prootPid = h?.pid ?: 0
             runCatching { h?.terminate(5000) }
-            verifyProotGone(prootPid)
+            verifyProotGone(instanceId, prootPid)
             ProcessUtil.removePidFile(instanceId)
             deleteNodePidFile(instanceId)
             // 关键：终止是异步的（最长 5s）。期间用户可能已经启动了新实例，
@@ -530,7 +554,8 @@ object DshRuntime {
                 if (cur is State.Stopping && cur.instanceId == instanceId) {
                     _state.value = State.Idle
                     stopRequestedFor = null
-                    DshLogBus.append("[runtime] $name 已停止")
+                    // 实例级：该实例生命周期的收尾（对应上面的"停止"），实例页要看到闭环
+                    DshLogBus.appendFor(instanceId, "[runtime] $name 已停止")
                     stopServiceIfIdle()
                 }
             }
@@ -561,12 +586,15 @@ object DshRuntime {
         val cmd = ProcessUtil.cmdline(pid)
         if (cmd != null && !looksLikeNodeProcess(cmd)) {
             // pid 已被系统复用给别的进程：放手，交给 proot 侧收尾（绝不误杀）
-            DshLogBus.append("[runtime] pid=$pid 已不属于 dsh node（cmdline 不匹配），跳过按 pid 终止")
+            // 实例级：终止的是**这个实例的** node，"跳过终止"这条线索属于它（否则实例页上只会
+            // 看到"停止"却没有下文，看不出停止其实没停干净）
+            DshLogBus.appendFor(instanceId, "[runtime] pid=$pid 已不属于 dsh node（cmdline 不匹配），跳过按 pid 终止")
             deleteNodePidFile(instanceId)
             return
         }
-        DshLogBus.append("[runtime] 终止实例 $instanceId 的 node（pid=$pid）")
-        ProcessUtil.killBlocking(pid, NODE_KILL_GRACE_MS, expectNode = true)
+        DshLogBus.appendFor(instanceId, "[runtime] 终止实例 $instanceId 的 node（pid=$pid）")
+        // 归属带上 instanceId：killBlocking 内部还有一次身份校验，那里"没杀成"的日志同样属于这个实例
+        ProcessUtil.killBlocking(pid, NODE_KILL_GRACE_MS, expectNode = true, logInstanceId = instanceId)
         deleteNodePidFile(instanceId)
     }
 
@@ -615,7 +643,9 @@ object DshRuntime {
         val wanted = instance.port
         if (wanted <= 0) return 0
         if (!Probe.isPortOpen(wanted, 300)) return wanted
-        DshLogBus.append(
+        // 实例级：被换掉的是**这个实例**的端口，用户需要在自己的实例页知道"端口为什么变了"
+        DshLogBus.appendFor(
+            instance.id,
             "[runtime] 端口 $wanted 已被占用（可能是上一轮没退干净的 node，或其它应用），" +
                 "本次改用系统分配的端口；启动后端口会回写到实例配置"
         )
@@ -637,17 +667,20 @@ object DshRuntime {
      * @param prootPid 停止前记下的 proot pid；<=0（拿不到 pid）时跳过校验 —— 那种情况下
      *                 "孤儿认领/清理"这条兜底本来也是断的，校验没有意义。
      */
-    private suspend fun verifyProotGone(prootPid: Long) {
+    private suspend fun verifyProotGone(instanceId: String, prootPid: Long) {
         if (prootPid <= 0) return
         val deadline = System.currentTimeMillis() + PROOT_EXIT_GRACE_MS
         while (System.currentTimeMillis() < deadline && ProcessUtil.isAlive(prootPid)) {
             kotlinx.coroutines.delay(100)
         }
         if (!ProcessUtil.isAlive(prootPid)) {
-            DshLogBus.append("[runtime] proot 已退出（pid=$prootPid）")
+            // 实例级：这是"这个实例的 proot 确实走了"的结论，实例页要能看到（否则只有"停止"没有下文）
+            DshLogBus.appendFor(instanceId, "[runtime] proot 已退出（pid=$prootPid）")
             return
         }
-        DshLogBus.append(
+        // 实例级：这条"停止没停干净"的警告正是排障时要找的，必须出现在该实例自己的日志里
+        DshLogBus.appendFor(
+            instanceId,
             "[runtime] 警告：停止后 proot 仍存活（pid=$prootPid）；" +
                 "它可能还带着 rootfs 内的进程 —— 下次启动若端口被占，实例会自动改用其它端口"
         )
@@ -719,9 +752,16 @@ object DshRuntime {
         stopServiceIfIdle()
     }
 
-    /** 最近若干行日志（去掉时间戳前缀），用于失败归因 */
-    private fun recentLogTail(count: Int = 25): List<String> =
-        DshLogBus.snapshot.value.lines.takeLast(count).map { it.substringAfter("  ") }
+    /**
+     * 某实例的最近若干行（去掉时间戳前缀），用于**该实例**的失败归因。
+     *
+     * ★ 为什么读实例流而不是全局流：seccomp 误判、`EADDRINUSE` 归因、失败原因里附的"最近输出"
+     *   都是在判断"这个实例为什么起不来"。全局流里混着别的实例、别的安装、底座解压的输出，
+     *   拿它做判据会把别人的行当成本实例的线索（例如别的一次安装里的 `Error: ...` 触发误判），
+     *   附到错误提示里的"最近输出"也会是别人的东西 —— 与实例页看到的内容对不上。
+     */
+    private fun recentLogTail(instanceId: String, count: Int = 25): List<String> =
+        DshLogBus.snapshotFor(instanceId).value.lines.takeLast(count).map { it.substringAfter("  ") }
 
     /**
      * 判断"进程在就绪前退出"是否像是 proot 与内核 ptrace/seccomp 不兼容。
@@ -746,21 +786,28 @@ object DshRuntime {
     private fun retryIfSeccompLooksGuilty(instance: DshInstance, code: Int): Boolean {
         val ctx = appContext ?: return false
         if (seccompFallbackUsed.contains(instance.id)) return false
-        if (!looksLikeSeccompTrouble(code, recentLogTail())) return false
+        // 判据只看**本实例**的输出（见 [recentLogTail] 的说明），避免被别的实例的行带偏
+        if (!looksLikeSeccompTrouble(code, recentLogTail(instance.id))) return false
         seccompFallbackUsed.add(instance.id)
-        DshLogBus.append(
+        DshLogBus.appendFor(
+            instance.id,
             "[runtime] ${instance.name} 在就绪前退出（code=$code），疑似 proot 与内核 seccomp/ptrace 不兼容；" +
                 "自动带 PROOT_NO_SECCOMP=1 重试一次"
         )
         scope.launch {
             runCatching { startLocked(ctx, instance, noSeccomp = true) }
-                .onFailure { DshLogBus.append("[runtime] seccomp 兜底重试失败：${it.message}") }
+                .onFailure {
+                    DshLogBus.appendFor(instance.id, "[runtime] seccomp 兜底重试失败：${it.message}")
+                }
         }
         return true
     }
 
     private fun onProcessLine(instance: DshInstance, line: String) {
-        DshLogBus.append(line)
+        // 实例级：这是**该实例的进程**自己打印的 stdout/stderr（dsh 的 web 输出、start-dsh.sh 的
+        // 就绪/失败标记）。"从开始到停止只显示这个实例发出的日志"要的就是这些行 —— 它们同时进
+        // 全局流，所以排障时的"时间线全貌"不会丢（见 DshLogBus.appendFor 的说明）。
+        DshLogBus.appendFor(instance.id, line)
         // 脚本在 `node ... &` 之后立刻打印它，并在实例目录写下同一对值（见 start-dsh.sh）。
         // 记进内存是给"pid 文件被脚本收尾删掉、但进程还没死透"这种边角情况兜底的。
         NODE_PID_LINE.find(line)?.let { m ->
@@ -794,7 +841,9 @@ object DshRuntime {
         if (instance.port != port) {
             DshInstances.updateConfig(instance.id, port = port)
         }
-        DshLogBus.append("[runtime] ${instance.name} 就绪：端口 $port")
+        // 实例级：就绪是本实例生命周期里最该被看见的一行（"什么时候开始能用"），
+        // 端口也是它自己的
+        DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 就绪：端口 $port")
     }
 
     private fun onProcessExit(instance: DshInstance, code: Int) {
@@ -805,7 +854,10 @@ object DshRuntime {
         // 现在：只有"当前状态确实属于本实例"才允许动状态与句柄，否则只做无副作用的清理。
         val cur = _state.value
         if (ownerOf(cur) != instance.id) {
-            DshLogBus.append(
+            // 实例级：说的仍是"A 的进程退出了"，A 的实例页应该看到自己的进程结束了；
+            // 括号里那半句（状态已被别人接管）是跨实例竞态的线索，但主体事实属于 A。
+            DshLogBus.appendFor(
+                instance.id,
                 "[runtime] ${instance.name} 的进程已退出（code=$code），" +
                     "但当前状态不属于它（现状：${cur::class.simpleName}），仅清理 pid 文件"
             )
@@ -825,12 +877,13 @@ object DshRuntime {
             // 主动停止导致的退出（SIGTERM→143 等）：这是预期内的，落到 Idle，不要报成崩溃。
             stopRequestedFor = null
             setStateIfOwned(instance.id) { State.Idle }
-            DshLogBus.append("[runtime] ${instance.name} 已停止（code=$code）")
+            // 实例级：退出码是**这个实例的**收尾事实
+            DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已停止（code=$code）")
         } else if (cur is State.Failed) {
             // 失败后的收尾（例如启动超时已经把进程收掉）：保留失败状态与原因，别让"超时"被改写成"进程退出"
-            DshLogBus.append("[runtime] ${instance.name} 的失败进程已退出（code=$code），保留失败原因")
+            DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 的失败进程已退出（code=$code），保留失败原因")
         } else if (cur is State.Exited) {
-            DshLogBus.append("[runtime] ${instance.name} 的进程已退出（code=$code）")
+            DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 的进程已退出（code=$code）")
         } else if (cur is State.Starting) {
             // 还没就绪就退了：先看是不是 proot/seccomp 不兼容，是的话自动兜底重试一次；
             // 否则把最后几行日志作为线索抛给界面。
@@ -839,38 +892,53 @@ object DshRuntime {
             //   "退出码 1"：必须让用户看到"端口被占"以及"下次会自动换端口"。
             //   （正常情况下脚本的预检已经把端口换掉了；能走到这里说明预检之后端口又被抢走 ——
             //   例如另一个 dsh 实例 / 别的应用在同一瞬间 bind 了同一个端口。）
-            val portInUse = recentLogTail().any {
+            // ★ 只看本实例的输出：拿全局流判定会把别的实例/别的安装里的 EADDRINUSE 当成本实例的
+            //   端口冲突（那会让一次无关的失败被归错因，重试也换不到端口）。
+            val portInUse = recentLogTail(instance.id).any {
                 it.contains("reason=port-in-use") || it.contains("EADDRINUSE")
             }
             if (portInUse) {
                 // 文案不放进 strings.xml（本轮改动范围只允许三个文件）：直接给一句可操作的中文。
                 val reason = "端口被占用（EADDRINUSE）。重试启动会自动改用系统分配的端口。"
                 setStateIfOwned(instance.id) { State.Failed(instance.id, instance.name, reason) }
-                DshLogBus.append("[runtime] 启动失败：$reason")
+                DshLogBus.appendFor(instance.id, "[runtime] 启动失败：$reason")
             } else if (!retryIfSeccompLooksGuilty(instance, code)) {
                 val reason = appendLastLinesHint(
+                    instance.id,
                     appContext?.getString(R.string.dsh_reason_exited_early, code)
                         ?: "进程提前退出（code=$code）"
                 )
                 setStateIfOwned(instance.id) { State.Failed(instance.id, instance.name, reason) }
-                DshLogBus.append("[runtime] 启动失败：$reason")
+                DshLogBus.appendFor(instance.id, "[runtime] 启动失败：$reason")
             }
         } else {
             // 就绪后正常/异常结束（例如 agent 自己退出）
-            DshLogBus.append("[runtime] 进程退出，code=$code")
+            DshLogBus.appendFor(instance.id, "[runtime] 进程退出，code=$code")
             setStateIfOwned(instance.id) { State.Exited(instance.id, instance.name, code) }
         }
         stopServiceIfIdle()
     }
 
-    private fun appendLastLinesHint(base: String): String {
-        val tail = DshLogBus.snapshot.value.lines.takeLast(3)
+    /**
+     * 把"最近几行输出"拼进失败原因。
+     * ★ 取的是**该实例**的末尾几行（与实例页看到的一致）—— 用全局流末尾会出现"错误提示里引用了
+     *   别的实例的输出"这种没法对照的怪现象。
+     */
+    private fun appendLastLinesHint(instanceId: String, base: String): String {
+        val tail = DshLogBus.snapshotFor(instanceId).value.lines.takeLast(3)
             .joinToString(" / ") { it.substringAfter("  ") }
             .take(240)
         return if (tail.isBlank()) base else "$base；最近输出：$tail"
     }
 
-    fun clearLogs() = DshLogBus.clear()
+    /**
+     * 清空日志。
+     * @param instanceId null（默认，行为与改造前一致）= 清全局流；给 id = 只清该实例的流
+     *                   （实例详情页的"清空"按钮要的是这个：清掉别的实例或 App 级事件都不是它的语义）
+     */
+    fun clearLogs(instanceId: String? = null) {
+        if (instanceId == null) DshLogBus.clear() else DshLogBus.clearFor(instanceId)
+    }
 
     /** 状态复位（界面确认过失败信息后调用） */
     fun resetState() {
@@ -964,8 +1032,12 @@ object ProcessUtil {
         File("/proc/$pid/cmdline").readText().replace('\u0000', ' ')
     }.getOrNull()
 
-    suspend fun kill(pid: Long, graceMillis: Long = 5000, expectNode: Boolean = false) =
-        withContext(Dispatchers.IO) { killBlocking(pid, graceMillis, expectNode) }
+    suspend fun kill(
+        pid: Long,
+        graceMillis: Long = 5000,
+        expectNode: Boolean = false,
+        logInstanceId: String? = null
+    ) = withContext(Dispatchers.IO) { killBlocking(pid, graceMillis, expectNode, logInstanceId) }
 
     /**
      * [kill] 的阻塞版。
@@ -973,8 +1045,16 @@ object ProcessUtil {
      * **为什么要有阻塞版**：停止路径里有两处不在协程里 —— [DshRuntime.startLocked]（`@Synchronized`，
      * 启动前要先把上一轮残留的 node 收掉，否则它占着端口）与认领巡检。它们都在 IO 线程上执行
      * （见 DshLauncher 的 `withContext(Dispatchers.IO)`），阻塞等待 TERM→KILL 的宽限期是安全的。
+     *
+     * @param logInstanceId 这次终止是**为哪个实例**做的（用于日志归属）。给 id = 该实例的流；
+     *                      null = 全局流（调用方也说不清是哪个实例时，宁可归全局也不要猜）。
      */
-    fun killBlocking(pid: Long, graceMillis: Long = 5000, expectNode: Boolean = false) {
+    fun killBlocking(
+        pid: Long,
+        graceMillis: Long = 5000,
+        expectNode: Boolean = false,
+        logInstanceId: String? = null
+    ) {
         if (!isAlive(pid)) return
         // ★ 身份校验（第五轮修复）：pid 是会被系统复用的。停止"认领来的孤儿进程"时（PidHandle），
         // 我们手里只有一个上次记下的 pid；如果那个进程早就退出了、pid 又被别的进程用掉，
@@ -988,7 +1068,9 @@ object ProcessUtil {
             cmd == null || cmd.contains("proot")
         }
         if (!identityOk) {
-            DshLogBus.append("[runtime] pid=$pid 已不属于 dsh（cmdline 不匹配），跳过清理")
+            // 实例级（有归属时）：这条"没杀成"的线索属于发起终止的那个实例 —— 它的实例页上
+            // 只有"停止"却看不到下文，就会以为停干净了（而 pid 其实还在，下次启动可能端口冲突）。
+            logFor(logInstanceId, "[runtime] pid=$pid 已不属于 dsh（cmdline 不匹配），跳过清理")
             removePidFileByPid(pid)
             return
         }
@@ -1003,6 +1085,11 @@ object ProcessUtil {
         removePidFileByPid(pid)
     }
 
+    /** 日志归属的小工具：[instanceId] 为空时进全局流（不猜实例） */
+    private fun logFor(instanceId: String?, line: String) {
+        if (instanceId == null) DshLogBus.append(line) else DshLogBus.appendFor(instanceId, line)
+    }
+
     private fun removePidFileByPid(pid: Long) {
         runCatching {
             File(DshPaths.INSTANCES_DIR).listFiles()?.forEach { dir ->
@@ -1015,6 +1102,11 @@ object ProcessUtil {
     /**
      * App 冷启时清理"上次进程被系统杀掉后留下的孤儿"。
      * 只清理 cmdline 里确实是我们这个实例的 proot 进程，避免误伤。
+     *
+     * ★ 这两行保持**全局**：它属于"pid 文件 + 孤儿进程"这套跨实例的清理机制
+     *   （`removePidFileByPid` 会扫所有实例目录找同一个 pid），是启动器在整理**进程现场**，
+     *   而不是某个实例自己跑出来的输出。放到实例流里会让实例页混进"别人的 pid 被忽略"这种
+     *   与它无关的行。
      */
     fun killStale(instanceId: String) {
         val meta = readPidFile(instanceId) ?: return

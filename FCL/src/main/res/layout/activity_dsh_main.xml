@@ -7,7 +7,7 @@
   右侧面板 bg_right_menu + 宽度 25% + elevation 100dp + 内层 right_menu_content；
   动态岛在**底部居中**（FCL 原位）；ViewPager2 高度 match_parent 且无额外边距。
   视觉全部走 fcllibrary 控件 + ThemeEngine（§2.5）。
-  菜单项：实例 / 管理 / 下载 / 日志 / 设置 + 返回（管理为后续管理功能预留）。
+  菜单项：实例 / 版本 / 设置 + 返回（管理是零引用的空占位、日志拆进实例详情与设置子页，故删）。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -41,44 +41,27 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
+        <!-- 菜单项自上而下一条竖链，每项 bottom→下一项、top→上一项。
+             删掉「管理」「日志」两项后这条链必须重连：instances↔versions↔setting↔back，
+             断链会让整条菜单叠在一起或整条消失（ConstraintLayout 无约束时按 0,0 摆放）。 -->
         <com.tungsten.fcllibrary.component.view.FCLMenuView
             android:id="@+id/instances"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:src="@drawable/ic_dsh_instances_24"
-            app:layout_constraintBottom_toTopOf="@id/manage"
+            app:layout_constraintBottom_toTopOf="@id/versions"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
         <com.tungsten.fcllibrary.component.view.FCLMenuView
-            android:id="@+id/manage"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:src="@drawable/ic_dsh_manage_24"
-            app:layout_constraintBottom_toTopOf="@id/download"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/instances" />
-
-        <com.tungsten.fcllibrary.component.view.FCLMenuView
-            android:id="@+id/download"
+            android:id="@+id/versions"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:src="@drawable/ic_baseline_download_24"
-            app:layout_constraintBottom_toTopOf="@id/logs"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/manage" />
-
-        <com.tungsten.fcllibrary.component.view.FCLMenuView
-            android:id="@+id/logs"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:src="@drawable/ic_dsh_logs_24"
             app:layout_constraintBottom_toTopOf="@id/setting"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/download" />
+            app:layout_constraintTop_toBottomOf="@id/instances" />
 
         <com.tungsten.fcllibrary.component.view.FCLMenuView
             android:id="@+id/setting"
@@ -88,7 +71,7 @@
             android:src="@drawable/ic_dsh_settings_24"
             app:layout_constraintBottom_toTopOf="@id/back"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/logs" />
+            app:layout_constraintTop_toBottomOf="@id/versions" />
 
         <!-- FCL 的返回项：与 §4.2 的映射一致，保留 -->
         <com.tungsten.fcllibrary.component.view.FCLMenuView

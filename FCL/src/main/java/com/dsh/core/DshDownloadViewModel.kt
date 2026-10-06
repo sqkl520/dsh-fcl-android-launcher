@@ -137,6 +137,9 @@ class DshDownloadViewModel(
         //   原来不检查，用户连点同一版本会走完整流程 N 次 → 每次都可能新建实例 + 弹一次
         //   「已开始安装」对话框（真机表现为"疯狂跳窗 + 一排损坏实例"）。
         if (_installingVersions.value.contains(item.version)) {
+            // ★ 保持全局：判据是**版本号**（`_installingVersions` 是版本级集合），此刻还不知道
+            //   这次请求会落到哪个实例上（`chooseInstanceToInstall` 还没跑）。凭"版本已在装"就
+            //   把行塞进某个实例，等于猜 —— 猜错就会让 A 的日志里出现"某次无关请求被忽略"。
             DshLogBus.append("[download] ${item.version} 正在安装中，忽略重复请求")
             val running = DshInstances.instances.value.firstOrNull { it.dshVersion == item.version }
             return InstallDispatch(running, started = false)
@@ -144,7 +147,9 @@ class DshDownloadViewModel(
         val existing = chooseInstanceToInstall(DshInstances.instances.value, item.version)
         // 已 READY 装过该版本：无需重装，直接复用，避免每次点击都重新下载整棵依赖树
         if (existing != null && existing.state == DshInstance.State.READY) {
-            DshLogBus.append("[download] ${existing.name} 已安装 dsh ${item.version}，跳过重复安装")
+            // 实例级：这里 `existing` 是明确解析出来的实例 —— "你点安装但跳过了，因为它已经装好了"
+            // 是那个实例的状态结论，用户点开它的日志页应该能看到这次点击为什么没产生安装。
+            DshLogBus.appendFor(existing.id, "[download] ${existing.name} 已安装 dsh ${item.version}，跳过重复安装")
             return InstallDispatch(existing, started = false)
         }
         val inst = existing ?: DshInstances.create(instanceName ?: "dsh ${item.version}")

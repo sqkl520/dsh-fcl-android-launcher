@@ -80,7 +80,9 @@ object DshCredentials {
         is Status.Ok -> decrypt(instanceId)
         else -> {
             if (st is Status.Unreadable) {
-                DshLogBus.append("[credentials] 实例 $instanceId 的密钥无法解密：${st.reason}")
+                // 实例级：解不开的是**这个实例**的密钥，用户要在它的详情页知道"为什么起不来/连不上"
+                // （换机恢复、锁屏密码变更会让 Keystore 主密钥失效，这时只有重填 key 能救）
+                DshLogBus.appendFor(instanceId, "[credentials] 实例 $instanceId 的密钥无法解密：${st.reason}")
             }
             null
         }
@@ -120,13 +122,17 @@ object DshCredentials {
         cleanupLegacyFiles(instanceId)
     }
 
-    /** 清掉历史版本的明文凭据文件（改动前会留下 credentials.env） */
+    /**
+     * 清掉历史版本的明文凭据文件（改动前会留下 credentials.env）。
+     * 由 [save] / [clear] 调用，两处都带明确的 instanceId。
+     */
     fun cleanupLegacyFiles(instanceId: String) {
         runCatching {
             val f = DshPaths.instanceLegacyCredentials(instanceId)
             if (f.exists()) {
                 f.delete()
-                DshLogBus.append("[credentials] 已清理历史明文凭据文件 ${f.name}")
+                // 实例级：删掉的是**这个实例**目录下的明文文件（"为什么我的 key 没了/被清了"要看这里）
+                DshLogBus.appendFor(instanceId, "[credentials] 已清理历史明文凭据文件 ${f.name}")
             }
         }
     }
