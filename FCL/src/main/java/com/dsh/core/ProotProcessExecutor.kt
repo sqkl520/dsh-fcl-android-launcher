@@ -156,7 +156,7 @@ object ProotRunner {
      * `java.lang.Integer`，而 `Integer as Long` 在 Kotlin 里**不是**"转成 Long"，是**类型断言**——
      * 必然抛 `ClassCastException`。旧写法 `m.invoke(process) as Long` 正是这样：
      * 异常被外层 `runCatching` 吞掉 → **永远返回 -1** → `dsh.pid` 从来没写出来过 →
-     * 孤儿认领/清理这条路径**从未生效**（bebug.txt 05:30:28 那条"无法取得 proot 进程 pid"）。
+     * 孤儿认领/清理这条路径**从未生效**（真机日志里那条"无法取得 proot 进程 pid"警告）。
      *
      * 为什么必须用 `Number` 而不是逐个 `is Int`/`is Long`：Kotlin 的 `Number` 覆盖了
      * `Integer`/`Long`/`Short`/`Byte`，一次收全，不会再漏掉某种装箱类型。

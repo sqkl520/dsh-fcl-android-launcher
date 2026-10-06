@@ -45,7 +45,7 @@
 - **资源**：`FCL/src/main/res` 109 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + version 标记；
   `rootfs.tar.xz` 不入 Git）· jniLibs 3 个（`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
-- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **34/34**；脚本自检 **18/18**
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **53/53**；脚本自检 **18/18**
 - **入口**：`SplashActivity` → **`DshMainActivity`**（外壳五页：实例 / 管理 / 下载 / 日志 / 设置；
   无 MC 运行时门禁、无 EULA、无 MC 主界面）
 
@@ -67,7 +67,7 @@ rootfs 已于 2026-10-06 瘦身：`rootfs.tar.xz` **314 MB → 142 MB（−52.7%
 | `FCL/src/main/java/com/dsh/` | **dsh 启动器主体**（`core` 逻辑 + `ui` 界面），42 个文件 |
 | `FCL/src/main/java/com/tungsten/` | FCL 基座（`fcllibrary` UI 框架 + `fclcore` 工具） |
 | `FCL/src/main/assets/dsh/` | 运行时底座：`scripts/`（3 个 POSIX sh）+ `rootfs/`（tar.xz 不入 Git） |
-| `FCL/src/test/java/com/dsh/` | JVM 单测（34 项） |
+| `FCL/src/test/java/com/dsh/` | JVM 单测 |
 | `docs/` | 本目录 |
 
 ---

@@ -1,7 +1,7 @@
 # 运行时 rootfs 的重建步骤
 
 > ⚠️ 这份文档是**事后补写**的：最初的 rootfs 是**用临时命令**构建的，没有留下脚本。
-> 下面把当时验证过的步骤固化下来（配合 `docs/LESSONS.md` §2 的坑）。
+> 下面把当时验证过的步骤固化下来，并把每一步踩过的坑写在同一处。
 
 产物：`rootfs.tar.xz`（约 **300MB**），内含 **Debian 12 bookworm arm64** +
 **官方 Node v22.23.3** + **预装的 `@deepseek-ai/dsh`**，供 App 首启解压到 `filesDir/dsh/rootfs`。
@@ -77,7 +77,7 @@ chroot "$R" /bin/bash -c '
 '
 ```
 
-## 6. 清理（⚠️ 每一条都踩过坑，详见 LESSONS §2）
+## 6. 清理（⚠️ 每一条都踩过坑）
 
 ```sh
 # ① 宿主的 DNS 配置不要带进包（App 运行时会按当前网络写入，见 DshDns）
@@ -130,7 +130,7 @@ echo -n 'debian-bookworm-arm64-node22-dsh-0.1.6-alpha.2' \
 ```
 
 `version` 文件的内容会参与 App 侧的就绪判定（`RuntimeUtils.isLatest` 做**字符串比较** ——
-早先实现用 `Long.parseLong` 解析语义化版本号，直接抛异常导致底座永远不就绪，见 LESSONS §3）。
+早先实现用 `Long.parseLong` 解析语义化版本号，直接抛异常导致底座永远不就绪）。
 
 ## 9. 体积参考
 
@@ -155,7 +155,7 @@ echo -n 'debian-bookworm-arm64-node22-dsh-0.1.6-alpha.2' \
 | **tar.xz 压缩后** | **142 MB（148,637,136 字节，−52.7%）** |
 
 > 打包进 APK 时需在 `build.gradle.kts` 里对 `xz` 关闭二次压缩：
-> `androidResources { noCompress += "xz" }` —— 否则打包会极慢且体积更大（LESSONS §1.5）。
+> `androidResources { noCompress += "xz" }` —— 否则打包会极慢且体积更大。
 
 ## 10. 瘦身（2026-10-06）：在现有包上直接剔除，不重打包
 

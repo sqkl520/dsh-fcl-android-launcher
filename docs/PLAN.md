@@ -7,7 +7,7 @@
 >
 > | 想知道什么 | 看哪份 |
 > |---|---|
-> | 当前状态 / 版本 / 代码在哪 | `INDEX.md` |
+> | 当前状态 / 版本 / 代码在哪 | `README.md`（本目录） |
 > | 接下来做什么、按什么顺序 | `ROADMAP.md` |
 > | 运行时底座**当前实现**（自研 proot 层 + 预打包 rootfs） | `PACKAGING.md` + `ROOTFS.md` |
 > | 技术选型与取舍 | `docs/PLAN.md` |
@@ -40,7 +40,7 @@
   安装假成功、界面退出即中断安装、主线程删 300MB 必 ANR、孤儿进程占端口、启动无超时、WebView
   无限转圈…）、6 处性能问题（日志 O(n²)、全量重绘…）、11 处可靠性/安全问题（明文 key 落盘、
   密钥进 argv、token 进日志…），并补齐交互层（新增实例设置页、日志入口、底座引导横幅、安装进度、
-  失败出口、热恢复）。**逐项清单见 [reports/round2-fixes.md](./reports/round2-fixes.md)**。
+  失败出口、热恢复）。**逐项清单见 第二轮加固报告**。
 - **核心架构**：Android App（借鉴 FCL 的下载/实例/前台服务范式）+ 自带 proot rootfs（跑 Node+dsh）
   + WebView（加载 dsh 自带的 Web UI）+ 云端 DeepSeek API。
 - **关键约束**：dsh 原生模块只发 glibc/musl（无 android/bionic），所以**必须 proot**，不能用 Termux
@@ -172,7 +172,7 @@
 ### 4.3 已写的 Kotlin 文件（`com.dsh.core` 17 个 + `com.dsh.ui` 7 个 ≈ 4310 行）
 
 > 本节已按**第二轮加固**（2026-09-22）更新；逐项改动与原因见
-> [reports/round2-fixes.md](./reports/round2-fixes.md)。
+> 第二轮加固报告。
 
 **数据/管理层**
 - `DshPaths.kt`（204）— 路径中心（rootfs/proot/scripts/npm-cache/logs/tmp/instances）+ 磁盘占用助手
@@ -269,7 +269,7 @@
 | registry 解析/排序 | 真实数据驱动真实 Kotlin | 13/13 断言通过 |
 | XML/资源静态一致性 | 脚本交叉校验 | 9 个 XML 良构；R.string/R.id/binding 属性/类名/drawable 全匹配 |
 
-**第二轮加固后的验证（2026-09-22，详见 [reports/round2-fixes.md](./reports/round2-fixes.md) §8）**
+**第二轮加固后的验证（2026-09-22，详见 第二轮加固报告 §8）**
 
 | 项 | 方法 | 结果 |
 |---|---|---|
@@ -324,7 +324,7 @@
    - ~~实例重命名、体积清理入口、错误提示~~ ✅ 已完成（第二轮；重命名/体积在设置页，错误提示落到行内 + 对话框）
    - 仍未做：下载断点续传、Landlock 弱隔离提示、实例配置导出/导入。
    - 若要做正式入口：在主界面加独立按钮/菜单项（现为长按"设置"的隐藏入口）。
-   - **第二轮的完整改动清单**：[reports/round2-fixes.md](./reports/round2-fixes.md)（10 个致命/严重 bug、
+   - **第二轮的完整改动清单**：第二轮加固报告（10 个致命/严重 bug、
      6 处性能、11 处可靠性/安全、交互层补齐、脚本信号协议重写）
 
 ---
@@ -400,36 +400,34 @@ arm64 编译机需按 §7.1 处理 aapt2/cmake/ninja 的 x86_64→qemu 问题；
 
 ## 10. 附：交付物索引
 
-> 全部文档统一放在项目文档根目录 `docs/`，按类别组织（顶层核心 + `design/` + `reports/`）；
-> 导航与当前状态见 `INDEX.md`。
+> ⚠️ **本节写于早期，数量与文件名已经过时**（代码文件从 24 个涨到 40+，
+> 布局/脚本也有增减）。**不要照这里的数字对账** —— 当前的文件清单与结构见
+> [`README.md`](README.md)「当前状态」与「代码在哪」两节。
+>
+> 保留本节只为说明**当初打算交付什么**（哪些属于文档、哪些属于代码、哪些属于脚本与夹具），
+> 这个分类本身仍然是有效的。
 
 **文档（`docs/`）**
 
-- `INDEX.md` — 文档总览与导航（含当前状态、到电脑后的最短路径）
+- `README.md` — 文档总览与导航（含当前状态）
 - `PLAN.md` — 本文，完整落地方案（总纲）
-- `design/proot-chain.md` — proot 启动链（rootfs 选型 + 脚本 + 实测证据）
-- `design/multi-version.md` — 多版本/实例管理 + npm 下载 UI 设计
-- `design/ui-manifest.md` — UI 拼装 + Manifest 注册 + 分层验证方法
-- `reports/round2-fixes.md` — 第二轮报告：审查 / bug 修复 / 性能与可靠性加固
-- `reports/round3-audit.md` — 第三轮报告：审计与修缮（含 P0 致命缺陷）
+- `ROADMAP.md` — 里程碑规划
 - `PACKAGING.md` — 打包说明：proot 二进制 + rootfs.tar.xz 的准备与放置
+- `ROOTFS.md` — rootfs 重建与瘦身
+- `ENVIRONMENT.md` — 开发环境（JDK / SDK / NDK）
+- `design/` — 设计文档（proot 启动链、多版本、UI 拼装、W^X 绕过…）
 
 **代码（`FCL/`）**
 
-- `FCL/src/main/java/com/dsh/core/` — 17 个 Kotlin（路径/实例/安装/运行时/凭据/日志/命令构造）
-- `FCL/src/main/java/com/dsh/ui/` — 7 个 Kotlin（实例列表/下载/日志/设置/WebView + 2 个 Adapter）
-- `FCL/src/main/res/layout/*dsh*.xml` + `v*_dsh_*.xml` — 8 个布局
-- `FCL/src/main/assets/dsh/` — 首启解压底座（version + scripts；`proot/`、`rootfs/` 待补）
-- `FCL/src/test/java/com/dsh/` — 1 个 JVM 单测文件
+- `FCL/src/main/java/com/dsh/core/` — 路径 / 实例 / 安装 / 运行时 / 凭据 / 日志 / 命令构造
+- `FCL/src/main/java/com/dsh/ui/` — 实例列表 / 下载 / 日志 / 设置 / WebView + Adapter
+- `FCL/src/main/res/layout/*dsh*.xml` — dsh 页面布局
+- `FCL/src/main/assets/dsh/` — 首启解压的运行时底座（`scripts/` + `rootfs/`）
+- `FCL/src/test/java/com/dsh/` — JVM 单测
 
 **脚本与夹具**
 
-- `FCL/src/main/assets/dsh/scripts/` — 随包发布的 3 个脚本（`setup-node-dsh.sh` / `start-dsh.sh` / `probe.sh`）
-- `dsh-launcher-poc/scripts/` — 参考/测试脚本 6 个：
-  `setup-node-dsh.sh`、`start-dsh.sh`、`probe.sh`（与 assets 同源）、
-  `proot-run.sh`（设备侧包装器参考实现）、`test-scripts-posix.sh`（脚本 POSIX 一致性测试，18 断言）、
-  `dsh-boot.sh`（任务1 的合体管理脚本：check/install/list/web/headless/rm；已被上面拆分的脚本取代，留作参考）
-- `dsh-launcher-poc/dsh-registry-sample.json` — 真实 npm registry 响应样本（测试夹具）
+- `FCL/src/main/assets/dsh/scripts/` — 随包发布的 POSIX sh（`setup-node-dsh.sh` / `start-dsh.sh` / `probe.sh`）
 
 ---
 

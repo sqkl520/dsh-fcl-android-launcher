@@ -1,7 +1,6 @@
 # 任务清单（待办）
 
-> 放**已明确要做、但未做**的事项。做完挪到 `CHANGELOG.md`。
-> 缺口来源与证据：`docs/reports/frontend-gap-vs-fcl.md`（前端 vs FCL 原版逐项对照）。
+> 放**已明确要做、但未做**的事项。做完从本清单移除。
 
 ## 已完成（保留索引，便于回溯）
 
@@ -28,7 +27,6 @@
   要么是 FCL 自己的未使用资源（`bg_right_menu_button` / `bg_game_menu_inset` /
   `bg_container_transparent_selected` / `ic_baseline_file_24` 等，全仓库零引用），
   要么是 MC 专属（控制器/整合包/账户/渲染器），要么是 MC 页面专用图标
-- 证据与逐条清单见 `reports/frontend-gap-vs-fcl.md` §4.1
 - 教训：`git grep bg_item` 会命中 `bg_item_rounded`（子串误匹配），查资源引用要加边界
 
 ### T5. 插件管理子页（等插件体系确定）

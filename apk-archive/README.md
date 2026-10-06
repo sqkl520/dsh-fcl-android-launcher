@@ -7,6 +7,7 @@ apk-archive/
 ├── 0.1.0/SHA256SUMS
 ├── 0.1.1-SNAPSHOT/SHA256SUMS
 ├── 0.1.2-SNAPSHOT/SHA256SUMS
+├── 0.1.3-SNAPSHOT/SHA256SUMS
 └── README.md
 ```
 
@@ -21,10 +22,11 @@ apk-archive/
 | 0.1.0 | [`v0.1.0`](https://github.com/sqkl520/dsh-fcl-android-launcher/releases/tag/v0.1.0) | `e61a5939…` |
 | 0.1.1-SNAPSHOT | [`v0.1.1-SNAPSHOT`](https://github.com/sqkl520/dsh-fcl-android-launcher/releases/tag/v0.1.1-SNAPSHOT) | `bc96c4e7…` |
 | 0.1.2-SNAPSHOT | [`v0.1.2-SNAPSHOT`](https://github.com/sqkl520/dsh-fcl-android-launcher/releases/tag/v0.1.2-SNAPSHOT) | `8abaa3ea…` |
+| 0.1.3-SNAPSHOT | [`v0.1.3-SNAPSHOT`](https://github.com/sqkl520/dsh-fcl-android-launcher/releases/tag/v0.1.3-SNAPSHOT) | 见该版本目录下的 `SHA256SUMS` |
 | legacy-20260929 | 未发布（MC 时代冒烟包，跑不了 dsh） | `fb2c87c4…` |
 
-> **为什么改**：APK 是 300MB+ 的二进制，Git 存的是"每个文件的每个版本" ——
-> 改一行代码就是一个全新的 300MB 对象，旧的还永远留着。旧做法（切 90MB 分片提交）
+> **为什么改**：APK 是几百 MB 的二进制，Git 存的是"每个文件的每个版本" ——
+> 改一行代码就是一个全新的几百 MB 对象，旧的还永远留着。旧做法（切 90MB 分片提交）
 > 现在 APK 一律走 Release 附件，仓库历史不再增长。
 
 ## 本机交付目录
@@ -35,6 +37,6 @@ apk-archive/
 | `apk-archive/<version>/SHA256SUMS` | 版本指纹记录 | **是** |
 | `FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会**移动**到 `output/`，不留第三份 | 否 |
 
-出包一条命令：`release.cmd`（电脑）或 `sh release.sh`（手机）——
+出包一条命令：`sh release.sh`（在 arm64 Linux 上）——
 它会自动完成 体检 → 编译 → 单测 → 打包 → 提交 → **发 Release**。
-版本变更事实记录在 `docs/CHANGELOG.md`；打包约定见 `docs/PACKAGING.md`。
+打包约定见 `docs/PACKAGING.md`。
