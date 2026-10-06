@@ -60,7 +60,7 @@ cd <仓库根>
 > 早期打包曾把 APK 放那里，后来统一改到 `output/`。
 
 第二轮加固（2026-09-22）后，assets 里的 `version` 与 `scripts/version` 已提到 **2**
-（子项版本变化会触发增量重解压）。改动与原因见 `reports/round2-fixes.md`。
+（子项版本变化会触发增量重解压）。
 
 ## 布局（`FCL/src/main/assets/dsh/` 目录内）
 

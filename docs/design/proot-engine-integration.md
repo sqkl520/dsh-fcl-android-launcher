@@ -36,7 +36,7 @@ W^X、PROOT_LOADER、seccomp、API、License、rootfs 与子进程风险见本�
 
 ### 阶段 A：固定底座版本与产物（当前）
 
-1. 拉取 `oonid/pr` 源码到工作区外的参考目录，不直接覆盖 FCL。
+1. 拉取 `oonid/pr` 源码到仓库外的参考目录，不直接覆盖 FCL。
 2. 固定 commit，记录到本文件。
 3. 核对以下产物的构建方式和许可证：
    - patched `proot`

@@ -80,7 +80,7 @@
 3. **语义版本比较**：11 条边界用例全过（稳定版>预发布、数字段按数值 rc.2<rc.10、rc>alpha、跨主干等）。
 
 > 注：以上是逻辑层验证（用 Node 复刻 Kotlin 算法跑真实数据）。Kotlin/Android 编译需要
-> Android SDK + Gradle，当前工作区没有装，未做 Android 编译。代码按 FCL 现有风格与依赖
+> Android SDK + Gradle，当前环境没有装，未做 Android 编译。代码按 FCL 现有风格与依赖
 > （Gson、kotlinx.coroutines、HttpRequest）编写，接口与 FCL 既有类对齐。
 
 ---
