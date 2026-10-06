@@ -294,8 +294,8 @@ SplashActivity（LAUNCHER，保留但瘦身）
 
 ## 8. 验证方式
 
-- **编译**：`sh /workspace/run-compile.sh`（BUILD SUCCESSFUL）
-- **单测**：`sh /workspace/run-tests.sh`
+- **编译**：`sh run-compile.sh`（BUILD SUCCESSFUL）
+- **单测**：`sh run-tests.sh`
 - **真机**：
   - 启动 **直接进 dsh 外壳**，不再出现"安装或更新运行环境"页；
   - 四个页面可切换、菜单高亮与标题同步；
@@ -353,8 +353,8 @@ SplashActivity（LAUNCHER，保留但瘦身）
 - `initState()`、`enterLauncher()`、`start()` 及所有 MC 相关代码**原样保留**（只是 dsh 模式下不再走到）。
 
 **验证**
-- `sh /workspace/run-compile.sh` → **BUILD SUCCESSFUL**（2m06s）
-- `sh /workspace/run-tests.sh` → **TOTAL=23 FAILED=0**
+- `sh run-compile.sh` → **BUILD SUCCESSFUL**（2m06s）
+- `sh run-tests.sh` → **TOTAL=23 FAILED=0**
 - `DshInstancesActivity` 已在 Manifest 注册（第 139 行）
 
 **预期效果（真机）**

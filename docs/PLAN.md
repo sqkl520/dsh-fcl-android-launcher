@@ -10,7 +10,7 @@
 > | 当前状态 / 版本 / 代码在哪 | `INDEX.md` |
 > | 接下来做什么、按什么顺序 | `ROADMAP.md` |
 > | 运行时底座**当前实现**（自研 proot 层 + 预打包 rootfs） | `PACKAGING.md` + `ROOTFS.md` |
-> | 仓库关系与日常流程 | 根下 `REPOS.md` |
+> | 技术选型与取舍 | `docs/PLAN.md` |
 >
 > **两点更正**（本文与新文档冲突时以下面为准）：
 > 1. **运行时底座没有改走 `:proot-engine`** —— 2026-10-01 一度决定集成 oonid/pr 的 `:proot-engine`，

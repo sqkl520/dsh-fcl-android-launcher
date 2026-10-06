@@ -3,7 +3,7 @@
 > ## ⚠️ 部分过时（2026-10-01 标注，2026-10-05 复核）
 >
 > **已作废的部分**：文末〔在 arm64 上出完整 APK（qemu 转发 NDK 工具链）〕整节 ——
-> 那是**手机沙箱（arm64）**才需要的 qemu 包装手法。现在开发环境是 **Windows x64**，
+> 那是 **arm64 Linux** 才需要的 qemu 包装手法。在 **Windows x64** 上开发时，
 > SDK 自带的 cmake/ninja/clang 原生执行，**不需要 qemu**。
 >
 > **关于 `:proot-engine`**：`design/proot-engine-integration.md` 曾计划改用它，
@@ -20,13 +20,12 @@
 > 对应代码：`FCL/src/main/assets/dsh/`（解压底座）+ `com.dsh.core.DshBootstrap`（首启解压与自检）。
 > 该 assets 目录内另有一份最小提示 `FCL/src/main/assets/dsh/README.md`，指向本文。
 
-## Windows 打包（当前环境，2026-10-05）
-
 ```powershell
-# 前置：工具链按 ENVIRONMENT.md §1 装好；rootfs 按 ROOTFS.md 补回
-#       dsh-fcl-android-launcher/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz   ← 300MB，不入 Git
+# 前置：工具链按 ENVIRONMENT.md 装好；rootfs 按 ROOTFS.md 备好：
 
-cd D:\Projects\dsh-fcl-android-launcher
+#       <仓库根>/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz   ← 142MB，不入 Git
+
+cd <仓库根>
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
 ```
 
@@ -37,23 +36,22 @@ cd D:\Projects\dsh-fcl-android-launcher
   这既避免 aapt 二次压缩拖慢打包，也让我们能**直接从 APK 里无损取出 rootfs**（见 `ROOTFS.md`）
 - rootfs 未就位时也能打包成功，但装到手机上**跑不起来**（底座是 PLACEHOLDER）
 
-## 产物落点（交付 / 快照 / 构建产物）
+## 产物落点（交付 / 版本记录 / 构建产物）
 
-四个位置各司其职，**不要互相混用**：
+三个位置各司其职，**不要互相混用**：
 
-| 位置 | 用途 | 属于哪个仓库 | 是否入 Git |
-|---|---|---|---|
-| `<项目文件夹>/output/` | **交付 / 取件**（手机设备端可访问：`<rikkahub files>/workspaces/<id>/files/output/`）；只放当前版本 | 快照仓（.gitignore 忽略） | 否 |
-| `<项目文件夹>/output/legacy/` | 已废弃的历史冒烟包（MC 时代，rootfs 只是 PLACEHOLDER，**不能用**） | 快照仓 | 否 |
-| `<项目文件夹>/apk-archive/<version>/` | **版本快照**（保留历史版本便于回滚）+ `SHA256SUMS` | 源码仓 | 二进制否；`SHA256SUMS`/`README.md` 是 |
-| `<项目文件夹>/FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 用 `mv` 搬到 `output/`，不留第三份 | 源码仓 | 否 |
+| 位置 | 用途 | 是否入 Git |
+|---|---|---|
+| `<仓库根>/output/` | **本机交付 / 取件**目录；只放当前版本 | 否（.gitignore 忽略） |
+| `<仓库根>/apk-archive/<version>/` | **版本记录**：只有 `SHA256SUMS`（指纹） | **是** |
+| `<仓库根>/FCL/build/outputs/apk/` | Gradle 原始产物；打包脚本会把它 **move** 到 `output/` | 否 |
 
-> 「项目文件夹」= 电脑 `D:\Projects\dsh-fcl-android-launcher` = 手机 `/workspace` ——
-> 电脑上**源码仓与快照仓共用这一个文件夹**（快照仓 = `dsh-fcl-android-launcher-workspace-snapshot`，
-> 旧名 `ea`）。仓库分工与操作方式见根下 `REPOS.md`。
+> 面向用户的 **APK 分发走 GitHub Release 附件**（不进 Git 历史），见
+> <https://github.com/sqkl520/dsh-fcl-android-launcher/releases>。
+
 
 命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
-`dsh-fcl-android-launcher-0.1.2-SNAPSHOT-arm64.apk`）。
+`dsh-fcl-android-launcher-0.1.3-SNAPSHOT-arm64.apk`）。
 
 `SHA256SUMS` 里只写**文件名**（两处同名），因此 `output/` 与 `apk-archive/<version>/`
 都能直接 `sha256sum -c` 校验。
@@ -194,5 +192,5 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 - 内容核验：APK 内 arm64 库 **35 个**（含此前缺失的 `libfcl.so`/`libpojavexec.so`/
   `libpojavexec_awt.so`/`libc++_shared.so`），dsh 类 **30 个**进 dex，dsh assets 全部在包内。
 
-> 一键复现：`sh /workspace/build-apk.sh`（含幂等包装、配置、编译、暂存、打包、还原）。
+> 一键复现：`sh build-apk.sh`（含幂等包装、配置、编译、暂存、打包、还原）。
 > 磁盘要求：构建期间约需 3~4GB 余量。
