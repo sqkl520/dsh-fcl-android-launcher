@@ -10,7 +10,6 @@ import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
-import com.dsh.ui.DshSettingsActivity
 import com.mio.util.ImageUtil
 import com.tungsten.fclauncher.utils.FCLPath
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
@@ -32,7 +31,7 @@ import java.io.File
  *
  * 形态照搬 FCL 的 MC 启动器：左侧 [FCLMenuView] 菜单 + 中间 ViewPager2 内容区
  * + 右侧面板（当前实例卡 + 启动/停止 + 打开界面）+ 动态岛标题。
- * 本类实现 [DshShellHost]，为页面提供跨 tab 跳转与打开详情 Activity 的能力。
+ * 本类实现 [DshShellHost]，为页面提供跨 tab 跳转与打开实例详情的能力。
  *
  * **刻意不触碰任何 MC 单例**（无 ConfigHolder / RendererManager）。
  */
@@ -83,9 +82,10 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         uiManager = DshUIManager(this, binding.uiLayout)
         uiManager.init()
 
-        // 菜单顺序必须与 DshUIManager.titles / factories 一致：实例/管理/下载/日志/设置
+        // 菜单顺序必须与 DshUIManager.titles / factories 一致：实例/版本/设置
+        // （下标就是 DshShellHost.TAB_* 的值，所以这个列表的顺序=接口顺序，改一处必须三处一起改）
         menus = listOf(
-            binding.instances, binding.manage, binding.download, binding.logs, binding.setting
+            binding.instances, binding.versions, binding.setting
         )
         menus.forEachIndexed { index, menu ->
             menu.setOnSelectListener { selected ->
@@ -118,8 +118,16 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         // 外壳标题永远按"当前 tab"决定。后人若"顺手补上"这条回调，会让标题随临时页跳动，
         // 偏离 FCL 行为 —— 这是**有意为之**，不是漏接。
 
-        // 详情页（实例设置 / WebView）可带 EXTRA_OPEN_TAB 跳回指定 tab
-        intent?.getIntExtra(EXTRA_OPEN_TAB, -1)?.takeIf { it >= 0 }?.let { openTab(it) }
+        // 从别处跳回外壳时，可以带一个"要落在哪"的意图：
+        //   · EXTRA_OPEN_INSTANCE_ID → 直接压出那个实例的详情页（WebView 的「查看日志」用它）
+        //   · EXTRA_OPEN_TAB        → 只切到某个 tab（不带实例上下文时用）
+        // 两者同时给时**实例优先**：实例详情本身就要先切到「实例」tab，再切别的 tab 会把刚压的栈清掉。
+        val pendingInstance = intent?.getStringExtra(EXTRA_OPEN_INSTANCE_ID)
+        if (!pendingInstance.isNullOrEmpty()) {
+            openInstanceDetailAt(pendingInstance, intent?.getIntExtra(EXTRA_OPEN_INSTANCE_TAB, -1) ?: -1)
+        } else {
+            intent?.getIntExtra(EXTRA_OPEN_TAB, -1)?.takeIf { it >= 0 }?.let { openTab(it) }
+        }
 
         setupRightPanel()
     }
@@ -171,7 +179,13 @@ class DshMainActivity : FCLActivity(), DshShellHost {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent.getIntExtra(EXTRA_OPEN_TAB, -1).takeIf { it >= 0 }?.let { openTab(it) }
+        // 与 onCreate 同一套判定：实例优先于 tab（理由见那边）
+        val pendingInstance = intent.getStringExtra(EXTRA_OPEN_INSTANCE_ID)
+        if (!pendingInstance.isNullOrEmpty()) {
+            openInstanceDetailAt(pendingInstance, intent.getIntExtra(EXTRA_OPEN_INSTANCE_TAB, -1))
+        } else {
+            intent.getIntExtra(EXTRA_OPEN_TAB, -1).takeIf { it >= 0 }?.let { openTab(it) }
+        }
     }
 
     private fun openTab(position: Int) {
@@ -193,8 +207,10 @@ class DshMainActivity : FCLActivity(), DshShellHost {
                     activity = this,
                     inst = inst,
                     scope = scope,
-                    onOpenSettings = { openInstanceSettings(it.id) },
-                    onOpenLogs = { switchTab(DshShellHost.TAB_LOGS) },
+                    onOpenSettings = { openInstanceDetail(it.id) },
+                    // 启动失败的"查看日志"落到该实例的详情页：日志已按实例归属收进详情
+                    // （App 级日志才在「设置」里），所以这里不能再去切一个日志 tab —— 它已经不存在了。
+                    onOpenLogs = { openInstanceDetail(inst.id) },
                     onPrepareRuntime = { DshLauncher.openSetup(this) },
                     onStarted = { openWebView() }
                 )
@@ -270,11 +286,35 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         if (position in menus.indices) menus[position].setSelected(true)
     }
 
-    override fun openInstanceSettings(instanceId: String) {
-        startActivity(
-            Intent(this, DshSettingsActivity::class.java)
-                .putExtra(DshSettingsActivity.EXTRA_INSTANCE_ID, instanceId)
-        )
+    override fun openInstanceDetail(instanceId: String) {
+        // 两步，顺序不能反：
+        // 1. 先切到「实例」tab —— 临时页是**某个 tab 的上下文**（切 tab 会清栈，见
+        //    DshMultiPageUI.onPageSelected）。不先切过去就压栈，用户会停在别的 tab 上，
+        //    压进去的详情页根本不可见，看起来就像"点了没反应"。
+        // 2. 再拿那一页压栈。这里必须用 ensurePage 而不是 uiAt：页面可能还没被 ViewPager 创建过
+        //    （比如冷启动后直接点右面板的"去配置"），而这次调用**就是要立刻操作它**，
+        //    创建它是预期副作用 —— 见 DshUIManager.ensurePage 的注释。
+        switchTab(DshShellHost.TAB_INSTANCES)
+        (uiManager.ensurePage(DshShellHost.TAB_INSTANCES) as? DshInstancesUI)
+            ?.showInstanceDetail(instanceId)
+    }
+
+    /**
+     * 打开某实例详情并**落在指定段落**。
+     *
+     * 与 [openInstanceDetail] 的唯一区别是带上了"要看哪一段"的意图 —— 从别处跳进来的场景
+     * （WebView 的「查看日志」）用户想看的是日志，不是默认那一段。
+     *
+     * `tab < 0` 时退化为 [openInstanceDetail]：调用方不知道段落就不该猜。
+     */
+    private fun openInstanceDetailAt(instanceId: String, tab: Int) {
+        if (tab < 0) {
+            openInstanceDetail(instanceId)
+            return
+        }
+        switchTab(DshShellHost.TAB_INSTANCES)
+        (uiManager.ensurePage(DshShellHost.TAB_INSTANCES) as? DshInstancesUI)
+            ?.showInstanceDetailAt(instanceId, tab)
     }
 
     override fun openWebView() {
@@ -382,11 +422,36 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         /** 详情页用它请求外壳打开指定 tab（见 [DshShellHost] 的 TAB_* 常量） */
         const val EXTRA_OPEN_TAB = "dsh_open_tab"
 
+        /**
+         * 请求外壳**直接压出某个实例的详情页**（实例详情的日志/配置都在这一个入口下）。
+         * 与 [EXTRA_OPEN_TAB] 同时给出时以本项为准 —— 理由见 `onCreate`。
+         */
+        const val EXTRA_OPEN_INSTANCE_ID = "dsh_open_instance_id"
+
         /** 构造"回到外壳并切到某 tab"的 Intent（singleTop，复用已有实例） */
         fun intentForTab(context: Context, tab: Int): Intent =
             Intent(context, DshMainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 putExtra(EXTRA_OPEN_TAB, tab)
             }
+
+        /**
+         * 构造"回到外壳并打开某实例详情"的 Intent。
+         *
+         * 为什么需要它（而不是继续用 `intentForTab(TAB_LOGS)`）：日志已按实例归属收进实例详情页，
+         * 外壳**不再有**"日志"这个 tab。想从 WebView 跳到"这个实例的日志"，只能压出它的详情页
+         * 并落在「日志」那一段。
+         *
+         * @param tab 详情页内的段落（[DshInstanceDetailPage] 的 `TAB_*` 常量）；-1 = 默认（运行）
+         */
+        fun intentForInstance(context: Context, instanceId: String, tab: Int = -1): Intent =
+            Intent(context, DshMainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(EXTRA_OPEN_INSTANCE_ID, instanceId)
+                if (tab >= 0) putExtra(EXTRA_OPEN_INSTANCE_TAB, tab)
+            }
+
+        /** 与 [EXTRA_OPEN_INSTANCE_ID] 搭配：详情页内落在哪一段 */
+        const val EXTRA_OPEN_INSTANCE_TAB = "dsh_open_instance_tab"
     }
 }

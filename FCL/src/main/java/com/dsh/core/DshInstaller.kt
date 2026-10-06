@@ -99,7 +99,8 @@ class DshInstaller(
      */
     fun install(instance: DshInstance, version: String): Boolean {
         if (!gate.tryAcquire(instance.id)) {
-            DshLogBus.append("[install] ${instance.name} 已有安装任务在进行，忽略重复请求")
+            // 实例级：说的是"这个实例已有安装在跑"，用户点开它的日志页该看到这次请求为什么被忽略
+            DshLogBus.appendFor(instance.id, "[install] ${instance.name} 已有安装任务在进行，忽略重复请求")
             return false
         }
         cancelled.remove(instance.id)
@@ -119,7 +120,8 @@ class DshInstaller(
                 if (!isCurrentOwner(instance.id, myJob)) {
                     // 本次任务已经被"取消后重新发起的那次安装"接管：再写状态就是改别人的数据
                     // （旧实现会把新安装的实例标成 BROKEN、把进度写成失败，界面显示"安装失败"而其实在装）
-                    DshLogBus.append("[install] ${instance.name} 本次安装已被更新的一次安装接管，忽略本次结果")
+                    // 实例级：讲的是**这个实例**的这次安装的结局（被后一次接管），属于它的日志
+                    DshLogBus.appendFor(instance.id, "[install] ${instance.name} 本次安装已被更新的一次安装接管，忽略本次结果")
                     return@launch
                 }
                 if (cancelled.contains(instance.id)) {
@@ -129,9 +131,9 @@ class DshInstaller(
                     val resolved = readInstalledVersion(instance)
                     if (resolved != null) {
                         DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
-                        DshLogBus.append("[install] ${instance.name} 取消时其实已装完：dsh $resolved")
+                        DshLogBus.appendFor(instance.id, "[install] ${instance.name} 取消时其实已装完：dsh $resolved")
                     } else {
-                        DshLogBus.append("[install] ${instance.name} 的安装已取消，忽略本次结果")
+                        DshLogBus.appendFor(instance.id, "[install] ${instance.name} 的安装已取消，忽略本次结果")
                     }
                 } else if (ok) {
                     val resolved = readInstalledVersion(instance)
@@ -142,18 +144,19 @@ class DshInstaller(
                         DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
                         _progress.value = Progress.Done(resolved)
                         finishStatus(instance.id)
-                        DshLogBus.append("[install] ${instance.name} 安装完成：dsh $resolved")
+                        // 实例级：装完是这个实例状态跃迁的关键一行（"什么时候能启动了"）
+                        DshLogBus.appendFor(instance.id, "[install] ${instance.name} 安装完成：dsh $resolved")
                     }
                 } else {
                     fail(instance, errorSummary(instance.id))
                 }
             } catch (t: Throwable) {
                 if (!isCurrentOwner(instance.id, myJob)) {
-                    DshLogBus.append("[install] ${instance.name} 本次安装已被接管，忽略异常：${t.message ?: t}")
+                    DshLogBus.appendFor(instance.id, "[install] ${instance.name} 本次安装已被接管，忽略异常：${t.message ?: t}")
                 } else if (!cancelled.contains(instance.id)) {
                     fail(instance, t.message ?: t.toString())
                 } else {
-                    DshLogBus.append("[install] ${instance.name} 的安装已取消（${t.message ?: t}）")
+                    DshLogBus.appendFor(instance.id, "[install] ${instance.name} 的安装已取消（${t.message ?: t}）")
                 }
             } finally {
                 // ★ 只有"登记表里还是我"时才清理共享状态。
@@ -207,7 +210,8 @@ class DshInstaller(
             it + (instance.id to (it[instance.id]?.copy(running = false, error = reason)
                 ?: InstallStatus(instance.id, "-", "", running = false, error = reason)))
         }
-        DshLogBus.append("[install] ${instance.name} 安装失败：$reason")
+        // 实例级：安装失败原因就是这个实例自己的失败（实例页"为什么它坏了"的唯一权威解释）
+        DshLogBus.appendFor(instance.id, "[install] ${instance.name} 安装失败：$reason")
     }
 
     private fun finishStatus(instanceId: String) {
@@ -243,7 +247,8 @@ class DshInstaller(
         val pre = ProotCommand.preflight(context, DshPaths.ROOTFS_DIR, script)
         if (!pre.ok) {
             errorSummaries[instance.id] = pre.reason ?: "预检失败（原因未知）"
-            DshLogBus.append("[install] 预检失败：${pre.reason}")
+            // 实例级：预检是"这次安装"的第一步，失败原因是该实例的安装结论
+            DshLogBus.appendFor(instance.id, "[install] 预检失败：${pre.reason}")
             return false
         }
 
@@ -302,7 +307,9 @@ class DshInstaller(
     }
 
     private fun onInstallLine(instance: DshInstance, version: String, line: String) {
-        DshLogBus.append(line)
+        // 实例级：这是**这个实例的** npm / setup 脚本输出（安装进度、下载日志、ERR! 摘要的原文）。
+        // 装 A 的时候日志页就该只看到 A 的 npm 输出 —— 原来两条实例同时装时这里全混在一条流里。
+        DshLogBus.appendFor(instance.id, line)
         _progress.value = Progress.Log(line)
         val trimmed = line.trim()
         when {
@@ -334,7 +341,8 @@ class DshInstaller(
         val dir = DshPaths.effectiveDshDir(instance.id)
         val version = readVersionFromPackageJson(File(dir, "package.json"))
         if (version != null && !File(dir, "lib/bin.js").isFile) {
-            DshLogBus.append("[install] 警告：${instance.name} 缺少 lib/bin.js（$dir）")
+            // 实例级：缺入口文件是**这个实例**装坏了（"能读出版本却启动不了"的原因就在这行）
+            DshLogBus.appendFor(instance.id, "[install] 警告：${instance.name} 缺少 lib/bin.js（$dir）")
         }
         return version
     }

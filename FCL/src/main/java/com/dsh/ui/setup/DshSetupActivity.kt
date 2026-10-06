@@ -318,8 +318,8 @@ class DshSetupActivity : FCLActivity() {
      * 不带 flag 的 startActivity 会**新建第二个外壳**压上去，返回栈变成 [外壳][外壳]，
      * 于是"返回一次"只退到那个多余的外壳，用户看着像返回失灵。
      *
-     * 改用 [DshMainActivity.intentForTab]，与项目里其余所有"回外壳"的跳转（实例设置页
-     * `DshSettingsActivity`、WebView 页）走同一条路径：它带 `SINGLE_TOP | CLEAR_TOP`，
+     * 改用 [DshMainActivity.intentForTab]，与项目里其余所有"回外壳"的跳转（WebView 页
+     * `DshWebViewActivity`）走同一条路径：它带 `SINGLE_TOP | CLEAR_TOP`，
      * 已有外壳会被复用（走 `onNewIntent`）而不是新建。理由：
      * 1. 一致性 —— 对外壳的所有跳转只有一种写法，以后改 flag 只改一处；
      * 2. 复用而非复制 flag 字面量 —— `intentForTab` 是外壳自己的 API，flag 语义归它负责。

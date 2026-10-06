@@ -1,5 +1,6 @@
 package com.dsh.ui.shell
 
+import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -29,10 +30,13 @@ import android.widget.FrameLayout
  * 2. 弹栈立即移除视图（见上）。
  *
  * ## 分工
- * 栈只负责**压 / 弹 / 上报标题**。`overlay` 由调用方创建、已 `addView` 到 `content` 之上并初始 `GONE`；
- * 页面 View 的创建与销毁、"返回键要不要交给栈消费"（[canReturn]）由调用方决定。
+ * 栈只负责**压 / 弹 / 上报**（上报标题、上报"某页被摘掉了"）。
+ * `overlay` 由调用方创建（或经 [attach] 代建）、已 `addView` 到 `content` 之上并初始 `GONE`；
+ * 页面 View 的创建与销毁、"返回键要不要交给栈消费"（[canReturn]）由调用方决定 ——
+ * 栈把"页面没了"报出去（[setOnPageDismissed]），销毁动作仍归调用方。
  *
- * ⚠️ 公开 API 已冻结（与 `DshMultiPageUI` 的调用方约定）：可以改内部实现，**不要改签名**。
+ * ⚠️ 公开 API 已冻结（与 `DshMultiPageUI` 的调用方约定）：可以改内部实现、可以**加法**新增，
+ * **不要改已有签名**。
  *
  * @param overlay 承载临时页的覆盖层。必须是 `content` 的**同级兄弟且在其之上**，
  *   否则临时页会被内容区盖住。本类不改动它自身的父级关系。
@@ -63,6 +67,13 @@ class DshTempPageStack(
      * 将来若要显示（比如给外壳加一条可选的二级标题），再从这条通道取，而不是反过来让栈去改标题。
      */
     private var titleListener: ((CharSequence?) -> Unit)? = null
+
+    /**
+     * 页面被摘掉的上报回调，见 [setOnPageDismissed]。
+     *
+     * 与 [titleListener] 同一种"上报"思路：栈不认识页面类型，只把事实说出去。
+     */
+    private var pageDismissListener: ((View) -> Unit)? = null
 
     /** [destroy] 之后栈即作废（理由见 [destroy]）。用标志位挡住误用，不靠调用方自觉。 */
     private var destroyed = false
@@ -137,6 +148,10 @@ class DshTempPageStack(
         // 正确顺序：先取消动画 → 再 removeView → 最后才对"露出来的下一层"播淡入。
         entry.view.animate().cancel()
         overlay.removeView(entry.view)
+        // 摘掉即上报：此刻这棵 View 已不在树上，调用方可以安全销毁它（例如取消页面级协程作用域）。
+        // 放在 removeView **之后**、播下一层淡入 **之前** —— 顺序无所谓，但要和"隐藏 ≠ 移除"这条
+        // 区分开：上面 show() 里把旧栈顶置 GONE 时**不发**这个回调，那一页还在栈上、还活着。
+        notifyDismissed(entry.view)
 
         val next = stack.lastOrNull()
         if (next != null) {
@@ -210,6 +225,23 @@ class DshTempPageStack(
         titleListener = l
     }
 
+    /**
+     * 注册「页面被移除」上报回调，见 [pageDismissListener]。
+     *
+     * 调用时机：`dismissCurrent` / `dismissAll` / `popTo` / `popToRoot` / `destroy` 里真正
+     * `removeView` 之后。**不是**在"压栈时被隐藏"时 —— 隐藏的页仍在栈上，还没被销毁。
+     *
+     * 为什么需要它：栈收的是 [View]，但真实页面是带协程作用域的页面对象（`DshPageUI`）。
+     * 弹栈后如果没人通知调用方，那个作用域就会一直活着（页面没了、订阅还在跑）。
+     * 栈自己不认识页面类型（它只依赖 `android.view.*`），所以只能把"这个 View 被摘掉了"这件事**上报**出去，
+     * 由调用方决定怎么销毁 —— 这与 [setOnTitleChanged] 是同一种"上报"思路。
+     *
+     * 传 null 即注销。注册本身不触发回调。
+     */
+    fun setOnPageDismissed(l: ((View) -> Unit)?) {
+        pageDismissListener = l
+    }
+
     // ---------------------------------------------------------------- 销毁
 
     /**
@@ -221,7 +253,7 @@ class DshTempPageStack(
      *
      * 可重入：调两次不炸（第二次直接返回）。
      *
-     * ⚠️ 销毁之后本实例**不可复用**：栈里的 View 已被摘走、标题回调也清掉了，
+     * ⚠️ 销毁之后本实例**不可复用**：栈里的 View 已被摘走、两个回调也清掉了，
      * 再 [show] 只会让调用方以为压上了一页、实际什么都不会发生 —— 所以用 [destroyed] 挡掉。
      * 宿主页面重新创建时应该 new 一个新实例，而不是复活旧的。
      */
@@ -234,6 +266,8 @@ class DshTempPageStack(
             // 那动画还会握着这棵树的引用跑完，白白拖住一次 GC。
             entry.view.animate().cancel()
             overlay.removeView(entry.view)
+            // 销毁路径也要上报：页面都要没了，调用方比平时更需要在此时取消页面级作用域。
+            notifyDismissed(entry.view)
         }
         stack.clear()
 
@@ -245,6 +279,10 @@ class DshTempPageStack(
         content.visibility = View.VISIBLE
 
         titleListener = null
+        // 回调也要清掉：栈已作废，留着它会让调用方继续收到已死栈的通知，
+        // 而且它通常闭包持有着调用方的页面 —— 不清就等于栈（一个本该被回收的对象）
+        // 反过来把页面钉在内存里。
+        pageDismissListener = null
     }
 
     // ---------------------------------------------------------------- 内部
@@ -254,7 +292,56 @@ class DshTempPageStack(
         titleListener?.invoke(stack.lastOrNull()?.title)
     }
 
-    private companion object {
+    /**
+     * 把"这个 View 已从栈上摘掉"报给调用方。**所有 removeView 的唯一出口** ——
+     * 集中成一处是为了不让"某个弹栈分支忘了上报"这种事发生（漏一处就是一个泄漏的页面作用域）。
+     *
+     * [runCatching] 是刻意的：回调体在调用方那边（通常要去 `destroy()` 一个页面、取消协程作用域），
+     * 它抛异常绝不能把弹栈打断 —— 本类的前提是"栈必须永远能弹掉"，
+     * 一旦在 removeView 之后抛出，栈内部状态已经改了、overlay 的显隐却还没走完，
+     * 会留下一个既不在栈上、又还挂着的半死状态。宁可吞掉调用方的异常，也要让弹栈走完。
+     */
+    private fun notifyDismissed(view: View) {
+        val l = pageDismissListener ?: return
+        runCatching { l(view) }
+    }
+
+    companion object {
+        /**
+         * 在 [container] 里建覆盖层、挂上栈，返回栈实例。
+         *
+         * 覆盖层是 `FrameLayout`，**加在 [content] 之后**（同一父容器里后加的孩子绘制在上层，
+         * 这就是"覆盖"的全部机制）；初始 `GONE`，由栈在压栈时置 `VISIBLE`。
+         *
+         * 本方法与 `DshMultiPageUI` 里那段手搓代码是同一件事 —— 之所以留两份不合并，
+         * 是因为 `DshMultiPageUI` 还要把 overlay 的可见性/生命周期与它自己的 pager、tab 栏绑在一起，
+         * 合并会让那个类的 setupPages 更难读。**两边行为必须一致**：改这里请同步看那边。
+         *
+         * @param content 会被压栈时隐藏、弹空时恢复的内容区
+         */
+        @JvmStatic
+        fun attach(context: Context, container: ViewGroup, content: View): DshTempPageStack {
+            // 先验类型、再动容器：`require` 失败时不能已经在 container 里留下一个没人认领的
+            // 覆盖层 —— 那正是这个函数存在的意义（避免泄漏），自己先漏一个就本末倒置了。
+            // 也不用 `as ViewGroup` 硬转：ClassCastException 看不出是"传错了什么"。
+            require(content is ViewGroup) {
+                "覆盖层的内容区必须是 ViewGroup（本项目里是 ViewPager2 / 页面容器）"
+            }
+
+            // 覆盖层必须在 content 之后 addView —— 这个"后加者在上"的顺序就是覆盖机制本身，
+            // 不是风格问题；顺序反了临时页会被内容区盖住。
+            val overlay = FrameLayout(context).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                visibility = View.GONE
+            }
+            container.addView(overlay)
+
+            return DshTempPageStack(overlay, content)
+        }
+
         /**
          * 压栈 / 弹栈的淡入时长，与 FCL `FCLMultiPageUI` 的 200ms 一致。
          *

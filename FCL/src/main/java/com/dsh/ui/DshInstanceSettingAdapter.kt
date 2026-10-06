@@ -13,13 +13,16 @@ import com.dsh.fcl.androidlauncher.databinding.ItemDshSettingValueBinding
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 
 /**
- * 实例详情设置页适配器 —— 结构照搬 FCL 的 `VersionSettingAdapter`：
+ * 实例详情行式适配器 —— 结构照搬 FCL 的 `VersionSettingAdapter`：
  * 分组 + 行级复用，行类型有 **分组 / 当前值行 / 按钮行**，
  * 位置感知圆角（`bg_item_rounded*`）+ 组内紧贴、组间 8dp + 分割线。
  *
  * 与 FCL 的差异仅两点（可读性所需）：行底按主题色 tint；组头用不显眼的小节标题。
  *
  * 行内容由页面每次 `submit(rows)` 提供（行里的"当前值"随实例状态变化）。
+ *
+ * 使用者只有一个：[com.dsh.ui.shell.DshInstanceSettingPage]（详情页的「运行」/「配置」两段
+ * 各建一个实例，各自提交自己那段的行清单）。
  */
 class DshInstanceSettingAdapter(
     private val context: Context,
@@ -33,10 +36,27 @@ class DshInstanceSettingAdapter(
         private const val TYPE_ACTION = 2
     }
 
-    /** 行的业务标识（页面据此分发动作） */
+    /**
+     * 行的业务标识（页面据此分发动作）。
+     *
+     * ## 为什么没有 API Key 那一组
+     * `API_KEY` / `KEY_STATUS` / `KEY_TEST` / `KEY_CLEAR` 四条连同它们的行都已移除：
+     * Key 改由 dsh 自己的页面录入 —— 那边功能更全（能测连通、能跟着模型走），启动器再维护一份
+     * 独立的录入界面只会出现"两处都能改、哪处是真值"的歧义。`DshCredentials` 本身仍在使用
+     * （启动实例前要读它判断有没有 key），它是否下线是另一件事，与这里无关。
+     *
+     * ## 为什么没有 `LOGS`
+     * 原来那是一条"查看日志"的按钮行，点了跳外壳的日志页。现在日志是**实例详情页的一个 tab**
+     * （同页切换，不跨页面），页面内的事不该做成一行按钮，所以这一行连同 tag 一起删掉。
+     *
+     * ## 新增的三个
+     * [STATUS] / [START_STOP] / [OPEN_WEB] 是"运行"段的主操作：详情页原来是个独立 Activity，
+     * 进了详情反而启停不了实例（那两件事只存在于实例列表行和外壳右面板），现在补齐。
+     */
     enum class Tag {
-        NAME, MODEL, PROFILE, PORT, API_KEY, KEY_STATUS, KEY_TEST, KEY_CLEAR,
-        VERSION, DISK, PATH, VERIFY, LOGS, REINSTALL, DELETE
+        NAME, MODEL, PROFILE, PORT,
+        STATUS, START_STOP, OPEN_WEB,
+        VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE
     }
 
     sealed class Row {

@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 实例详情设置页容器 —— 与 FCL 的 page_setting_list.xml 同构（RecyclerView + 空态） -->
+<!--
+  实例详情里「运行」/「配置」两段的行式列表容器 —— 与 FCL 的 page_setting_list.xml 同构
+  （只有一个铺满的 RecyclerView，没有空态：这两段的行清单是静态的，永远不为空）。
+
+  留白用 FCL 的列表规范：**左右各 10dp、上下各 10dp、clipToPadding=false**。
+  不用 12dp 是因为 10dp 才是与外壳侧边菜单 / 右面板对齐的那一档（见其它页的列表留白）；
+  clipToPadding=false 让滚动时行能贴着屏幕边缘滑出去，而不是被 padding 裁掉一截。
+
+  行间间距、组内 1dp 细缝与分割线、位置感知圆角都不在这里 —— 它们由
+  DshInstanceSettingPage 的 SpacingItemDecoration + DshInstanceSettingAdapter 负责
+  （间距是"行与行之间的关系"，写进单行布局里就变成每行各自的外边距，组间距会翻倍）。
+-->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"

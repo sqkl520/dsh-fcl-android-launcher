@@ -247,9 +247,14 @@ object DshInstances {
                 true
             }
             if (!stopped) {
+                // ★ 保持全局（不进该实例自己的日志）：这个实例正在被**删除** —— 它的目录与日志文件
+                // 紧接着就要 deleteRecursively()，写进它的实例流等于刚写完就被删，谁也看不到。
+                // 而"删除时进程没停干净"恰恰是排障要的（残留 300MB），所以必须留在全局流里。
                 DshLogBus.append("[instances] 停止实例 ${inst?.name ?: id} 超时，仍继续删除目录")
             }
             val ok = runCatching { DshPaths.instanceDir(id).deleteRecursively() }.getOrDefault(false)
+            // ★ 保持全局：同上，删除结果是"实例管理"这件事的结论，不是该实例运行期间的输出。
+            //   实例页此刻正在被关掉，日志文件也已被删，写实例流没有任何接收方。
             DshLogBus.append("[instances] 删除实例 ${inst?.name ?: id} 目录: ${if (ok) "完成" else "有文件残留"}")
             _deleting.update { it - id }
             onFinished?.invoke(ok)
@@ -282,6 +287,8 @@ object DshInstances {
                 ?: list.firstOrNull()?.id
         }.onFailure { e ->
             // 清单坏了不要静默丢：另存一份便于人工找回，并把清单重置为空
+            // ★ 保持全局：清单（instances.json）是**所有实例**的索引，不是任何一个实例的日志。
+            //   而且此刻 _instances 已被清空，"这条属于哪个实例"根本无从判断（也不该猜）。
             DshLogBus.append("[instances] instances.json 解析失败，已另存备份：${e.message}")
             runCatching { f.renameTo(File(f.parentFile, "${f.name}.corrupt-${System.currentTimeMillis()}")) }
             _instances.value = emptyList()
@@ -296,6 +303,8 @@ object DshInstances {
         DshAppScope.scope.launch {
             writeMutex.withLock {
                 runCatching { writeNow() }.onFailure {
+                    // ★ 保持全局：写清单失败影响**所有**实例（下次启动整份清单可能读不出来），
+                    //   不是某个实例的运行问题 —— 归到任一实例都会让别处看不到这个 App 级故障。
                     DshLogBus.append("[instances] 写入 instances.json 失败：${it.message}")
                 }
             }

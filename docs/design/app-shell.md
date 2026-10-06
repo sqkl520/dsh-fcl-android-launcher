@@ -118,7 +118,7 @@ SplashActivity(LAUNCHER)
 
 ### 2.5.4 适用范围与例外
 
-- **适用**：所有 dsh 页面（实例/管理/下载/日志/设置）与其列表项、对话框、以及阶段 1~3 要新建的外壳。
+- **适用**：所有 dsh 页面（实例/版本/设置）与其列表项、对话框、以及外壳本身。
 - **例外（可保留 Material / AndroidX 原生）**：
   - `RecyclerView`、`ViewPager2`、`ConstraintLayout` 这类**布局容器**（FCL 自己也在用）；
   - `WebView`（dsh Web UI 的承载，无 FCL 对应物）——它内部是 dsh 自己的网页，不受本要求约束；
@@ -140,7 +140,7 @@ grep -c "com.tungsten.fcllibrary.component.view" *dsh*.xml
 grep -rn "MaterialAlertDialogBuilder\|FCLAlertDialog" ../../../java/com/dsh/
 ```
 
-> **落地时机**：随**阶段 2（五页迁移）**一起做——页面要从 `Activity` 改成 `FCLCommonUI` 时本来就要重写布局，
+> **落地时机**：随**阶段 2（页面迁移）**一起做——页面要从 `Activity` 改成 `FCLCommonUI` 时本来就要重写布局，
 > 那时一并把控件换成 FCL 的，避免改两遍。
 
 ---
@@ -200,11 +200,14 @@ ConstraintLayout
 
 | pos | 页（新类） | 布局 | 由谁改造来 |
 |---|---|---|---|
-| 0 | `DshInstancesUI` | `ui_dsh_instances` | `ui/DshInstancesActivity` |
-| 1 | `DshManageUI` | `ui_dsh_manage` | 新建（占位：后续放插件安装等管理功能） |
-| 2 | `DshDownloadUI` | `ui_dsh_download` | `ui/DshDownloadActivity` |
-| 3 | `DshLogsUI` | `ui_dsh_logs` | `ui/DshLogsActivity` |
-| 4 | `DshSettingsUI` | `ui_dsh_settings` | `ui/DshSettingsActivity` |
+| 0 | `DshInstancesUI` | `activity_dsh_instances` | `ui/DshInstancesActivity` |
+| 1 | `DshDownloadUI` | `activity_dsh_download` | `ui/DshDownloadActivity` |
+| 2 | `DshSettingsUI` | `ui_dsh_multipage` | `ui/DshSettingsActivity`（当时的"设置页" Activity；与后来那个同名的"实例设置页"不是一回事） |
+
+> **⚠️ 本表已按 2026-10-07 的收敛更新**：当时是 5 页（实例 / 管理 / 下载 / 日志 / 设置），
+> 现为 **3 页（实例 / 版本 / 设置）**——「管理」是空占位页（死代码），「日志」降级为设置页的子页，
+> 「下载」改名「版本」。实例详情也不再是独立 Activity，而是**实例页内的临时页**。
+> 下面 §4.5 / §5 里那张五页的图保留原貌，只作**当时的设计记录**。
 
 > **WebView 不进 ViewPager**：`DshWebViewActivity` 仍是独立全屏 Activity（加载 dsh 的 Web UI，
 > 需要沉浸式、可返回），由实例页"启动"动作直接 `startActivity` 打开。
@@ -219,7 +222,7 @@ ConstraintLayout
 | 下载面板 | 保留 | 安装/下载进度（接 `DshInstaller`） |
 
 ### 4.5 动态岛标题
-显示当前页名：实例 / 管理 / 下载 / 日志 / 设置。
+显示当前页名。**当前是：实例 / 版本 / 设置**（收敛前是 实例 / 管理 / 下载 / 日志 / 设置）。
 
 ---
 
@@ -229,11 +232,14 @@ ConstraintLayout
 SplashActivity（LAUNCHER，保留但瘦身）
    └─ 只做：DshPaths.loadPaths + DshInstances.init + DshBootstrap 自检
         └─ DshMainActivity（新外壳）
-             ├─ ViewPager2：实例 / 管理 / 下载 / 日志 / 设置
+             ├─ ViewPager2：实例 / 版本 / 设置
              └─ 右侧：实例卡 + 底座卡 + 启动按钮
              └─ 启动动作 → DshWebViewActivity（全屏 Web UI）
    ✗ 不再有：MC 运行时门禁 / MC EULA / MC 主界面
 ```
+
+> ⚠️ 上面这张图是**阶段 2 当时的形态**（五页）。2026-10-07 收敛为三页；
+> 实例详情从独立 Activity 改为实例页内的**临时页**（页内 3 tab：运行 / 日志 / 配置）。
 
 > 关键：`DshMainActivity` 继承 `FCLActivity`（自动获得主题/背景/全屏），
 > **绝不能**触发 MC 单例初始化 —— 见 §6。
@@ -279,7 +285,8 @@ SplashActivity（LAUNCHER，保留但瘦身）
 |---|---|---|---|---|
 | **0 打通入口（最小）** | `SplashActivity` 跳过 MC 运行时门禁，直接进 `DshInstancesActivity` | 1 个文件 | 立刻能进 dsh 界面，验证 GUI | ✅ 已做 |
 | **1 外壳骨架** | 新增 `DshMainActivity` + `activity_dsh_main.xml` + `DshUIManager`（ViewPager2 + 菜单） | 3~5 个文件 | 有 FCL 风格的空壳 | ✅ 已做 |
-| **2 五页迁移** | 5 个 dsh 页由 Activity 改为 `FCLCommonUI`，接入 ViewPager2；菜单联动 | 4~10 个文件 | 五页可切换 | ✅ 已做 |
+| **2 页面迁移** | dsh 页由 Activity 改为 `FCLCommonUI`，接入 ViewPager2；菜单联动 | 4~10 个文件 | 页面可切换 | ✅ 已做（当时是五页，2026-10-07 收敛为三页） |
+| **5（2026-10-07）IA 收敛** | 菜单 5→3；实例详情改临时页；日志按实例分流；设置页加日志子页 | 30+ 个文件 | 三页 + 详情页内 3 tab | ✅ 已做 |
 | **3 右侧面板 + 动态岛** | 实例卡 / 底座卡 / 启动按钮 / 标题联动 | 2~3 个文件 | 主界面完整 | ✅ 已做（**外壳改横屏**，右面板常驻） |
 | **4（可选）裁剪** | 移除不可达的 MC Activity 注册与其资源、考虑剔除 MC native/资源 | 多处 | 减体积 | 待做 |
 

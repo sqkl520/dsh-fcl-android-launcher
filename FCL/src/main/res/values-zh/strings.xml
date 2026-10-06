@@ -33,6 +33,9 @@
         <string name="dsh_action_install">安装</string>
         <string name="dsh_action_logs">日志</string>
         <string name="dsh_action_more">更多</string>
+        <!-- 详情页「运行」tab 的动作行。不复用 dsh_action_open_webui：那条是旧主界面布局里的
+             静态按钮文案，等旧布局退役后要一起删；详情页需要一条独立的、可随页面走的条目 -->
+        <string name="dsh_action_open_web">打开界面</string>
         <string name="dsh_action_prepare_runtime">准备运行时</string>
         <string name="dsh_action_refresh">刷新</string>
         <string name="dsh_action_reinstall">重新安装</string>
@@ -70,6 +73,15 @@
         <string name="dsh_install_skipped">%1$s 已安装，可直接启动</string>
         <string name="dsh_instance_gone">实例已不存在</string>
         <string name="dsh_instance_subtitle">版本 %1$s · 端口 %2$s · %3$s</string>
+        <!-- 实例详情页：一个实例 = 一个页面，页内再用 tab 切运行/日志/配置。
+             标题带上实例名，是因为从通知或外壳菜单直接跳进来时用户看不到来源列表 -->
+        <string name="dsh_instance_detail_title">实例：%1$s</string>
+        <string name="dsh_instance_detail_tab_run">运行</string>
+        <string name="dsh_instance_detail_tab_logs">日志</string>
+        <string name="dsh_instance_detail_tab_config">配置</string>
+        <string name="dsh_instance_status_row">状态</string>
+        <!-- 详情页是在实例已消失（在别处被删）时也可能被打开的页面，需要一句兜底文案 -->
+        <string name="dsh_instance_detail_empty">该实例已不存在</string>
         <string name="dsh_instances_empty">还没有实例。\n点击"下载"安装一个 dsh 版本。</string>
         <string name="dsh_instances_title">DeepSeek Harness</string>
         <string name="dsh_key_absent">API Key：未配置</string>
@@ -92,6 +104,10 @@
         <string name="dsh_logs_copied">日志已复制到剪贴板</string>
         <string name="dsh_logs_empty">暂无日志</string>
         <string name="dsh_logs_path">日志文件：%1$s</string>
+        <!-- 日志页顶部的范围标示：同一个日志组件要同时服务"全部实例"与"单个实例"两种视角，
+             不标出来用户无法判断自己看的是谁的日志 -->
+        <string name="dsh_logs_scope_app">应用日志（全部实例）</string>
+        <string name="dsh_logs_scope_instance">%1$s 的日志</string>
         <string name="dsh_logs_title">运行日志</string>
         <string name="dsh_name_required">名称不能为空</string>
         <string name="dsh_no_key_hint">该实例尚未配置 API Key；界面能启动，但对话会失败。</string>
@@ -143,12 +159,8 @@
         <string name="dsh_webview_stopped">dsh 未在运行。返回后启动实例。</string>
         <string name="dsh_webview_stopping">正在停止 dsh…</string>
         <string name="dsh_tab_instances">实例</string>
-    <string name="dsh_tab_manage">管理</string>
-    <string name="dsh_tab_download">下载</string>
-    <string name="dsh_tab_logs">日志</string>
+    <string name="dsh_tab_versions">版本</string>
     <string name="dsh_tab_settings">设置</string>
-    <string name="dsh_manage_title">管理</string>
-    <string name="dsh_manage_placeholder">插件管理功能即将推出。</string>
     <string name="dsh_settings_no_instance">还没有实例，请先到"下载"页创建一个。</string>
     <string name="dsh_right_current_instance">当前实例</string>
     <string name="dsh_right_no_instance">暂无实例</string>
@@ -203,6 +215,8 @@
     <string name="dsh_about_link_proot">proot 引擎（oonid/pr）</string>
     <string name="dsh_about_link_license">许可证：GPL-3.0</string>
     <string name="dsh_settings_tab_launcher">启动器设置</string>
+    <!-- 设置页的第二个子页：主 tab 里的「日志」降级到这里，看的是 App 级日志 -->
+    <string name="dsh_settings_tab_logs">日志</string>
     <string name="dsh_about_tab">关于</string>
     <string name="color_picker_title">取色</string>
     <string name="color_picker_arrow">→</string>

@@ -7,7 +7,7 @@
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 **GPL-3.0** 发布。
 >
-> **当前版本：`0.1.3-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+> **当前版本：`0.1.4-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 > **DeepSeek Harness（dsh）在未 root 安卓手机上的启动器**。
 > 用 proot 兜一个 Linux 环境跑 Node 版 dsh，界面沿用 FCL 的视觉与控件体系。
@@ -18,6 +18,7 @@
 
 | 文件 | 内容 | 什么时候看 |
 |---|---|---|
+| `RELEASES.md` | **版本说明（面向用户）**：每个版本新增/变更/修复/升级须知；GitHub Release 正文取自这里 | 想知道"这一版改了什么、要不要升" |
 | `PLAN.md` | **总体方案**：架构、目录布局、关键流程、安全设计 | 想了解全貌 |
 | `ROADMAP.md` | **路线规划**：M1~M6 里程碑（真机点亮 → 稳定 → 体验 → 工程化 → 分发 → 扩展） | 想知道"接下来往哪走" |
 | `TASKS.md` | **待办清单**：已明确要做但未做的 | 想知道"还有哪些没做" |
@@ -45,8 +46,8 @@
 - **资源**：`FCL/src/main/res` 109 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + version 标记；
   `rootfs.tar.xz` 不入 Git）· jniLibs 3 个（`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
-- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **53/53**；脚本自检 **18/18**
-- **入口**：`SplashActivity` → **`DshMainActivity`**（外壳五页：实例 / 管理 / 下载 / 日志 / 设置；
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **70/70**；脚本自检 **18/18**
+- **入口**：`SplashActivity` → **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
   无 MC 运行时门禁、无 EULA、无 MC 主界面）
 
 ### 运行时底座

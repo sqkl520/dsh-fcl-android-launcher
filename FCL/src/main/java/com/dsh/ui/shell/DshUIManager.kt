@@ -13,6 +13,8 @@ import com.tungsten.fcllibrary.component.ui.FCLCommonUI
  * 用 ViewPager2 承载 N 个 [FCLCommonUI] 页面，页面随 ViewPager 生命周期创建/销毁、不保留状态。
  *
  * 阶段 2：五个 tab 迁为真实页面（实例/管理/下载/日志/设置）。
+ * 阶段 3：tab 收到三个（实例/版本/设置）—— 「管理」是零引用的空占位，「日志」拆成
+ * 实例日志（进实例详情）与 App 日志（进设置的子页），理由见 [DshShellHost] 的 TAB_* 常量。
  * 页面经 [DshShellHost] 回调实现跨 tab 跳转，无需再 startActivity。
  */
 class DshUIManager(
@@ -22,21 +24,17 @@ class DshUIManager(
 
     private val context: Context get() = host.activity
 
-    /** 页面位置 → 标题资源（供动态岛显示） */
+    /** 页面位置 → 标题资源（供动态岛显示）。顺序必须与外壳菜单一致 */
     val titles: List<Int> = listOf(
         R.string.dsh_tab_instances,
-        R.string.dsh_tab_manage,
-        R.string.dsh_tab_download,
-        R.string.dsh_tab_logs,
+        R.string.dsh_tab_versions,
         R.string.dsh_tab_settings,
     )
 
     /** 页面工厂。顺序必须与 [titles] 及外壳菜单一致 */
     private val factories: List<() -> FCLCommonUI> = listOf(
         { DshInstancesUI(context, host) },
-        { DshPlaceholderUI(context, R.string.dsh_tab_manage, R.string.dsh_manage_placeholder) },
         { DshDownloadUI(context, host) },
-        { DshLogsUI(context) },
         { DshSettingsUI(context, host) },
     )
 
@@ -91,6 +89,23 @@ class DshUIManager(
         }
     }
 
+    /**
+     * 取页面，**不存在就创建**。
+     *
+     * ★ 与只读的 [uiAt] 的区别：`uiAt` 是"取标题"用的纯查询，绝不能有副作用；
+     *   而本方法专供"调用方马上要切到这一页、并且立刻要对它做点什么"的场景
+     *   （外壳收到"打开实例详情"的请求时，需要拿到 [DshInstancesUI] 的实例来压栈）。
+     *   创建页面是这里的**预期副作用**，所以单独开一个方法，不去污染 `uiAt` 的语义。
+     *
+     * 实现直接复用 [getUI]：那一份"registry 命中就复用、否则建好并 `onCreate()`"的逻辑
+     * 与 Adapter bind 时用的是同一条路径，页面只会被创建一次（`registry` 是唯一缓存）。
+     *
+     * 这里**不加下标守卫**：调用方传的就是 [DshShellHost] 的 TAB_* 常量，越界属于编程错误，
+     * 让它按 [getUI] 原样抛出来（越界即崩）比悄悄返回 null 更容易发现 ——
+     * 返回类型可空只是为了让调用方能安全转换，不是给越界留后路。
+     */
+    fun ensurePage(position: Int): FCLCommonUI? = getUI(position)
+
     private fun getUI(position: Int): FCLCommonUI =
         registry[position] ?: factories[position]().also {
             registry[position] = it
@@ -117,8 +132,11 @@ class DshUIManager(
      * 当前页。**未创建过则返回 null —— 不为了取标题而创建页面**（理由见 [uiAt]）。
      *
      * 返回类型是 [DshPageUI] 而不是 `FCLCommonUI`：返回链的第 ③④ 级只对 dsh 页面有意义。
-     * ⚠️ `DshPlaceholderUI` 继承的是 `FCLCommonUI` **而不是** `DshPageUI`，
-     * 所以这里必须用 `as?` 安全转换（用 `as` 会在占位页上直接抛 `ClassCastException`）。
+     * 转换仍写成 `as?`（而不是 `as`）：[registry] 的静态类型是 `FCLCommonUI`，是否所有页面都
+     * 继承 [DshPageUI] 是**页面工厂的实现细节**，不是这里的类型约束 —— 将来若有人往
+     * [factories] 里放一个直接继承 `FCLCommonUI` 的页，用 `as` 会在切到那一页时直接抛
+     * `ClassCastException`，而返回链本该只是"这一级不消费"。安全转换把这个失败模式变成
+     * "返回键不归这一页管"，代价是一次 null 判断。
      */
     fun currentPage(): DshPageUI? = uiAt(pager.currentItem) as? DshPageUI
 
