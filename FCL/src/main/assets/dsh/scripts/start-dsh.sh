@@ -15,8 +15,6 @@
 #   PORT               监听端口，默认 3080；传 0 表示由系统分配
 #   HOST               绑定地址，默认 127.0.0.1（给本机 WebView 用，别绑 0.0.0.0）
 #   PROFILE            dsh profile，默认 web
-#   CRED_FILE          存放 DEEPSEEK_API_KEY 的文件（KEY=VALUE）；App 走进程环境变量，不落盘。
-#                      保留该分支是为了 Termux / 手工调试场景。
 #   READY_TIMEOUT      等待就绪的秒数，默认 120
 #   NODE_PID_FILE      写 node 真实 pid 的文件，默认 $INSTANCE_DIR/dsh-node.pid
 #                      （宿主侧 DshRuntime/ProcessUtil 按它精确终止 node，见下面"停止语义"）
@@ -66,26 +64,16 @@ INSTANCE_DIR="${INSTANCE_DIR:-$PWD}"
 DSH_PREINSTALL_DIR="${DSH_PREINSTALL_DIR:-/opt/dsh-preinstalled}"
 PORT="${PORT:-3080}"
 HOST="${HOST:-127.0.0.1}"
-CRED_FILE="${CRED_FILE:-$INSTANCE_DIR/credentials.env}"
 READY_TIMEOUT="${READY_TIMEOUT:-120}"
 
 export DSH_HOME="${DSH_HOME:-$INSTANCE_DIR/home}"
 mkdir -p "$DSH_HOME"
 
-# --- 载入凭据（仅在未通过环境变量提供时）-----------------------------------
-# 优先级：进程环境变量（App 走这条，明文不落盘） > CRED_FILE（手工调试用）
-if [ -z "${DEEPSEEK_API_KEY:-}" ] && [ -f "$CRED_FILE" ]; then
-  while IFS='=' read -r k v; do
-    case "$k" in
-      DEEPSEEK_API_KEY|DEEPSEEK_BASE_URL|DEEPSEEK_MODEL|DEEPSEEK_DEFAULT_MODEL)
-        export "$k=$v" ;;
-    esac
-  done < "$CRED_FILE"
-fi
-
-if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
-  echo "[start-dsh] 警告: 未检测到 DEEPSEEK_API_KEY。UI 能起，但对话会失败。" >&2
-fi
+# --- 凭据（批次 5 起：本脚本不再碰它）-------------------------------------
+# API Key 完全交给 dsh 自己：它在 $DSH_HOME/.credentials.yaml 里存，页面里改、页面里生效。
+# 启动器也不再注入 DEEPSEEK_API_KEY（注进去会让 dsh 的写入被判为"被环境遮蔽"而直接报错），
+# 所以这里既不需要读凭据文件、也无从判断"有没有配 Key"——那是 dsh 自己的状态。
+# 需要非交互式喂 Key 的场景（CI / Termux）自己 export 到环境里即可，dsh 会读到。
 
 # 原生模块加载器（node-addon-native-custom-loader）默认会先把 .node
 # **硬链接**到 os.tmpdir() 下的缓存目录再 require。

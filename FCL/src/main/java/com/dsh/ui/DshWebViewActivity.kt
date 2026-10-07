@@ -22,6 +22,7 @@ import com.dsh.core.DshLogBus
 import com.dsh.core.DshRuntime
 import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.FCLActivity
+import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.view.FCLProgressBar
 import com.tungsten.fcllibrary.component.view.FCLTextView
 import kotlinx.coroutines.launch
@@ -43,8 +44,19 @@ import kotlinx.coroutines.launch
  * 5. **销毁更安全**：先从父容器移除再 destroy（原来直接 destroy 有崩溃风险），并 flush cookie。
  * 6. **返回键**走 OnBackPressedDispatcher（`onKeyDown` 已废弃）。
  * 7. JS 控制台输出进日志总线，出错时能直接从 App 里看到前端报错。
+ *
+ * ## 首次引导（批次 5）
+ * 启动器不再注入 API Key（注进去 dsh 反而写不进去，见 [com.dsh.core.DshRuntime]），"没配 Key"
+ * 也就不再有任何启动前的提示。第一次真正把界面加载出来时弹一次"去哪填 Key"的说明，
+ * 否则用户会卡在"UI 起得来、一发消息就失败"，而且不知道该去哪儿配。
  */
 class DshWebViewActivity : FCLActivity() {
+
+    /** 与 [com.dsh.ui.setup.DshSetupActivity] 共用一份 "launcher" 偏好文件（同一份 App 级设置） */
+    private val prefs by lazy { getSharedPreferences("launcher", MODE_PRIVATE) }
+
+    /** 首次引导标记的前缀：后面拼实例 id（拿不到实例时拼 "global"） */
+    private val KEY_FIRST_RUN_HINT = "dsh_key_first_run_hint_"
 
     private lateinit var webView: WebView
     private var loadedUrl: String? = null
@@ -170,6 +182,8 @@ class DshWebViewActivity : FCLActivity() {
                 showWeb()
                 // 让 token→cookie 的结果立刻落盘，App 重启后免 token 直接进
                 runCatching { CookieManager.getInstance().flush() }
+                // 走到这里才算"界面真的出来了"（判据见 maybeShowFirstRunKeyHint 的注释）
+                if (isLoopback(url)) maybeShowFirstRunKeyHint()
             }
 
             override fun onReceivedError(
@@ -215,6 +229,40 @@ class DshWebViewActivity : FCLActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * 首次成功加载界面时提示一次"去哪里填 API Key"。
+     *
+     * ## 判据：什么算"首次成功加载"
+     * 取 `onPageFinished` 且主 frame 没有失败（`pageFailed == false`）+ 地址是回环。
+     * - **不能**用 `onPageStarted`：它只表示"开始了"，页面可能立刻 401/连接被拒，
+     *   这时弹"去填 Key"是错的 —— 用户看到的是一张错误面板，对话框还盖在上面。
+     * - **不能**只用 `onPageFinished`：WebView 对**失败页面**同样回调它（本文件上面就靠
+     *   `pageFailed` 专门挡这一点），照它弹会让"加载失败也弹一次"。
+     * - **不能**用进度到 100：进度是估算值，`onProgressChanged(100)` 早于 onPageFinished
+     *   出现，恰好在失败页上也会到 100。
+     * 换句话说，这里的判据与"界面真的显示出来了"是同一个条件：`showWeb()` 刚被调用。
+     *
+     * ## 只弹一次
+     * flag 落在 SharedPreferences 的 "launcher" 里，按**实例**记：每个实例有自己的
+     * $DSH_HOME（= <实例目录>/home），Key 也存在那里，所以新实例确实是一张白纸，
+     * 该再讲一次；而"同一个实例反复进出 WebView"才是要避免的骚扰。
+     * 拿不到实例 id 时退回一个全局 key，宁可不弹第二次也不重复骚扰。
+     * 先写标记再弹：同一次加载里 onPageFinished 可能被调用多次（重定向、重试），
+     * 不先写会叠出两个对话框。
+     */
+    private fun maybeShowFirstRunKeyHint() {
+        val key = KEY_FIRST_RUN_HINT + (DshRuntime.runningInstanceId() ?: "global")
+        if (prefs.getBoolean(key, false)) return
+        prefs.edit().putBoolean(key, true).apply()
+        FCLAlertDialog.Builder(this)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+            .setTitle(getString(R.string.dsh_key_first_run_title))
+            .setMessage(getString(R.string.dsh_key_first_run_message))
+            .setPositiveButton(getString(R.string.dialog_positive), null)
+            .create()
+            .show()
     }
 
     /** 根据运行时状态决定界面：加载 / 等待 / 失败 */

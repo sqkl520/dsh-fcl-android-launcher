@@ -6,7 +6,6 @@ import android.content.Context
 import android.widget.Toast
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.dsh.core.DshBootstrap
-import com.dsh.core.DshCredentials
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
 import com.dsh.core.DshPaths
@@ -40,16 +39,15 @@ import kotlinx.coroutines.withContext
  *
  * ## 相对改造前那页的差异（逐条都是有意为之）
  * - **API Key 整段已移除**：Key 改由 dsh 自己的页面录入（那边功能更全：能测连通、能换模型）。
- *   启动器不再持有这条录入路径，所以这里没有 key 相关行；`DshCredentials` 本身仍在使用
- *   （启动实例时读它），它的下线是另一批的事。
+ *   启动器不再持有这条录入路径，也没有任何持有方式了（DshCredentials 已随本批删除）——
+ *   注进子进程环境会让 dsh 的写入被判为"被环境遮蔽"而直接报错，见 [DshLauncher.startInstance]。
  * - **没有"查看日志"行**：日志不再是"跳去别的页面的动作"，它就是详情页的一个 tab ——
  *   页面内的事不该做成一行按钮。
  * - **多了状态 / 启动停止 / 打开界面三行**：改造前这三件事只存在于实例列表行和外壳右面板，
  *   进了详情页反而做不了（详情页是孤岛）。现在它们是这一页的主操作。
  *
- * @param onOpenTab 切到详情页的另一个 tab（传 [DshInstanceDetailPage] 的 TAB_* 常量）。
- *   启动流程里的「去配置」「查看日志」都指向**同页的另一个 tab** —— 那两个入口原本是要
- *   `startActivity` 去别处的，现在都落在本页内，所以需要这条回调。
+ * @param onOpenTab 切到详情页的另一个 tab（传 [DshInstanceDetailPage] 的 TAB_* 常量）：
+ *   启动失败时的「查看日志」就落在**同页的另一个 tab**（原本是要 `startActivity` 去别处的）。
  *
  * 注意这里**没有**"实例没了就关掉整页"的回调：那是 [DshInstanceDetailPage] 的职责（它订阅
  * 实例清单，实例消失就退层）。本页只管自己这一段的行；实例被删后本页会随详情页一起被销毁。
@@ -217,10 +215,13 @@ class DshInstanceSettingPage(
             R.string.dsh_settings_row_name, R.string.dsh_settings_desc_name,
             { inst?.name ?: "" }, DshInstanceSettingAdapter.Tag.NAME
         ),
-        DshInstanceSettingAdapter.Row.Value(
-            R.string.dsh_settings_model, R.string.dsh_settings_desc_model,
-            { inst?.model ?: "" }, DshInstanceSettingAdapter.Tag.MODEL
-        ),
+        // ★ 这里没有"模型"行（批次 5 删除）：启动器**从来没能**决定 dsh 用哪个模型。
+        // 它原来只是把实例配置里的 model 注成环境变量 DEEPSEEK_DEFAULT_MODEL，而上游根本没有
+        // 读这个名字（它只是 web-search 插件里的一个导出常量，见
+        // dsh/packages/web/web-search-deepseek/src/provider.ts），于是这一行是个死开关：
+        // 改完看不出任何效果，用户还会以为自己已经换过模型了。
+        // 模型现在只由 dsh 自己的「设置 → 模型」决定，两处都能设不如只留一处。
+        // `DshInstance.model` 字段本身保留（删字段要写数据迁移，不值得），它现在只是遗留字段。
         DshInstanceSettingAdapter.Row.Value(
             R.string.dsh_settings_profile, R.string.dsh_settings_desc_profile,
             { inst?.profile ?: "" }, DshInstanceSettingAdapter.Tag.PROFILE
@@ -333,13 +334,6 @@ class DshInstanceSettingPage(
                 }
             }
 
-            DshInstanceSettingAdapter.Tag.MODEL -> pick(
-                context.getString(R.string.dsh_settings_model), DshInstance.MODELS, i.model
-            ) { value ->
-                DshInstances.updateConfig(i.id, model = value)
-                reload()
-            }
-
             DshInstanceSettingAdapter.Tag.PROFILE -> pick(
                 context.getString(R.string.dsh_settings_profile), DshInstance.PROFILES, i.profile
             ) { value ->
@@ -396,16 +390,13 @@ class DshInstanceSettingPage(
      * 启动实例 —— 走的是与实例列表、外壳右面板**同一份** [DshLauncher.startInstance]，
      * 参数也保持一致（否则同一件事会出现三种行为）。
      *
-     * 两处与列表页不同的接线，都是"因为我们在详情页里"：
-     * - `onOpenSettings`：提示"去配置"时，配置就在本页的另一个 tab，切 tab 即可；
-     * - `onOpenLogs`：同理，日志也是本页的一个 tab。
+     * 与列表页唯一不同的接线是 `onOpenLogs`：它是本页的一个 tab，而不是另一个页面。
      */
     private fun startInstance(i: DshInstance) {
         DshLauncher.startInstance(
             activity = host.activity,
             inst = i,
             scope = scope,
-            onOpenSettings = { onOpenTab(DshInstanceDetailPage.TAB_CONFIG) },
             onOpenLogs = { onOpenTab(DshInstanceDetailPage.TAB_LOGS) },
             onPrepareRuntime = { DshLauncher.openSetup(host.activity) },
             onStarted = { host.openWebView() }
@@ -473,9 +464,9 @@ class DshInstanceSettingPage(
             .setTitle(context.getString(R.string.dsh_delete_title))
             .setMessage(context.getString(R.string.dsh_delete_message, i.name))
             .setPositiveButton(context.getString(R.string.dsh_action_delete)) {
-                // 凭据要跟着实例一起清掉：留着它只会在"用同一个名字重建实例"时把旧 key 接上去，
-                // 而那把 key 未必还是用户想用的
-                DshCredentials.clear(context, i.id)
+                // ★ 这里**故意**不再单独清 API Key：Key 归 dsh 管，存在
+                // $DSH_HOME/.credentials.yaml（即 <实例目录>/home/.credentials.yaml），
+                // 而删除会把整个实例目录 deleteRecursively()，它自然一起消失。
                 // 删除是**同步**摘清单 + 异步删目录：实例一从清单消失，详情页订阅到就会退层，
                 // 本页随之被销毁 —— 所以这里不需要、也不该自己去关页面（那是详情页整层的事）。
                 DshInstances.delete(i.id)

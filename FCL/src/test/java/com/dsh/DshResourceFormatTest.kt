@@ -38,14 +38,12 @@ class DshResourceFormatTest {
 
         // DshBootstrap / DshInstancesActivity
 
-        // DshSettingsActivity
+        // DshSettingsActivity / 实例详情页
         "dsh_settings_version" to arrayOf<Any>("0.1.5-rc.2"),
         "dsh_disk_usage" to arrayOf<Any>("312.4 MB"),
-        "dsh_key_present" to arrayOf<Any>("sk-abc…wxyz"),
-        "dsh_key_unreadable" to arrayOf<Any>("keystore 失效"),
-        "dsh_key_ok" to arrayOf<Any>("deepseek-flash, deepseek-v4-pro"),
-        "dsh_key_invalid" to arrayOf<Any>("服务端返回 401"),
-        "dsh_key_unknown" to arrayOf<Any>("网络错误：timeout"),
+        // Key 相关文案整组已删（批次 5）：Key 归 dsh 自己管，启动器既不再读它、也不再
+        // 注进子进程环境，于是对应的登记一并消失。新增的 dsh_key_first_run_* 没有占位符，
+        // 按本测试的规则不需要登记。
 
         // DshSettingsUI（关于页）：%1$s = BuildConfig.VERSION_NAME
         "dsh_about_version" to arrayOf<Any>("0.1.0-SNAPSHOT"),

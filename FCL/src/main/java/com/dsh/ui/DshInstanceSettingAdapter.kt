@@ -42,19 +42,26 @@ class DshInstanceSettingAdapter(
      * ## 为什么没有 API Key 那一组
      * `API_KEY` / `KEY_STATUS` / `KEY_TEST` / `KEY_CLEAR` 四条连同它们的行都已移除：
      * Key 改由 dsh 自己的页面录入 —— 那边功能更全（能测连通、能跟着模型走），启动器再维护一份
-     * 独立的录入界面只会出现"两处都能改、哪处是真值"的歧义。`DshCredentials` 本身仍在使用
-     * （启动实例前要读它判断有没有 key），它是否下线是另一件事，与这里无关。
+     * 独立的录入界面只会出现"两处都能改、哪处是真值"的歧义。`DshCredentials` 已经连它自己
+     * 一起删掉了：启动器既不再持有 Key，也不再把它注进子进程环境（注进去 dsh 反而写不进去），
+     * Key 唯一的存放地就是 $DSH_HOME/.credentials.yaml。
      *
      * ## 为什么没有 `LOGS`
      * 原来那是一条"查看日志"的按钮行，点了跳外壳的日志页。现在日志是**实例详情页的一个 tab**
      * （同页切换，不跨页面），页面内的事不该做成一行按钮，所以这一行连同 tag 一起删掉。
+     *
+     * ## 为什么没有 `MODEL`
+     * 启动器从来没有真正决定过 dsh 用哪个模型：它只是把实例配置里的 model 注成环境变量
+     * DEEPSEEK_DEFAULT_MODEL（dsh/packages/web/web-search-deepseek/src/provider.ts 里那个名字，
+     * 是个导出常量，不是被读取的环境变量）。那是个死开关，所以行与 tag 一起删掉；
+     * 模型只由 dsh 自己的「设置 → 模型」决定。
      *
      * ## 新增的三个
      * [STATUS] / [START_STOP] / [OPEN_WEB] 是"运行"段的主操作：详情页原来是个独立 Activity，
      * 进了详情反而启停不了实例（那两件事只存在于实例列表行和外壳右面板），现在补齐。
      */
     enum class Tag {
-        NAME, MODEL, PROFILE, PORT,
+        NAME, PROFILE, PORT,
         STATUS, START_STOP, OPEN_WEB,
         VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE
     }

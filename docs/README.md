@@ -46,7 +46,7 @@
 - **资源**：`FCL/src/main/res` 109 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + version 标记；
   `rootfs.tar.xz` 不入 Git）· jniLibs 3 个（`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
-- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **70/70**；脚本自检 **18/18**
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **81/81**；脚本自检 **18/18**
 - **入口**：`SplashActivity` → **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
   无 MC 运行时门禁、无 EULA、无 MC 主界面）
 
