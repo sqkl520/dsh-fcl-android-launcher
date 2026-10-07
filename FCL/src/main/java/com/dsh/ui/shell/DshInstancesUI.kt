@@ -9,7 +9,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.mio.ui.adapter.SpacingItemDecoration
 import com.mio.util.AnimUtil
-import com.dsh.core.DshCredentials
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
@@ -99,8 +98,8 @@ class DshInstancesUI(
      * 把某实例的详情压进本页的临时页栈 —— 外壳的 `openInstanceDetail` 调它
      * （见 [DshShellHost.openInstanceDetail]）。
      *
-     * 落点固定为「运行」段：外壳那条入口（右面板的「去配置」、启动失败对话框的「查看日志」）
-     * 只带实例 id，不带"要看哪一段"的意图，那么落在详情页的第一段是唯一说得通的选择。
+     * 落点固定为「运行」段：外壳那条入口（实例行的「更多 → 设置」）只带实例 id，
+     * 不带"要看哪一段"的意图，那么落在详情页的第一段是唯一说得通的选择。
      * 需要指定段落的调用方（实例行的「日志」菜单）用 [showInstanceDetailAt]。
      */
     fun showInstanceDetail(instanceId: String) {
@@ -421,7 +420,6 @@ private class InstanceListPage(
             activity = host.activity,
             inst = inst,
             scope = scope,
-            onOpenSettings = { host.openInstanceDetail(it.id) },
             onOpenLogs = { onOpenDetail(inst.id, DshInstanceDetailPage.TAB_LOGS) },
             onPrepareRuntime = { DshLauncher.openSetup(host.activity) },
             onStarted = { host.openWebView() }
@@ -459,7 +457,11 @@ private class InstanceListPage(
             .setTitle(context.getString(R.string.dsh_delete_title))
             .setMessage(context.getString(R.string.dsh_delete_message, inst.name))
             .setPositiveButton(context.getString(R.string.dsh_action_delete)) {
-                DshCredentials.clear(context, inst.id)
+                // ★ 这里**故意**不再单独清 API Key：Key 现在归 dsh 管，存在
+                // $DSH_HOME/.credentials.yaml（即 <实例目录>/home/.credentials.yaml），
+                // 而 DshInstances.delete() 会把整个实例目录 deleteRecursively() ——
+                // 它自然跟着一起没了。原来那步 DshCredentials.clear() 是启动器自管密钥时代的
+                // 残留，Key 既然不再由启动器持有，留在这只会让人以为它去了别的地方。
                 DshInstances.delete(inst.id)
                 Toast.makeText(context, R.string.dsh_delete_started, Toast.LENGTH_SHORT).show()
             }

@@ -29,8 +29,9 @@ import java.net.Socket
  * 1. **启动有超时、有失败出口**：原来只要 `Process.start()` 不抛异常就返回 true，之后 URL 抓不到就永远
  *    转圈。现在有 [STARTUP_TIMEOUT_MS] 看门狗 + 进程早退检测，失败会给出原因（并自动回收进程）。
  * 2. **端口不再硬编码冲突**：`port = 0` 时交给系统分配，从 dsh 输出的 URL 里回读真实端口并写回实例。
- * 3. **密钥不从磁盘读**：API key 通过子进程环境变量传入，不再写 `credentials.env` 明文文件；
- *    启动 token 会注册到 [DshLogBus] 做脱敏，不再泄漏进日志。
+ * 3. **启动器不碰凭据**：既不从磁盘读、也不向子进程注入 API key —— Key 与模型都归 dsh 自己的
+ *    设置管（原因见启动段那段注释：注入会让 dsh 模型页的写入被**拒绝**）。
+ *    启动 token 会注册到 [DshLogBus] 做脱敏，不泄漏进日志。
  * 4. **孤儿进程处理**：写 `dsh.pid`；App 冷启时会**认领**（adopt）上次被系统杀掉时仍在跑的实例
  *    （端口活着就直接复用，不重启 300MB 进程），认不领就杀掉，避免"端口被旧进程占着，新实例起不来"。
  * 5. **停止可靠**：TERM → 等 5s → KILL，并清理 pid 文件；进程退出后自动让前台服务收尾（不再残留通知）。
@@ -324,16 +325,19 @@ object DshRuntime {
         val launchPort = resolveLaunchPort(instance)
 
         val instancePathInRootfs = "${ProotCommand.GUEST_ROOT}/instances/${instance.id}"
-        val apiKey = DshCredentials.load(context, instance.id)
-        if (apiKey == null) {
-            // 实例级：缺的是**这个实例**的密钥，用户要在该实例的详情页看到原因
-            DshLogBus.appendFor(
-                instance.id,
-                "[runtime] 警告：${instance.name} 未配置可用 API Key，界面能起但对话会失败"
-            )
-        } else {
-            DshLogBus.registerSecret(apiKey)
-        }
+        // ★ 启动器不再向子进程注入 DEEPSEEK_API_KEY / DEEPSEEK_DEFAULT_MODEL（批次 5）。
+        //
+        // 硬理由不是"优先级低"，而是"注入之后用户在 App 内根本改不掉"：
+        // dsh 的凭据提供者 dsh/packages/credentials/credentials-local 的文件头把继承来的进程
+        // 环境排在**最高**优先级（"inherited process environment (read-only, wins)"），并且
+        // 写入路径上有一道 assertUnshadowed()：环境里已经有这个引用时，写入会直接抛错
+        // "supplied read-only by the launching environment, so set would be shadowed"。
+        // 也就是说：启动器一旦注入，用户在 dsh「设置 → 模型」里填 Key 会**吃一个报错**，
+        // 既不是"改了没用"，也不是静默覆盖 —— 在 App 内无论如何都配不成。
+        // 去掉注入后，$DSH_HOME/.credentials.yaml 是唯一可写来源，改完立刻生效。
+        //
+        // 顺带：不再有 App 侧的明文 key，也就无需在日志里为它注册脱敏。
+        // "没配 Key"不再是启动器要判断的事 —— 那是 dsh 自己的状态，UI 能起就照常起。
 
         val argvEnv = mapOf(
             "INSTANCE_DIR" to instancePathInRootfs,
@@ -346,11 +350,8 @@ object DshRuntime {
             "READY_TIMEOUT" to (STARTUP_TIMEOUT_MS / 1000 - 15).toString(),
             "NODE_OPTIONS" to "--max-old-space-size=${nodeHeapMb(context)}"
         )
+        // 这里只放"启动参数"，不放任何凭据：Key 与模型都由 dsh 自己的设置决定。
         val secretEnv = HashMap<String, String>()
-        if (apiKey != null) {
-            secretEnv["DEEPSEEK_API_KEY"] = apiKey
-            secretEnv["DEEPSEEK_DEFAULT_MODEL"] = instance.model
-        }
         if (noSeccomp) {
             // 部分内核上 proot 的 seccomp 加速会让 rootfs 内的进程直接被信号杀死（SIGSYS）：
             // 关掉它（只影响性能，不影响功能）。由 looksLikeSeccompTrouble() 触发的兜底重试使用。

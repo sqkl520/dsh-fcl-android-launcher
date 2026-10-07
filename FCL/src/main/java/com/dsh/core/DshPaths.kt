@@ -167,11 +167,20 @@ object DshPaths {
     /** 运行中 proot 进程的 pid 文件（孤儿进程清理用） */
     fun instancePidFile(instanceId: String): File = File(instanceDir(instanceId), "dsh.pid")
 
-    /** 旧的运行期明文凭据文件（已废弃：现在密钥走进程环境变量，不再落盘） */
+    /**
+     * 旧的运行期明文凭据文件（`credentials.env`）。
+     *
+     * ⚠️ **已废弃**：启动器不再管理 API Key（Key 归 dsh 自己管，存在实例 home 的
+     * `.credentials.yaml` 里），所以**没有任何功能会读它**。这两个函数保留的唯一用途是
+     * [com.dsh.core.DshInstances] 的 `cleanupLegacyCredentialFiles()` ——
+     * 就地升级上来的旧安装里可能还躺着一个**明文 Key**，那份清理按这两个函数取路径。
+     *
+     * 真要下线时，请连同那份清理一起删（它不是死代码），别只删函数。
+     */
     fun instanceLegacyCredentials(instanceId: String): File =
         File(instanceDir(instanceId), "credentials.env")
 
-    /** Keystore 加密后的 API key 密文 */
+    /** 旧版 Keystore 加密后的 API key 密文（同上，已废弃，仅供清理逻辑取路径） */
     fun instanceCredentialsEnc(instanceId: String): File =
         File(instanceDir(instanceId), "credentials.enc")
 

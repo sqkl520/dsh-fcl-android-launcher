@@ -207,7 +207,6 @@ class DshMainActivity : FCLActivity(), DshShellHost {
                     activity = this,
                     inst = inst,
                     scope = scope,
-                    onOpenSettings = { openInstanceDetail(it.id) },
                     // 启动失败的"查看日志"落到该实例的详情页：日志已按实例归属收进详情
                     // （App 级日志才在「设置」里），所以这里不能再去切一个日志 tab —— 它已经不存在了。
                     onOpenLogs = { openInstanceDetail(inst.id) },

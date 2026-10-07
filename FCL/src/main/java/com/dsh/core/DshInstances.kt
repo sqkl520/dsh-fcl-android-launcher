@@ -165,6 +165,10 @@ object DshInstances {
      * - 只清掉 INSTALLING 这种"卡死"的瞬态
      */
     fun repair() {
+        // 0) 顺带清掉历史遗留的凭据文件（见该函数的注释）。
+        //    放在 repair 里是因为这里本来就在 IO 线程上、本来就要遍历全部实例 ——
+        //    这是"就地升级上来的旧安装"唯一会被统一扫一遍的时机。
+        cleanupLegacyCredentialFiles()
         // ★ 先在 `_instances.update {}` 之外算好"磁盘事实"：update 的 lambda 在并发修改时会
         // 被重试，把文件 IO 放在里面（旧实现）会有两个坏处：① 同样的 readText 被重复执行；
         // ② 在原子更新的重试循环里持有 IO 时间。现在只把结果带进去做纯内存替换。
@@ -218,6 +222,36 @@ object DshInstances {
             }
         }
         if (changed) saveAsync()
+    }
+
+    /**
+     * 清掉**历史版本**留下的凭据文件：旧的 `credentials.env`（明文！）与 `credentials.enc`
+     * （启动器自己那套 Keystore 密文）。
+     *
+     * ## 为什么现在才清、为什么必须清
+     * 这两份文件是"启动器自己管 API Key"那个时期的产物。改造后 Key 归 dsh 自己管
+     * （存在实例 home 里的 `.credentials.yaml`），启动器**再也不会读它们** ——
+     * 也就是说，旧安装升级上来之后，一个**明文 API Key 会一直躺在实例目录里**，
+     * 而没有任何功能需要它。删除是纯粹的卫生问题，但它涉及密钥，不能拖。
+     *
+     * ## 为什么放在 repair（而不是一次性迁移）
+     * 不需要额外的版本标记：这两份文件的存在本身就是"旧安装"的判据，
+     * 而 repair 在每次启动时都会跑一遍全部实例。删一个不存在的文件是空操作，
+     * 幂等、无状态、不会因为"迁移标记丢了"而漏清。
+     *
+     * 只删**文件**，不动目录。失败静默忽略（下次启动还会再试）。
+     */
+    private fun cleanupLegacyCredentialFiles() {
+        _instances.value.forEach { inst ->
+            listOf("credentials.env", "credentials.enc").forEach { name ->
+                runCatching {
+                    val f = java.io.File(DshPaths.instanceDir(inst.id), name)
+                    if (f.exists() && f.delete()) {
+                        DshLogBus.appendFor(inst.id, "[instances] 已清理遗留凭据文件 $name（启动器不再管理 API Key）")
+                    }
+                }
+            }
+        }
     }
 
     /**
