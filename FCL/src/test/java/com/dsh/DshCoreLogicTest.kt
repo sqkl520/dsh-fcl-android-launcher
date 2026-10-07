@@ -180,12 +180,18 @@ class DshCoreLogicTest {
         assertEquals(line, DshLogBus.sanitize(line))
     }
 
-    /** 注册过 API key 后，即使它出现在其它格式的输出里也要被抹掉 */
+    /**
+     * 注册过的密钥（当前只有 dsh 启动 token 走这条）在任意格式的输出里都要被抹掉。
+     *
+     * 批次 5 之前这里用的是一个 API key；启动器不再持有 API key 之后，还走
+     * [DshLogBus.registerSecret] 的只剩启动 token，所以样例换成 token 形态。
+     * 被测行为（注册即脱敏）没变。
+     */
     @Test
     fun sanitizesRegisteredSecrets() {
-        DshLogBus.registerSecret("sk-abcdef1234567890")
-        val safe = DshLogBus.sanitize("using key sk-abcdef1234567890 now")
-        assertTrue("注册的密钥未被脱敏: $safe", !safe.contains("sk-abcdef1234567890"))
+        DshLogBus.registerSecret("tok-abcdef1234567890")
+        val safe = DshLogBus.sanitize("using secret tok-abcdef1234567890 now")
+        assertTrue("注册的密钥未被脱敏: $safe", !safe.contains("tok-abcdef1234567890"))
     }
 
     /** `&token=`（非首个查询参数）也要脱敏——LAN 变体就是这种形态 */

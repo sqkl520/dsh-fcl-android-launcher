@@ -14,9 +14,15 @@ import java.io.File
  *
  * ## 安全约束
  * - 命令一律用数组参数给 ProcessBuilder，**不做字符串拼接**，避免注入。
- * - **密钥不进 argv**：API key 只通过 [Spec.procEnv]（子进程环境）传递。原来通过
- *   `/usr/bin/env DEEPSEEK_API_KEY=xxx` 放在命令行里，任何能看到 `ps` 的地方都能读到。
+ * - **密钥不进 argv**：需要传给子进程的敏感值只走 [Spec.procEnv]（子进程环境），
+ *   不放进命令行 —— 放在命令行里任何能看到 `ps` 的地方都能读到。
+ *   （当前启动器**不再传任何凭据**：Key 与模型都归 dsh 自己的设置管，见 [DshRuntime] 的启动段注释。
+ *   这一条约束留着，是因为 [DshRuntime] 仍会往 procEnv 放 `PROOT_NO_SECCOMP` 这类值。）
  * - 环境变量白名单（[isAllowedEnvKey]）拦掉 `LD_PRELOAD` 之类的高危变量注入。
+ * - ⚠️ **[isAllowedEnvKey] 里的 `CRED_FILE` 与 `DEEPSEEK_` 通配现在是冗余项**：
+ *   启动器已不再注入它们（脚本侧也不再读 `CRED_FILE`）。**刻意留着不删** ——
+ *   它们是"将来若要再传此类值，入口已经在这里"的标记；删掉只会让下一个人重新想一遍。
+ *   真要删时，请连同这条注释一起删，别只删一半。
  *
  * ## 布局约定
  * 宿主 `<filesDir>/dsh` 通过 `--bind` 暴露为 rootfs 内的 `/opt/dsh`，
@@ -101,7 +107,7 @@ object ProotCommand {
      *
      * @param script rootfs 内要执行的脚本，如 `/opt/dsh/scripts/start-dsh.sh`
      * @param argvEnv 非敏感配置（INSTANCE_DIR/PORT/PROFILE/...）
-     * @param procEnv 敏感或需隐藏的配置（DEEPSEEK_API_KEY/...）
+     * @param procEnv 不宜出现在命令行里的值（当前是 PROOT_NO_SECCOMP；见 [isAllowedEnvKey] 的说明）
      * @param workDirRootfs 初始工作目录（默认 /root；实例运行时应传实例 workspace）
      * @param bindCacheAsTmp 是否把宿主 cacheDir/dsh/tmp 挂成 /tmp（默认是）
      */
