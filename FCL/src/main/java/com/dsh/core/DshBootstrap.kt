@@ -265,9 +265,36 @@ object DshBootstrap {
         }
     }
 
+    /**
+     * 底座准备失败：写日志 + 发进度事件 + **上报一条终态任务**。
+     *
+     * ★ 为什么失败也必须 [DshTasks.report]（而不是只发 `Progress.Failed`）：
+     *   `Progress.Failed` 是"这一帧的进度状态"，而 [install] 的 `finally { _busy.value = false }`
+     *   紧接着就把 `_busy` 置回 false —— [DshTasks] 那句 `if (busy) add(bootstrapTask(progress))`
+     *   于是几乎在同一瞬间不再成立。结果：失败信息只在"progress 已更新、busy 还没置 false"那个
+     *   竞态窗口里存在过一帧（状态流还是**合帧**的，同一轮里的两次写入只会通知一次），
+     *   用户通常根本看不到，只知道"点了准备运行环境，转一圈，什么都没发生"。
+     *
+     *   `busy` 的语义不能改（界面拿它做门禁：解压中要禁按钮，置 false 太晚会让用户并发触发两次解压），
+     *   所以这里不碰它，而是把**失败这件事**变成一条**事件**上报：终态任务是 push 进来的，
+     *   不受 `busy` 的影响，会稳定留在任务区（[DshTasks.finished]）里，
+     *   显示成"运行环境准备失败：xxx"。这也是"失败态该由事件承载、而不是靠状态残留"的直接体现。
+     */
     private fun fail(emit: (Progress) -> Unit, reason: String) {
         DshLogBus.append("[bootstrap] 失败：$reason")
         emit(Progress.Failed(reason))
+        // instanceId 留 null：底座是**所有实例共享**的，不属于任何一个实例（与 bootstrapTask 同口径）
+        DshTasks.report(
+            DshTask(
+                id = "bootstrap",
+                kind = DshTask.Kind.BOOTSTRAP,
+                title = "",
+                stage = reason,
+                action = DshTask.Action.NONE,
+                state = DshTask.State.FAILED,
+                error = reason
+            )
+        )
     }
 
     /**

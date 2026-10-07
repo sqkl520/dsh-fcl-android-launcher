@@ -1,20 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  设置分组标题行（小节名）。FCL 原版靠「组内 1dp 缝隙 + 组间 8dp 间距」隐式分组；
-  本项目保留一个小节标题让结构更清楚，样式做成不显眼的说明文字（非卡片），
-  与 FCL 的 description 同款取值（12sp + auto_text_tint）。
+  设置分组标题行（小节名）。FCL 原版没有这种东西：它的分组只靠「组内 1dp 细缝 + 组间 8dp」的
+  SpacingItemDecoration 与位置感知圆角（bg_item_rounded_top / _middle / _bottom）表达。
+
+  这里保留分组语义，但把它**降级成提示文字**：原来是 12sp + bold —— 比行内主标题（14sp）小却更粗，
+  在层级上比标题还抢眼；现在与 description 同款（11sp + 弱化的提示色），读起来是"这一段的说明"
+  而不是"一节的大标题"。颜色不能用 app:auto_text_tint：那会把文字设成与卡片底最高对比的
+  autoTint（=行内主标题的强度），与"弱化"相反；弱化色 autoHintTint（半透明黑/白）由适配器按
+  当前主题设置，所以这里也不写死颜色。
 -->
 <com.tungsten.fcllibrary.component.view.FCLTextView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/group_title"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:paddingStart="12dp"
-    android:paddingTop="6dp"
+    android:paddingTop="10dp"
     android:paddingEnd="12dp"
-    android:paddingBottom="4dp"
-    android:textSize="12sp"
-    android:textStyle="bold"
-    app:auto_text_tint="true"
+    android:paddingBottom="2dp"
+    android:textSize="11sp"
     tools:text="通用" />

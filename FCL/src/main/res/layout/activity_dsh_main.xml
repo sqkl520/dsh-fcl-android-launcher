@@ -5,6 +5,9 @@
   只把菜单项与右侧面板的内容换成 dsh 的（见 docs/design/app-shell.md §4.1）。
   与 FCL 保持一致的细节：左侧菜单 bg_game_menu + elevation 100dp + padding 5/10/5/10；
   右侧面板 bg_right_menu + 宽度 25% + elevation 100dp + 内层 right_menu_content；
+  ★ 右面板的**容器本身不带内边距**（面板与内层内容都不带）—— 左右留白由**各子元素自己的
+  layout_margin** 提供，因为 FCL 的面板里不同内容留白本来就不同档（启动按钮 10dp、
+  版本卡 8dp、账户卡居中不设边距）。把留白写在容器 padding 上就没有这层自由度了。
   动态岛在**底部居中**（FCL 原位）；ViewPager2 高度 match_parent 且无额外边距。
   视觉全部走 fcllibrary 控件 + ThemeEngine（§2.5）。
   菜单项：实例 / 版本 / 设置 + 返回（管理是零引用的空占位、日志拆进实例详情与设置子页，故删）。
@@ -98,38 +101,52 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintWidth_percent="0.25">
 
+        <!-- 内层 content：**不设内边距**（FCL 的 right_menu_content 同样没有）。
+             留白交给每个子元素自己的 margin —— 见文件头那条说明。
+             注意子元素的 margin 是相对本容器算的，所以本容器必须铺满 right_menu
+             （0dp + 四条边约束），否则等于把整块内容缩进一圈。 -->
         <androidx.constraintlayout.widget.ConstraintLayout
             android:id="@+id/right_menu_content"
             android:layout_width="0dp"
             android:layout_height="0dp"
             android:clipChildren="false"
             android:clipToPadding="false"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent">
 
+            <!-- 面板小标题（本实例叫什么）—— 形态照 FCL 账户卡里的 account_name：
+                 16sp + bold + 单行 + use_theme_color。
+                 字号**不是**照抄某个 FCL 元素的数字游戏，而是"面板里的主标题"这一档：
+                 FCL 的面板主标题（account_name）16sp bold，卡片里的次要文字（account_hint、
+                 version_hint）12sp、版本名 14sp bold。下面是实例名的 16sp，标题不该和它同档，
+                 所以对齐 account_name 的 16sp bold。 -->
             <com.tungsten.fcllibrary.component.view.FCLTextView
                 android:id="@+id/right_title"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
                 android:layout_marginTop="16dp"
+                android:layout_marginEnd="10dp"
                 android:singleLine="true"
                 android:text="@string/dsh_right_current_instance"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toTopOf="parent"
                 app:use_theme_color="true" />
 
+            <!-- 实例名：FCL 的账户卡里对应的角色是 account_name（16sp bold），
+                 这里原本就是 16sp bold，保持不变 -->
             <com.tungsten.fcllibrary.component.view.FCLTextView
                 android:id="@+id/right_instance_name"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
                 android:layout_marginTop="10dp"
+                android:layout_marginEnd="10dp"
                 android:ellipsize="end"
                 android:singleLine="true"
                 android:textSize="16sp"
@@ -139,11 +156,14 @@
                 app:use_theme_color="true"
                 tools:text="dsh 0.1.5-rc.2" />
 
+            <!-- 状态提示：FCL 对应 account_hint（12sp、不加粗）—— 同档，不变 -->
             <com.tungsten.fcllibrary.component.view.FCLTextView
                 android:id="@+id/right_instance_hint"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
                 android:layout_marginTop="2dp"
+                android:layout_marginEnd="10dp"
                 android:textSize="12sp"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintStart_toStartOf="parent"
@@ -151,14 +171,17 @@
                 app:use_theme_color="true"
                 tools:text="就绪 · 端口 3080" />
 
-                    <!-- 启动 / 停止 —— 照 FCL activity_main.xml 的 start 按钮形态：
+            <!-- 启动 / 停止 —— 照 FCL activity_main.xml 的 start 按钮形态：
                  无边框 clickable 容器 + 按压缩放（anim_scale）+ 图标与文字居中成链，
-                 图标用 FCLImageView + background + use_theme_color，文字 use_theme_color -->
+                 图标用 FCLImageView + background + use_theme_color，文字 use_theme_color。
+                 左右 10dp 与 FCL 的 start 一致（它的 start 是 layout_marginHorizontal="10dp"） -->
             <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
                 android:id="@+id/right_start"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
                 android:layout_marginTop="16dp"
+                android:layout_marginEnd="10dp"
                 android:clickable="true"
                 android:elevation="200dp"
                 android:focusable="true"
@@ -196,12 +219,14 @@
 
             </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
 
-            <!-- 打开界面 —— 同款形态 -->
+            <!-- 打开界面 —— 同款形态（左右 10dp 同上） -->
             <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
                 android:id="@+id/right_webui"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
                 android:layout_marginTop="4dp"
+                android:layout_marginEnd="10dp"
                 android:clickable="true"
                 android:elevation="200dp"
                 android:focusable="true"

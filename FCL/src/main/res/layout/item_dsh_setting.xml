@@ -8,6 +8,13 @@
   位置感知圆角（top/middle/bottom）与分组间距由适配器 + SpacingItemDecoration 负责，
   底色由适配器按主题色 tint（FCL 原版是纯白卡片；本项目主题色偏深，tint 后文字才看得清，
   与 FCL 的 auto_text_tint 取色逻辑一致）。
+
+  ★ 底色既然是**代码**设的（bg_item_rounded* 的 solid 是白），适配器就必须同时向 ThemeEngine 注册
+  刷新回调：只在新绑定时 tint 的话，主题切换后已经绑好的行会一直保持旧色（那就是本行看起来
+  "没跟上换肤"的原因）。这一条在适配器的 applyRowBackground 里统一处理，布局这边不写死任何颜色。
+
+  本行整行**不可点**（动作在右侧的 FCLButton 上，它自带 ripple + anim_scale 反馈），
+  所以这里不挂 android:stateListAnimator —— 挂了也只会让"点空白处"有动静而实际什么也不做。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"

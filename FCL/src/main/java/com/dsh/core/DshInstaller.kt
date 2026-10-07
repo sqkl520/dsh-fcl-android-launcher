@@ -49,6 +49,23 @@ class DshInstaller(
         data class Done(val version: String) : Progress()
         /** [version] 为本次失败的目标版本（安装开始时会写入实例），供界面只清除对应版本的"安装中"标记 */
         data class Failed(val reason: String, val version: String? = null) : Progress()
+
+        /**
+         * 用户取消了这次安装（本次新增）。
+         *
+         * ★ 为什么**必须**新增这一种，而不是复用 [Failed]：
+         *   取消要发一条**事件**给订了 [progress] 的界面（下载页的"安装中"标记等的就是这条事件）。
+         *   复用它的话，界面上会先闪一句"安装失败：xxx"，而用户明明是自己点的取消 —— 那正是真机上
+         *   被投诉的误导（"取消了却说安装失败"）。语义不同的东西不能共用一个信封。
+         *
+         * ★ 为什么**必须**发这条事件：改造前 [cancel] 只打标记、杀进程、清 [statuses]，**一个
+         *   `Progress` 都不发**。于是订阅 `progress` 的界面永远等不到终态，"安装中"标记就留在原地，
+         *   只能重启 App 才恢复（真机 bug 之一）。终态是事件，取消路径当初缺的就是"说出来"这一步。
+         *
+         * [version] 与 [Failed] 同义：本次取消的目标版本，供界面只清掉**对应版本**的标记
+         * （同时装两个版本时，取消一个不该让另一个的标记也消失）。
+         */
+        data class Cancelled(val version: String?) : Progress()
     }
 
     /** 某个实例的安装状态（可被界面随时读取，界面重建不丢） */
@@ -132,7 +149,15 @@ class DshInstaller(
                     if (resolved != null) {
                         DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
                         DshLogBus.appendFor(instance.id, "[install] ${instance.name} 取消时其实已装完：dsh $resolved")
+                        // ★ 这里再报一条 DONE，而不是让"已取消"当成最终结论：
+                        //   取消那一刻报的 CANCELLED 描述的是**用户动作**，而磁盘事实是"它其实装完了"。
+                        //   两条都是真事，按事件记录（[DshTasks.finished] 是事件列表，不是状态表），
+                        //   最新的在前，用户先看到的是真正的结局；若只留"已取消"，实例卡片显示
+                        //   READY、任务区显示"已取消"，两处对不上反而更费解。
+                        DshTasks.report(doneTask(instance, resolved))
                     } else {
+                        // 取消的"常态"路径：CANCELLED 已经由 [cancel] 在用户点击那一刻报过了，
+                        // 这里**不再重复上报** —— 重复报只会让任务区为同一次取消出现两行一样的"已取消"。
                         DshLogBus.appendFor(instance.id, "[install] ${instance.name} 的安装已取消，忽略本次结果")
                     }
                 } else if (ok) {
@@ -146,6 +171,8 @@ class DshInstaller(
                         finishStatus(instance.id)
                         // 实例级：装完是这个实例状态跃迁的关键一行（"什么时候能启动了"）
                         DshLogBus.appendFor(instance.id, "[install] ${instance.name} 安装完成：dsh $resolved")
+                        // 终态上报：任务区要能看到"安装完成 dsh <版本>"，而不是行一消失什么都不剩
+                        DshTasks.report(doneTask(instance, resolved))
                     }
                 } else {
                     fail(instance, errorSummary(instance.id))
@@ -182,8 +209,19 @@ class DshInstaller(
      * ★ 注意：这里**不**把 [running] 里的登记删掉 —— 登记同时代表"共享状态（错误摘要、闸门）
      * 当前归哪个任务管"。让它自己在 finally 里收尾（[isCurrentOwner] 判断），
      * 既保留"取消时其实已装完 → 标 READY"的判定，也避免旧任务的收尾动作伤到下一次安装。
+     *
+     * ★ **本轮补上的终态上报**（治"取消后界面还显示安装中"）：
+     *   1. 目标版本要在**清 [statuses] 之前**读出来 —— 那一步正是把版本信息抹掉的那一步，
+     *      读晚了就只能发一条 `version == null` 的取消事件，界面无从知道该清哪个版本的标记。
+     *   2. 发 [Progress.Cancelled]：订阅 [progress] 的界面（下载页）等的是**事件**，
+     *      而这里原来一个事件都不发 —— 订户永远收不到终态，"安装中"标记只能等重启 App。
+     *   3. 上报 [DshTasks.report]（state = CANCELLED）：任务区要能显示"已取消"这个**结果**。
+     *      没有它，任务行在取消的瞬间直接消失（进行中列表是每帧重算的投影），用户看不出发生了什么。
      */
     fun cancel(instanceId: String) {
+        // 先取版本：下面清 statuses 之后就再也拿不到了（见方法注释第 1 点）
+        val version = _statuses.value[instanceId]?.version
+        val error = context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_cancelled)
         // 先打标记再取消：任务体是阻塞在 proot 上的（协程取消打断不了阻塞调用），
         // 它会等到进程被杀、runInstall 返回非 0 之后才继续；如果没有这个标记，
         // 用户点"取消"会看到实例变成 BROKEN（"安装失败"）而不是"已取消"。
@@ -192,10 +230,18 @@ class DshInstaller(
         gate.release(instanceId)
         killActive(instanceId)
         _statuses.update { it - instanceId }
-        DshInstances.markState(
-            instanceId,
-            DshInstance.State.NOT_INSTALLED,
-            error = context.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_cancelled)
+        DshInstances.markState(instanceId, DshInstance.State.NOT_INSTALLED, error = error)
+        _progress.value = Progress.Cancelled(version)
+        DshTasks.report(
+            DshTask(
+                id = DshTasks.installTaskId(instanceId),
+                kind = DshTask.Kind.INSTALL,
+                title = DshInstances.byId(instanceId)?.name ?: version ?: instanceId,
+                stage = error,
+                action = DshTask.Action.NONE,
+                state = DshTask.State.CANCELLED,
+                instanceId = instanceId
+            )
         )
     }
 
@@ -203,20 +249,59 @@ class DshInstaller(
     private fun isCurrentOwner(instanceId: String, job: Job?): Boolean =
         job != null && running[instanceId] === job
 
+    /**
+     * 安装失败。
+     *
+     * ★ **N7 修复：失败也要清 [statuses]，不能只写一条 `running = false` 的条目。**
+     *   改造前这里写的是"把该实例的条目改成 `running = false` + error"，而清理只在成功路径
+     *   （[finishStatus]）里做 —— 于是**每一次失败都往 `_statuses` 这个 map 里永久留下一行**，
+     *   既没人删也没有任何界面会显示（界面只关心 `running == true` 的行），
+     *   单调增长、直到 App 进程结束。用户每点一次"重试"就多一行，内存缓慢泄漏，
+     *   而且它会跟着 `statuses` 的每次 `update` 一起被复制来复制去。
+     *
+     *   那"失败原因去哪里了"？—— 三处，都还在，而且本来就是权威来源：
+     *     · 实例自己的 `lastError`（[DshInstances.markState] 写入，卡片与实例详情页读它）；
+     *     · [progress] 发一条 [Progress.Failed]（下载页据此弹提示）；
+     *     · [DshTasks.report] 一条 FAILED 的终态任务（任务区显示"安装失败 + 原因"）。
+     *   所以清掉 `_statuses` 不会让任何信息消失 —— 它本来就是"进行中的进度"，不是"历史结论"。
+     *
+     * ★ 同时上报终态任务：失败原因进 [DshTasks.finished]，用户能在任务区看到"安装失败：xxx"
+     *   而不是行一消失就什么都不知道。
+     */
     private fun fail(instance: DshInstance, reason: String) {
         DshInstances.markState(instance.id, DshInstance.State.BROKEN, error = reason)
         _progress.value = Progress.Failed(reason, instance.dshVersion)
-        _statuses.update {
-            it + (instance.id to (it[instance.id]?.copy(running = false, error = reason)
-                ?: InstallStatus(instance.id, "-", "", running = false, error = reason)))
-        }
+        finishStatus(instance.id)
         // 实例级：安装失败原因就是这个实例自己的失败（实例页"为什么它坏了"的唯一权威解释）
         DshLogBus.appendFor(instance.id, "[install] ${instance.name} 安装失败：$reason")
+        DshTasks.report(
+            DshTask(
+                id = DshTasks.installTaskId(instance.id),
+                kind = DshTask.Kind.INSTALL,
+                title = instance.name,
+                stage = reason,
+                action = DshTask.Action.NONE,
+                state = DshTask.State.FAILED,
+                instanceId = instance.id,
+                error = reason
+            )
+        )
     }
 
     private fun finishStatus(instanceId: String) {
         _statuses.update { it - instanceId }
     }
+
+    /** 安装成功的终态任务。三处上报（常规成功、取消时已装完）共用一份，免得文案/字段漂移。 */
+    private fun doneTask(instance: DshInstance, version: String): DshTask = DshTask(
+        id = DshTasks.installTaskId(instance.id),
+        kind = DshTask.Kind.INSTALL,
+        title = instance.name,
+        stage = "dsh $version",
+        action = DshTask.Action.NONE,
+        state = DshTask.State.DONE,
+        instanceId = instance.id
+    )
 
     private fun updateStatus(status: InstallStatus) {
         _statuses.update { it + (status.instanceId to status) }

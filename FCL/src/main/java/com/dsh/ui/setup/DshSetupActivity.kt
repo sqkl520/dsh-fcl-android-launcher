@@ -77,11 +77,11 @@ class DshSetupActivity : FCLActivity() {
         setContentView(binding.root)
 
         DshPaths.loadPaths(this)
-        // 与主外壳同一套视觉：主题背景图 + 控件取色由 ThemeEngine 驱动
-        ImageUtil.loadInto(
-            binding.bgCover,
-            ThemeEngine.getInstance().getTheme().getBackground(this)
-        )
+        // 与主外壳同一套视觉：主题背景图由 ThemeEngine 提供，直接铺在根容器上
+        // （根 id=background、transitionName=background，与启动页/外壳同一写法）
+        loadBackground()
+        // 背景图是"按当前亮暗模式挑图"的，主题一变必须重铺（onDestroy 注销，防止持有已销毁实例）
+        ThemeEngine.getInstance().addRefreshListener(themeRefreshListener)
 
         buildStepRows()
         ThemeEngine.getInstance().registerEvent(binding.root, themeRefresh)
@@ -115,7 +115,7 @@ class DshSetupActivity : FCLActivity() {
             // ★ 行底必须跟主题色 tint：文字用的是 auto_text_tint（按主题色算出的浅色），
             //   若行底保持 bg_item_rounded 的纯白，浅色文字落在白底上会看不见
             item.root.backgroundTintList =
-                android.content.res.ColorStateList.valueOf(ThemeEngine.getInstance().getTheme().ltColor)
+                android.content.res.ColorStateList.valueOf(rowTint())
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -128,19 +128,63 @@ class DshSetupActivity : FCLActivity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    /**
+     * 清单行底色 —— **初始化与主题刷新共用这一个来源**。
+     *
+     * 用 `ltColor`（主色提亮后的浅色变体）而不是原始 `color`：本项目主题色偏深，行底直接用
+     * 原始主色会压掉 auto_text_tint 算出的文字色；`ltColor` 同时是 FCL 自己的列表行惯例
+     * （`FCLConstraintLayout` 的 `auto_tint`、`FCLTabLayout` 的 tab 底色都取它），
+     * 所以行底与其余页面的卡片是同一个色系。
+     *
+     * ★ 两边必须是同一个来源：`ltColor` 由 `getColor()`（带亮暗判断）派生，会随亮暗切换整体变化；
+     *   若初始化用 `ltColor`、刷新时换成原始的 `color`（不分模式），主题一变色行底就会突变。
+     */
+    private fun rowTint(): Int = ThemeEngine.getInstance().getTheme().ltColor
+
     /** 主题切换后重新给清单行上色（行底是 tint 出来的，不随控件自动刷新） */
     private val themeRefresh = Runnable {
-        val color = android.content.res.ColorStateList.valueOf(
-            ThemeEngine.getInstance().getTheme().color
-        )
+        val color = android.content.res.ColorStateList.valueOf(rowTint())
         stepBindings.forEach { it?.root?.backgroundTintList = color }
+    }
+
+    /**
+     * 按当前亮暗模式加载主界面背景（与外壳同款）。
+     * ThemeEngine 的刷新回调是全局异步排队，Activity 销毁后仍未执行的回调无法通过 onDestroy
+     * 注销取消，因此这里防 Glide 对已销毁 Activity 加载崩溃。
+     */
+    private fun loadBackground() {
+        if (isDestroyed || isFinishing) return
+        ImageUtil.loadInto(
+            binding.background,
+            ThemeEngine.getInstance().getTheme().getBackground(this)
+        )
+    }
+
+    /** 主题刷新时重新加载背景（onDestroy 注销，防止持有已销毁实例） */
+    private val themeRefreshListener = Runnable { loadBackground() }
+
+    /**
+     * 换进度卡左侧的状态图标（下载中 / 已完成 / 失败）。
+     *
+     * ★ 图标一律走 `setBackgroundResource` 而不是 `setImageResource`：`FCLImageView` 的主题着色
+     *   只作用于 `getBackground()`，走 `src` 时 `use_theme_color` 会静默失效 —— 图标将保持
+     *   vector 自带的颜色（下载/完成图标自带 `darker_gray`，在深色底上几乎看不见）。
+     *
+     * ★ 换完必须补一次着色：`FCLImageView` 的上色只发生在**主题刷新时**，运行期换背景图不会
+     *   自动带上主题色。取色用 `getColor2()`（按当前亮暗模式取次要色）而不是原始 `.color2` ——
+     *   原始值不分模式，`color2` 默认是纯黑（`color2Dark` 才是白），暗色模式下会把图标染黑。
+     *   之后主题切换时控件自己的回调会继续维持这个颜色。
+     */
+    private fun setStateIcon(res: Int) {
+        binding.stateIcon.setBackgroundResource(res)
+        binding.stateIcon.background?.setTint(ThemeEngine.getInstance().getTheme().getColor2())
     }
 
     // ===== 准备流程 =====
 
     private fun beginPrepare() {
         binding.btnRetry.visibility = View.GONE
-        binding.stateIcon.setImageResource(R.drawable.ic_baseline_download_24)
+        setStateIcon(R.drawable.ic_baseline_download_24)
         binding.progressTitle.setText(R.string.dsh_setup_title)
         setProgress(getString(R.string.dsh_setup_starting), null, null)
         refreshStepStates()
@@ -170,7 +214,7 @@ class DshSetupActivity : FCLActivity() {
                 refreshStepStates()
             }
             is DshBootstrap.Progress.Done -> {
-                binding.stateIcon.setImageResource(R.drawable.ic_baseline_done_24)
+                setStateIcon(R.drawable.ic_baseline_done_24)
                 setProgress(getString(R.string.dsh_setup_title_done), null, 1.0)
             }
             is DshBootstrap.Progress.Failed -> showFailure(p.reason)
@@ -199,7 +243,7 @@ class DshSetupActivity : FCLActivity() {
 
     /** 失败：标题变红、写明原因、露出「重试」；停在原页不自动进首页 */
     private fun showFailure(reason: String) {
-        binding.stateIcon.setImageResource(R.drawable.ic_baseline_warning_24)
+        setStateIcon(R.drawable.ic_baseline_warning_24)
         binding.progressTitle.setText(R.string.dsh_setup_title_failed)
         setProgress(reason, null, null)
         binding.progressBar.setProgress(0f)
@@ -228,9 +272,12 @@ class DshSetupActivity : FCLActivity() {
         val report = withContext(Dispatchers.IO) { DshBootstrap.verify(this@DshSetupActivity) }
         withContext(Dispatchers.Main) {
             val ok = report.ok
-            stepBindings[3]?.stepIcon?.setImageResource(
-                if (ok) R.drawable.ic_baseline_done_24 else R.drawable.ic_baseline_warning_24
-            )
+            stepBindings[3]?.let { row ->
+                setStepIcon(
+                    row,
+                    if (ok) R.drawable.ic_baseline_done_24 else R.drawable.ic_baseline_warning_24
+                )
+            }
             stepBindings[3]?.stepState?.text =
                 getString(if (ok) R.string.dsh_setup_state_ready else R.string.dsh_setup_state_failed)
             if (ok) {
@@ -257,17 +304,25 @@ class DshSetupActivity : FCLActivity() {
         if (check.stepState.text != getString(R.string.dsh_setup_state_running) &&
             check.stepState.text != getString(R.string.dsh_setup_state_ready)
         ) {
-            check.stepIcon.setImageResource(R.drawable.ic_baseline_download_24)
+            setStepIcon(check, R.drawable.ic_baseline_download_24)
             check.stepState.setText(R.string.dsh_setup_state_waiting)
         }
     }
 
     private fun applyStep(index: Int, ok: Boolean) {
         val b = stepBindings[index] ?: return
-        b.stepIcon.setImageResource(
-            if (ok) R.drawable.ic_baseline_done_24 else R.drawable.ic_baseline_download_24
-        )
+        setStepIcon(b, if (ok) R.drawable.ic_baseline_done_24 else R.drawable.ic_baseline_download_24)
         b.stepState.setText(if (ok) R.string.dsh_setup_state_ready else R.string.dsh_setup_state_waiting)
+    }
+
+    /**
+     * 换清单行的状态图标。与 [setStateIcon] 同一条规则：走 `setBackgroundResource`（着色只作用于
+     * 背景图），换完按 `getColor2()` 补一次主题色 —— 行图标是运行期反复切换的，不补就会保持
+     * vector 自带色，与主题无关。
+     */
+    private fun setStepIcon(item: ItemDshSetupStepBinding, res: Int) {
+        item.stepIcon.setBackgroundResource(res)
+        item.stepIcon.background?.setTint(ThemeEngine.getInstance().getTheme().getColor2())
     }
 
     /** 「重新开始」：删掉版本标记让下次解压重跑（比重装 App 轻，且能救"半成品"） */
@@ -372,6 +427,7 @@ class DshSetupActivity : FCLActivity() {
     }
 
     override fun onDestroy() {
+        ThemeEngine.getInstance().removeRefreshListener(themeRefreshListener)
         ThemeEngine.getInstance().unregisterEvent(binding.root)
         scope.cancel()
         super.onDestroy()

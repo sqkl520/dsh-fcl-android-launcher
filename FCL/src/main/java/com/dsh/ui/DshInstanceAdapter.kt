@@ -167,13 +167,31 @@ class DshInstanceAdapter(
         // 否则用户只能在「更多 → 重装」里找，或者再点一次下载——后者正是"堆一堆损坏实例"的来源之一
         val canRetry = inst.state == DshInstance.State.BROKEN
         b.btnStart.isEnabled = !busy && (isRunning || inst.state == DshInstance.State.READY || canRetry)
-        b.btnStart.text = ctx.getString(
+
+        // ===== 主操作（图标 + 文字）=====
+        // 布局里 btn_start 是"clickable 容器 + 图标 + 文字"（照外壳右面板的启动键形态），
+        // 所以这里三样都要分别维护：容器的点击、图标、文字。
+        // ★ 文案来源没变，仍是那三个 R.string.dsh_action_* —— 只是落到内部的 btn_start_text 上。
+        val actionRes = when {
+            isRunning -> R.string.dsh_action_stop
+            canRetry -> R.string.dsh_action_retry
+            else -> R.string.dsh_action_start
+        }
+        b.btnStartText.setText(actionRes)
+        b.btnStartIcon.setBackgroundResource(
             when {
-                isRunning -> R.string.dsh_action_stop
-                canRetry -> R.string.dsh_action_retry
-                else -> R.string.dsh_action_start
+                isRunning -> R.drawable.ic_baseline_close_24
+                canRetry -> R.drawable.ic_baseline_refresh_24
+                else -> R.drawable.ic_start
             }
         )
+        // ★ FCLImageView 的着色发生在**主题刷新时**（use_theme_color → getBackground().setTint(color2)），
+        //   运行期换背景图不会自动带上主题色 —— 新图标会保持 vector 自带的静态 tint（这几个 vector
+        //   自带 darker_gray），在列表里就是一块不属于主题的灰。
+        //   所以换完立刻补一次上色；之后主题切换时控件自己的回调会继续维持。
+        //   用 getColor2()（带亮暗判断）而不是原始 .color2：后者不分模式，暗色下会把图标染成黑的。
+        b.btnStartIcon.background?.setTint(ThemeEngine.getInstance().getTheme().getColor2())
+
         b.btnStart.setOnClickListener {
             when {
                 isRunning -> onStop(inst)

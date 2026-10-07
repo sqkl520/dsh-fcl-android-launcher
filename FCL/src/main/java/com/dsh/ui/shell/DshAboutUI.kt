@@ -57,7 +57,12 @@ class DshAboutUI(context: Context) : DshPageUI(context, R.layout.ui_dsh_about) {
                     if (a?.isNextInSameGroup(position) == true) dp(1) else rowSpacing
                 },
                 true,
-                { ThemeEngine.getInstance().getTheme().color }
+                // ★ 取色走 getColor()（按当前亮暗模式取主色），不能用原始 .color：
+                //   原始值只跟着「设置里改了什么」变，不跟模式变（getColor 的亮色/暗色分别取
+                //   color 与 colorDark）。分割线用原始值的话，暗色模式下它还是亮色那一套颜色，
+                //   在深色底上要么过亮刺眼、要么直接看不见。
+                //   （FCL 的 AboutPage 也是 getColor()，与它同款。）
+                { ThemeEngine.getInstance().getTheme().getColor() }
             )
         )
         ThemeEngine.getInstance().registerEvent(binding.aboutList, themeInvalidate)
@@ -80,7 +85,8 @@ class DshAboutUI(context: Context) : DshPageUI(context, R.layout.ui_dsh_about) {
 
     /**
      * 说明行 + 链接行。链接行合成一组：组首上圆角、组尾下圆角、中间无圆角；
-     * 行背景 tint 用主题的**浅色**（`ltColor`）——与 FCL 的 AboutPage 一致。
+     * 行背景 tint 用主题的**浅色**（`ltColor`，派生色，随 getColor() 跟亮暗模式走）
+     * ——与 FCL 的 AboutPage 一致。
      */
     private inner class AboutAdapter(
         private val onLinkClick: (Int) -> Unit
@@ -114,6 +120,9 @@ class DshAboutUI(context: Context) : DshPageUI(context, R.layout.ui_dsh_about) {
             )
             ThemeEngine.getInstance().unregisterEvent(holder.itemView)
             ThemeEngine.getInstance().registerEvent(holder.itemView) {
+                // 行底 tint 用**派生色** ltColor（主色提亮，随 getColor() 自动跟随亮暗模式）：
+                // 派生色内部就是按当前模式取的主色再算的，所以这里不需要（也不该）自己判亮暗 ——
+                // 直接用原始 color 会在暗色模式下把行底染成亮色方案的颜色。
                 holder.itemView.backgroundTintList =
                     ColorStateList.valueOf(ThemeEngine.getInstance().getTheme().ltColor)
             }

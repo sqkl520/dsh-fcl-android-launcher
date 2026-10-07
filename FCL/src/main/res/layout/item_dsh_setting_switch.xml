@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  开关型设置行 —— 照搬 FCL 的 item_version_setting_switch.xml：
+  开关型设置行 —— 结构照搬 FCL 的 item_version_setting_switch.xml / item_launcher_setting_switch.xml：
     根：LinearLayoutCompat(vertical) + bg_item_rounded + paddingStart/End 12dp
-      [FCLSwitch（含标题文字）] [描述 FCLTextView 12sp + marginBottom 8dp]
+      [行容器(horizontal, minHeight 48dp, paddingTop/Bottom 8dp) [FCLSwitch]] [描述 FCLTextView 12sp]
+
+  ★ 行高（48dp / 8dp）写在**外层行容器**上，不写在 FCLSwitch 自己身上：
+  FCL 的行高一律由容器承载（见 item_profile.xml 的 parent：padding=10dp，行高由子元素撑开），
+  控件只负责自己的绘制。之前把 minHeight/padding 挂在 FCLSwitch 上，等于让"这一行长多高"
+  由某个子控件决定 —— 以后同一个容器里再加一个控件（或换掉 FCLSwitch）行高就会跟着控件内边距漂，
+  而且 SwitchCompat 自身还有 thumb/track 的内边距，叠加后与其它行的 48dp 对不齐。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -14,15 +20,22 @@
     android:paddingStart="12dp"
     android:paddingEnd="12dp">
 
-    <com.tungsten.fcllibrary.component.view.FCLSwitch
-        android:id="@+id/switch_view"
+    <androidx.appcompat.widget.LinearLayoutCompat
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="center"
         android:minHeight="48dp"
+        android:orientation="horizontal"
         android:paddingTop="8dp"
-        android:paddingBottom="8dp"
-        tools:text="忽略刘海" />
+        android:paddingBottom="8dp">
+
+        <com.tungsten.fcllibrary.component.view.FCLSwitch
+            android:id="@+id/switch_view"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            tools:text="忽略刘海" />
+
+    </androidx.appcompat.widget.LinearLayoutCompat>
 
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/description"

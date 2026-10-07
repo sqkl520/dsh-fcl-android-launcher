@@ -2,33 +2,53 @@
 <!-- dsh Web UI 承载页：WebView + 加载进度 + 状态面板（启动中/失败时可重试、看日志、停止）。
      改造前：URL 抓不到就是永远转圈，没有任何失败出口。
      FCL 风格（见 docs/design/app-shell.md §2.5）：按钮/文本/进度用 fcllibrary 控件。 -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<com.tungsten.fcllibrary.component.view.FCLConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
+
+    <!-- 三层叠加：WebView 铺满（底）→ 进度条贴顶 → 状态面板铺满（顶）。
+         ★ 根由裸 FrameLayout 换成 FCLConstraintLayout：本项目的页面根一律是 ConstraintLayout
+         （FCL 自己的 WebView 页 activity_web.xml、外壳 activity_main 都是），叠加关系改用
+         `parent` 约束表达后不再依赖 FrameLayout 的 layout_gravity —— 原来的 layout_gravity="top"
+         在 ConstraintLayout 里会被直接忽略（进度条会掉到左上角），所以第三条进度条的约束是必需的。
+         match_parent 的子 View 在 ConstraintLayout 里与在 FrameLayout 里同样是"铺满父容器"，
+         WebView 与状态面板因此不需要补四条边约束（FCL 的 activity_web.xml 同样不写）。 -->
 
     <WebView
         android:id="@+id/web_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- 页面加载进度（WebChromeClient.onProgressChanged 驱动） -->
+    <!-- 页面加载进度（WebChromeClient.onProgressChanged 驱动）。
+         ★ style 由 ?android:attr/progressBarStyleHorizontal（平台 Holo 版）换成 FCL 用的
+         Widget.AppCompat.ProgressBar.Horizontal：FCLProgressBar 上主题色走的是
+         setProgressTintList/setIndeterminateTintList，而 FCL 全部进度条
+         （item_download_task / item_instance / view_dsh_task_row）用的都是这个 AppCompat 横向样式，
+         换过来进度条的形态与取色才和其余页面一致。 -->
     <com.tungsten.fcllibrary.component.view.FCLProgressBar
         android:id="@+id/progress"
-        style="?android:attr/progressBarStyleHorizontal"
+        style="@style/Widget.AppCompat.ProgressBar.Horizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top"
         android:max="100"
-        android:visibility="gone" />
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
-    <androidx.constraintlayout.widget.ConstraintLayout
+    <!-- 失败 / 启动中面板。背景是 bg_container_white（纯白 shape），必须靠容器 tint 才跟主题走。
+         ★ 容器必须是 FCLConstraintLayout：app:auto_tint 只被这个类读取（普通 ConstraintLayout
+         会静默忽略它 —— 不报错、不警告），挂在普通 ConstraintLayout 上时暗色模式下
+         这层面板就是一整屏白。 -->
+    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
         android:id="@+id/state_panel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@drawable/bg_container_white"
         android:padding="24dp"
-        android:visibility="gone">
+        android:visibility="gone"
+        app:auto_tint="true">
 
         <com.tungsten.fcllibrary.component.view.FCLProgressBar
             android:id="@+id/state_progress"
@@ -54,7 +74,10 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/state_progress" />
 
-        <LinearLayout
+        <!-- 按钮行是横排容器、自身不画底，所以用 FCL 的 FCLLinearLayout（LinearLayoutCompat 的
+             FCL 版）。它的 auto_linear_background_tint 只在"容器自己有底、要让底跟主题色"时才需要，
+             这里没有底，故不挂该属性 —— 换类型只为与其余页面的容器控件统一。 -->
+        <com.tungsten.fcllibrary.component.view.FCLLinearLayout
             android:id="@+id/btn_row"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -91,7 +114,7 @@
                 android:text="@string/dsh_action_stop"
                 app:ripple="true" />
 
-        </LinearLayout>
+        </com.tungsten.fcllibrary.component.view.FCLLinearLayout>
 
         <!-- 返回实例列表（状态面板是唯一可见内容时，需要明确出口） -->
         <com.tungsten.fcllibrary.component.view.FCLButton
@@ -104,6 +127,6 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
-    </androidx.constraintlayout.widget.ConstraintLayout>
+    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
 
-</FrameLayout>
+</com.tungsten.fcllibrary.component.view.FCLConstraintLayout>

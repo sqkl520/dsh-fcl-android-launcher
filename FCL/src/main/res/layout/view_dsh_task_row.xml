@@ -1,15 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   「进行中任务」行 —— 照搬 FCL 的 item_download_task.xml：
-    标题（12sp，主题色）+ 进度条（3dp）+ 右侧 28dp 图标按钮（FCLImageView + background 图标）
+    标题（13sp，主题色）+ 进度条（3dp）+ 右侧 22dp 图标（FCLImageView + **background** 图标）
   用于首页顶部的任务区（解压运行环境 / 安装 dsh / 启动 / 删除）。
+
+  ★ 右侧图标的图案由代码按任务动作设置（取消 / 停止），XML 里不写死：
+    用 `tools:background` 只是为了在设计面板里看得见，运行时不生效。
+    代码必须调 `setBackgroundResource(...)` 而**不是** `setImageResource(...)` ——
+    FCLImageView 的 use_theme_color 只给 `getBackground()` 上色（android:src 是 image drawable，
+    根本不参与着色），走 src 的图标不但没有主题色，还会保留 vector 自带的静态 tint（灰）。
+
+  行的上下留白只给 4dp：行间距交给任务区的 SpacingItemDecoration（与实例列表、版本列表一致），
+  两边都加会得到"按两遍"的间距。
 -->
 <com.tungsten.fcllibrary.component.view.FCLConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:padding="8dp">
+    android:paddingStart="8dp"
+    android:paddingTop="4dp"
+    android:paddingEnd="8dp"
+    android:paddingBottom="4dp">
 
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/task_title"
@@ -29,13 +41,13 @@
         android:layout_width="22dp"
         android:layout_height="22dp"
         android:padding="0dp"
+        android:stateListAnimator="@xml/anim_scale"
         android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="@id/task_title"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="@id/task_title"
-        android:stateListAnimator="@xml/anim_scale"
         app:use_theme_color="true"
-        tools:background="@drawable/ic_baseline_delete_24" />
+        tools:background="@drawable/ic_baseline_close_24" />
 
     <com.tungsten.fcllibrary.component.view.FCLProgressBar
         android:id="@+id/task_progress"

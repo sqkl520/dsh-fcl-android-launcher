@@ -1,17 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  dsh 版本下载页。FCL 范式（见 §2.5）：页内不放大标题（页名由外壳动态岛显示），
-  动作按钮用 FCLImageButton + android:src + anim_scale_large（照 FCL item_version.xml：
-  FCLImageButton 自带 Ripple 按压涟漪，FIT_XY 自适应；1.5 倍按压缩放是 FCL 图标按钮的既定做法）。
+  dsh 版本下载页 —— 外壳的「版本」tab（DshUIManager.titles 的第 2 项，
+  对应 DshShellHost.TAB_VERSIONS = 1）。类名仍是 DshDownloadUI，但菜单项与动态岛标题
+  显示的都是 `dsh_tab_versions`（"版本"）—— 这一页的内容就是"有哪些版本可以装"，
+  名字与内容对齐；类名不改名是纯噪音，与显示文案无关。
+
+  FCL 范式：页内不放大标题（页名由外壳动态岛显示），也不放页面级动作行 ——
+  动作做成页内的图标按钮。刷新按钮用 FCLImageButton + android:src + anim_scale_large
+  （照 FCL item_version.xml：FCLImageButton 自带 Ripple 按压涟漪，FIT_XY 自适应；
+  1.5 倍按压缩放是 FCL 图标按钮的既定做法）。
   内容：顶部刷新按钮 + "显示预览版"开关 + 版本列表 + 加载/错误态。
+
+  左右留白 10dp，与 FCL 的列表页规范同档（`page_version_list.xml` 的根就是
+  padding 10/10/10，`page_setting_list.xml` 的列表也是 10dp）：FCL 的侧边菜单与右面板
+  就贴在内容区两侧，留白用 12dp 会让内容比左右两侧的菜单/面板缩进一截、对不齐。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:paddingStart="12dp"
+    android:paddingStart="10dp"
     android:paddingTop="10dp"
-    android:paddingEnd="12dp">
+    android:paddingEnd="10dp">
 
     <!-- 刷新：按 FCL 图标按钮规范（FCLImageView + background 图标 + padding 0 + use_theme_color） -->
     <com.tungsten.fcllibrary.component.view.FCLImageButton
