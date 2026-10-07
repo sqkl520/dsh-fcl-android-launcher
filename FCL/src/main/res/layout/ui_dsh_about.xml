@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 关于页容器 —— 与 FCL 的 page_setting_list.xml 同构（RecyclerView + 空态） -->
+<!--
+  关于页容器 —— 几何与 FCL 的 page_setting_list.xml 一致（铺满的 RecyclerView + 左右 10dp、
+  clipToPadding=false、paddingBottom 10dp）。
+
+  ★ 有意不照搬 FCL 的空态 `empty_view`：那一个在 FCL 是**插件管理页**用的（列表按版本/环境
+  动态生成，可能真的为空），页模板被顺带复用。本页的行是 DshAboutUI.links 里写死的常量，
+  永远不可能为空 —— 补上去只会得到一个永不显示的死控件。
+  三个设置容器（ui_dsh_about / ui_dsh_launcher_settings / ui_dsh_instance_detail）
+  因此统一为"没有空态"。
+-->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"

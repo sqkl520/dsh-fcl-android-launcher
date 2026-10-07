@@ -560,6 +560,80 @@ object DshRuntime {
                 }
             }
         }
+        reportRuntimeCancelled(instanceId, name, reason)
+    }
+
+    /**
+     * 只在"当前跑的确实是这个实例"时才停。
+     *
+     * ★ 为什么需要它（而不是让调用方先查 `runningInstanceId()` 再 `stop()`）：
+     *   "查一下是谁在跑，然后停掉"是**两步**，中间没有锁，两处入口（任务行的"停止"按钮、
+     *   通知栏、实例卡片）完全可能交错。真要原子，得把判据和停止放进同一个 `@Synchronized` 里 ——
+     *   [stop] 本身就是 `@Synchronized` 的，所以把判定挪到**它内部**、由它自己决定停不停，
+     *   才是真正没有窗口的做法（先查后停总会留一个 TOCTOU 缝）。
+     *
+     * 典型踩法：任务行渲染到用户点下按钮之间，运行状态可能已经换成了**另一个**实例
+     * （单实例策略下"停 A 起 B"就会）。此时无条件 [stop] 等于"用户点的是 A 那一行，停掉的却是 B"。
+     *
+     * @return true = 已发起停止；false = 当前跑的不是它（或压根没在跑），**什么都没做**
+     */
+    @Synchronized
+    fun stopIf(instanceId: String, reason: String = "用户停止"): Boolean {
+        // 判据用 runningInstanceId()（Starting/Running 都算"当前跑的"）：
+        // Stopping 已经不属于"还在跑"，对它再发一次停止是空转，返回 false 更诚实。
+        if (runningInstanceId() != instanceId) return false
+        stop(reason)
+        return true
+    }
+
+    /**
+     * 上报一条"运行任务被主动停止"的终态。
+     *
+     * ★ 放在 [stop] 里而不是放在 [stopIf] 里：只要"主动停止"发生了，无论从哪个入口进来
+     *   （通知栏、前台服务被回收、WebView 返回、实例卡片、任务行），用户看到的都是同一件事 ——
+     *   "这个实例被我停了"，任务区就该有一条 CANCELLED。放在 stopIf 里会让其余 5 个入口
+     *   全部不上报（而它们才是大多数）。
+     *
+     * ★ 与 [onProcessExit] 里那条分支的关系：那边报的是"进程真退了"，这条报的是"用户要求停"。
+     *   两者先后到达（停止是异步的，最长 5s），都会进 [DshTasks.finished] —— 这是**有意的**：
+     *   finished 是事件列表而不是状态表，两件事确实都发生了。不做去重是因为去重需要额外的
+     *   "这次退出是不是刚才那条停止引起的"状态，而那个状态本身就是 [stopRequestedFor] 已经在做的事，
+     *   再复制一份到 DshTasks 只会多一个可能不同步的真值来源。
+     */
+    /**
+     * 上报一条运行任务的终态（启动完成 / 启动失败 / 进程结束 / 被停止）。
+     *
+     * ★ 为什么要在这里上报：任务区（[DshTasks.tasks]）只投影"启动中 / 停止中"这类**过渡态**，
+     *   进程一旦就绪或退出，那条任务行就从投影里消失了。没有终态上报的话，用户看到的永远是
+     *   "行没了"，而"是起来了还是崩了"完全无从判断 —— 这正是本轮要补的那一维。
+     *
+     * ★ 为什么把 CANCELLED 的上报放在 [stop] 而不是 [stopIf]：见 [reportRuntimeCancelled]。
+     *
+     * @param name 实例名；调用点如果手里有更准的（[DshInstance.name]）就传进来
+     */
+    private fun reportRuntime(
+        instanceId: String,
+        name: String,
+        state: DshTask.State,
+        stage: String,
+        error: String? = null
+    ) {
+        DshTasks.report(
+            DshTask(
+                id = DshTasks.runtimeTaskId(instanceId),
+                kind = DshTask.Kind.RUNTIME,
+                title = name,
+                stage = stage,
+                action = DshTask.Action.NONE,
+                state = state,
+                instanceId = instanceId,
+                error = error
+            )
+        )
+    }
+
+    private fun reportRuntimeCancelled(instanceId: String, name: String, reason: String) {
+        reportRuntime(instanceId, name, DshTask.State.CANCELLED, reason)
     }
 
     /**
@@ -744,12 +818,15 @@ object DshRuntime {
         }
         _state.value = State.Failed(instance.id, instance.name, reason)
         stopServiceIfIdle()
+        // 终态上报：失败原因进任务区（否则任务行随着 Starting 一起消失，用户只看到"行没了"）
+        reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)
     }
 
     /** 兜底重试内部失败时的收尾（不重复打日志到"失败原因"里，失败原因由调用方给出） */
     private fun failRetry(instance: DshInstance, reason: String) {
         setStateIfOwned(instance.id) { State.Failed(instance.id, instance.name, reason) }
         stopServiceIfIdle()
+        reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)
     }
 
     /**
@@ -844,6 +921,9 @@ object DshRuntime {
         // 实例级：就绪是本实例生命周期里最该被看见的一行（"什么时候开始能用"），
         // 端口也是它自己的
         DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 就绪：端口 $port")
+        // 终态上报：任务区那条"启动中"到这里就该有个结局（成功）；不报的话它只是**消失**，
+        // 用户看不出"起来了"还是"没起来"。
+        reportRuntime(instance.id, instance.name, DshTask.State.DONE, "端口 $port")
     }
 
     private fun onProcessExit(instance: DshInstance, code: Int) {
@@ -879,9 +959,12 @@ object DshRuntime {
             setStateIfOwned(instance.id) { State.Idle }
             // 实例级：退出码是**这个实例的**收尾事实
             DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已停止（code=$code）")
+            // ★ 这里**不再上报一次终态**：这次退出的起因是 [stop]，CANCELLED 已经由它在用户点下
+            //   "停止"的那一刻报过了。再报一条"已停止"只会让任务区为同一次操作出现两行。
         } else if (cur is State.Failed) {
             // 失败后的收尾（例如启动超时已经把进程收掉）：保留失败状态与原因，别让"超时"被改写成"进程退出"
             DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 的失败进程已退出（code=$code），保留失败原因")
+            // 终态同理已在 [failAndCleanup] 报过（FAILED），这里不重复。
         } else if (cur is State.Exited) {
             DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 的进程已退出（code=$code）")
         } else if (cur is State.Starting) {
@@ -902,6 +985,7 @@ object DshRuntime {
                 val reason = "端口被占用（EADDRINUSE）。重试启动会自动改用系统分配的端口。"
                 setStateIfOwned(instance.id) { State.Failed(instance.id, instance.name, reason) }
                 DshLogBus.appendFor(instance.id, "[runtime] 启动失败：$reason")
+                reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)
             } else if (!retryIfSeccompLooksGuilty(instance, code)) {
                 val reason = appendLastLinesHint(
                     instance.id,
@@ -910,11 +994,20 @@ object DshRuntime {
                 )
                 setStateIfOwned(instance.id) { State.Failed(instance.id, instance.name, reason) }
                 DshLogBus.appendFor(instance.id, "[runtime] 启动失败：$reason")
+                reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)
             }
+            // ★ 走了 retryIfSeccompLooksGuilty 那条（返回 true）时**故意不报终态**：
+            //   状态仍留在 Starting，兜底重试马上会再起一次 —— 此刻报"失败"是假失败，
+            //   用户会看到一条根本不成立的"启动失败"，而下一次重试可能就成功了。
         } else {
             // 就绪后正常/异常结束（例如 agent 自己退出）
             DshLogBus.appendFor(instance.id, "[runtime] 进程退出，code=$code")
             setStateIfOwned(instance.id) { State.Exited(instance.id, instance.name, code) }
+            // 终态上报：进程结束也是一件"有结局的事"，任务区要能说清它结束了（而不是行凭空消失）
+            reportRuntime(
+                instance.id, instance.name, DshTask.State.DONE,
+                appContext?.getString(R.string.dsh_runtime_exited, code) ?: "进程已退出（code=$code）"
+            )
         }
         stopServiceIfIdle()
     }

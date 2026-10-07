@@ -88,7 +88,11 @@ class DshLauncherSettingsPage(
                     if (a?.isNextInSameGroup(position) == true) dp(1) else rowSpacing
                 },
                 true,
-                { ThemeEngine.getInstance().getTheme().color }
+                // ★ 取色走 getColor()（按当前亮暗模式取主色），不能用原始 .color：
+                //   原始值只跟着「设置里改了什么」变、不跟亮暗模式变（getColor() 才会按模式在
+                //   color / colorDark 之间取）。用原始值画分割线，暗色模式下拿到的还是亮色那一套，
+                //   在深色底上会过亮甚至看不见。（FCL 的 LauncherSettingPage 也是 getColor()。）
+                { ThemeEngine.getInstance().getTheme().getColor() }
             )
         )
         ThemeEngine.getInstance().registerEvent(binding.settingList, themeInvalidate)
@@ -247,6 +251,18 @@ class DshLauncherSettingsPage(
         @Suppress("UNUSED_EXPRESSION") latest
     }
 
+    /**
+     * 四个色槽的**配置值**（原始值，故意**不**用 `getColor()` / `getColor2()`）。
+     *
+     * 这四个取值器只喂给取色对话框的**初始色**：对话框里那个"当前值"要显示的是**配置本身**
+     * （用户上次给这个色槽存了什么），不是"现在屏幕上该显示成什么颜色"。用按模式取色的
+     * `getColor()` 会让暗色模式下点开"亮色主题色"那一行时，初始色已经被换成暗色槽的值 ——
+     * 于是用户一按确定就把暗色值写进了亮色槽（FCL 的 LauncherSettingPage 同样用 `_getColor` 一族的
+     * 原始值喂对话框，见它的 `showColorPicker(theme._getColor(), ...)`）。
+     *
+     * 判断口诀：**存进 DataStore 的值、对话框里显示的"当前配置值"都该是原始值；
+     * 凡是"画到屏幕上的颜色"才走 `getColor()` / `getColor2()`。**
+     */
     private fun _getColor(): Int = ThemeEngine.getInstance().getTheme().color
     private fun _getColorDark(): Int = ThemeEngine.getInstance().getTheme().colorDark
     private fun _getColor2(): Int = ThemeEngine.getInstance().getTheme().color2

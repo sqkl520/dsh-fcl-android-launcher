@@ -14,6 +14,7 @@ import com.dsh.core.DshRuntime
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshLogsBinding
 import com.mio.dialog.ItemSelectionDialog
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import kotlinx.coroutines.launch
 
 /**
@@ -38,10 +39,20 @@ import kotlinx.coroutines.launch
  * 换个实例后 revision 可能"看起来没变"，于是新实例的日志不刷新）。
  *
  * ## 设计（参考常见日志查看器）
- * - **按级别着色**：ERROR 红 / WARN 琥珀 / OK 绿 / 普通浅灰，`[tag]` 前缀用青色，一眼能扫出问题行；
+ * - **按级别着色**：ERROR 红 / WARN 琥珀 / OK 绿 / 普通浅灰、`[tag]` 前缀用蓝色，一眼能扫出问题行；
  * - **级别筛选**：全部 / 警告及以上 / 仅错误（[ItemSelectionDialog] 选择）；
  * - **自动滚动**：贴底时自动跟随；向上翻看时不被抢走滚动位置，并出现「回到底部」；
  * - **信息行**：显示当前视角、展示行数 / 总行数与**该视角自己的落盘路径**。
+ *
+ * ## 分级色为什么走颜色资源而不是写在代码里
+ * 这 5 个色是**语义色**（错误/警告/成功/普通/来源），必须与日志底板保持稳定对比 ——
+ * 而底板本身要跟着亮暗模式换（`@color/dsh_log_console_bg` 在 `values/` 与 `values-night/`
+ * 各一套）。分级色同理：亮色模式下用深色系压在浅底上，暗色模式下换成提亮降饱和的一套。
+ * 写成 `values-night` 里的同名覆盖，就是让系统在**资源解析期**替我们选对那一套，
+ * 代码只管"这一行是错误级"这一件事。
+ *
+ * ⚠️ **不要把它们改回 `const val` 硬编码色**：硬编码的值无法参与 night 覆盖，
+ * 换到暗色主题就会糊成一片（这正是改造前的问题）。
  *
  * 渲染策略沿用之前的性能处理：只在快照的 revision 变化时重建文本。
  */
@@ -62,6 +73,29 @@ class DshLogsUI(
     private var lines: List<String> = emptyList()
     private var filter: Filter = Filter.ALL
 
+    /**
+     * 5 个分级色，在 [onCreate] 里解析一次，并在**主题刷新时重新解析**。
+     *
+     * 为什么要缓存 + 重注册，而不是每次渲染现取：`render()` 里每行都要判一次级别，
+     * 一屏最多 1500 行 —— 每行都 `getColor()` 就是每帧上千次资源查找。
+     *
+     * 为什么要重注册：亮暗切换时 Activity **不会重建**（外壳的 `configChanges` 含 `uiMode`），
+     * 所以"在 onCreate 里取一次"会永远停在旧配色上。必须挂 [ThemeEngine.registerEvent]，
+     * 在回调里重新解析并重绘 —— 这跟控件自己的主题刷新是同一套机制。
+     */
+    private lateinit var levelColors: LevelColors
+
+    /** 一屏渲染要用的全部颜色（值随亮暗模式变，所以只在主题刷新/首次进入时解析） */
+    private class LevelColors(val error: Int, val warn: Int, val ok: Int, val info: Int, val tag: Int)
+
+    private fun resolveColors() = LevelColors(
+        error = context.getColor(R.color.dsh_log_error),
+        warn = context.getColor(R.color.dsh_log_warn),
+        ok = context.getColor(R.color.dsh_log_ok),
+        info = context.getColor(R.color.dsh_log_info),
+        tag = context.getColor(R.color.dsh_log_tag)
+    )
+
     private enum class Filter { ALL, WARN, ERROR }
 
     /** 单次渲染的最大行数（超出只显示末尾，避免超长日志把界面拖垮） */
@@ -69,6 +103,15 @@ class DshLogsUI(
 
     override fun onCreate() {
         super.onCreate()
+
+        levelColors = resolveColors()
+        // 亮暗切换不重建 Activity（外壳 configChanges 含 uiMode），必须自己挂主题刷新：
+        // 否则分级色会停在进入这一页时的配色上。registerEvent 注册时会立即执行一次，
+        // 所以上面那行赋值不是为了"先有个值"，而是为了 render() 在任何路径下都有值可用。
+        ThemeEngine.getInstance().registerEvent(contentView) {
+            levelColors = resolveColors()
+            render()
+        }
 
         binding.btnClear.setOnClickListener {
             // 清哪个范围要跟视角一致：实例页里点"清空"只该清掉这个实例的日志，
@@ -144,10 +187,10 @@ class DshLogsUI(
 
     /** 按级别决定整行颜色 */
     private fun levelOf(line: String): Int = when {
-        ERROR_RE.containsMatchIn(line) -> COLOR_ERROR
-        WARN_RE.containsMatchIn(line) -> COLOR_WARN
-        OK_RE.containsMatchIn(line) -> COLOR_OK
-        else -> COLOR_INFO
+        ERROR_RE.containsMatchIn(line) -> levelColors.error
+        WARN_RE.containsMatchIn(line) -> levelColors.warn
+        OK_RE.containsMatchIn(line) -> levelColors.ok
+        else -> levelColors.info
     }
 
     private fun matches(line: String): Boolean = when (filter) {
@@ -169,11 +212,11 @@ class DshLogsUI(
                 ForegroundColorSpan(levelOf(line)), start, sb.length,
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
             )
-            // `[tag]` 前缀用青色，便于区分来源（setup / start-dsh / bootstrap / proot…）
+            // `[tag]` 前缀用另一种颜色，便于区分来源（setup / start-dsh / bootstrap / proot…）
             val tag = TAG_RE.find(line)
             if (tag != null && tag.range.first == 0) {
                 sb.setSpan(
-                    ForegroundColorSpan(COLOR_TAG), start, start + tag.value.length,
+                    ForegroundColorSpan(levelColors.tag), start, start + tag.value.length,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             }
@@ -214,13 +257,14 @@ class DshLogsUI(
 
     private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
 
-    companion object {
-        private const val COLOR_ERROR = 0xFFFF6B6B.toInt()
-        private const val COLOR_WARN = 0xFFFFD166.toInt()
-        private const val COLOR_OK = 0xFF4ADE80.toInt()
-        private const val COLOR_INFO = 0xFFD0D6DD.toInt()
-        private const val COLOR_TAG = 0xFF7DD3FC.toInt()
+    override fun onDestroy() {
+        // 本页用 contentView 当主题刷新的 key，销毁时注销（页面的 contentView 会被复用/丢弃，
+        // 不注销就留下一条指向它的回调）
+        ThemeEngine.getInstance().unregisterEvent(contentView)
+        super.onDestroy()
+    }
 
+    companion object {
         private val ERROR_RE =
             Regex("""error|failed|failure|fatal|exception|denied|错误|失败|异常|拒绝|不可用""", RegexOption.IGNORE_CASE)
         private val WARN_RE = Regex("""warn|警告|注意""", RegexOption.IGNORE_CASE)

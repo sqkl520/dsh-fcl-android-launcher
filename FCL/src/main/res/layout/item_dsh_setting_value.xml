@@ -5,6 +5,13 @@
     + 可选编辑图标（FCLImageButton + settings 图标 + auto_tint + no_padding）
     + 描述（12sp）
   用于实例名称 / 模型 / profile / 端口 / API Key / 版本 / 体积 / 路径等"点开才能改"的项。
+
+  ★ 整行可点，所以整行要有按压反馈：FCL 的做法是容器上挂 stateListAnimator（见 item_profile.xml
+  的 parent：clickable + focusable + stateListAnimator=@xml/anim_scale），这里照做。
+  动画资源固定写在布局里（它是"这一行按下去怎么动"的静态描述）；而 clickable / focusable 由适配器
+  在绑定时**按行是否可点**打开 —— 同一个布局也承载 editable=false 的只读行（状态 / 版本 / 体积 /
+  路径），只读行挂上点击反馈会变成"看着能点、按下去有缩放、实际没反应"，比没有反馈更糟。
+  另外 View.setOnClickListener(null) 并不会把 clickable 复位，所以这件事只能在绑定时做。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -14,7 +21,8 @@
     android:background="@drawable/bg_item_rounded"
     android:orientation="vertical"
     android:paddingStart="12dp"
-    android:paddingEnd="12dp">
+    android:paddingEnd="12dp"
+    android:stateListAnimator="@xml/anim_scale">
 
     <androidx.appcompat.widget.LinearLayoutCompat
         android:layout_width="match_parent"

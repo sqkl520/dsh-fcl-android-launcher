@@ -5,7 +5,10 @@
       → 内层 FCLConstraintLayout：background=bg_container_white + auto_tint（主题着色卡片）
         + focusable + padding=5dp + stateListAnimator=@xml/anim_scale（按压缩放反馈）
     文字用 FCLTextView + app:auto_text_tint。
-  内容：版本号 + tag + 体积 + 安装按钮 / 已安装角标。
+  内容：版本号 + tag + 体积 + 安装按钮 / 状态角标。
+
+  行内动作按 FCL 的做法用**图标按钮**（item_remote_version.xml 的 wiki/save、item_version.xml 的
+  setting/delete 一律是 FCLImageButton + anim_scale_large + auto_tint），不再用文字按钮。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -69,25 +72,37 @@
             app:layout_constraintTop_toBottomOf="@id/version"
             tools:text="48 KB · 安装约 300MB" />
 
-        <com.tungsten.fcllibrary.component.view.FCLButton
+        <!--
+          安装：FCL 的列表行内动作一律是图标按钮，文案（"安装"）转为 contentDescription 保住
+          无障碍朗读；按钮只在"未安装"这一态出现，"正在安装/已安装"两态由右侧角标用文字表达，
+          所以换图标丢掉的只是一句动作词，不是状态信息。
+          ⚠️ id 必须是 btn_install：DshVersionAdapter 按它取控件（size 的约束也指向它）。
+        -->
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
             android:id="@+id/btn_install"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="5dp"
-            android:minWidth="0dp"
-            android:text="@string/dsh_action_install"
+            android:contentDescription="@string/dsh_action_install"
+            android:src="@drawable/ic_baseline_download_24"
+            android:stateListAnimator="@xml/anim_scale_large"
+            app:auto_tint="true"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="parent"
-            app:ripple="true" />
+            app:layout_constraintVertical_bias="0.5" />
 
+        <!--
+          状态角标：文字颜色是**随主题变的状态色**，由适配器按主题取值（安装中→autoHintTint 弱化提示色，
+          已安装→getColor2() 状态色）并注册主题刷新，所以这里不写死颜色 ——
+          原先的 #4CAF50 是 Material 绿，不属于 FCL 任何色板，暗色模式下也不会跟着变。
+        -->
         <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/installed_badge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="5dp"
             android:text="@string/dsh_installed"
-            android:textColor="#4CAF50"
             android:textSize="13sp"
             android:visibility="gone"
             app:layout_constraintBottom_toBottomOf="parent"

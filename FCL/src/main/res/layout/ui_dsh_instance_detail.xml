@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  实例详情里「运行」/「配置」两段的行式列表容器 —— 与 FCL 的 page_setting_list.xml 同构
-  （只有一个铺满的 RecyclerView，没有空态：这两段的行清单是静态的，永远不为空）。
+  实例详情里「运行」/「配置」两段的行式列表容器 —— 几何与 FCL 的 page_setting_list.xml 同构
+  （只有一个铺满的 RecyclerView，没有空态：这两段的行清单由 DshInstanceSettingPage
+  的 runRows/configRows 写死，永远不为空）。
+  三个设置容器（本文件 / ui_dsh_launcher_settings / ui_dsh_about）统一为"没有空态" ——
+  FCL 的空态 `empty_view` 是给它那个按版本动态生成的插件列表用的，我们三页的内容都是静态的，
+  补上去只会得到永不显示的死控件。
 
   留白用 FCL 的列表规范：**左右各 10dp、上下各 10dp、clipToPadding=false**。
   不用 12dp 是因为 10dp 才是与外壳侧边菜单 / 右面板对齐的那一档（见其它页的列表留白）；

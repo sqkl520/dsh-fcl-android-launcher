@@ -10,4 +10,18 @@
     <color name="primary_text">#0E0E0E</color>
     <!-- 原 FCLLibrary 模块颜色（模块已并入 FCL） -->
     <color name="dialog_background">#F4F4F4</color>
+
+    <!-- ===== 日志控制台 =====
+         底色取 **FCL 自己的中性面板色**（与 dialog_background 同值），**刻意不跟用户主题色**：
+         日志行有 5 种语义色（错误 / 警告 / 成功 / 普通 / 来源标签），它们必须与底色保持稳定对比。
+         底色一旦跟着主题色走，5 个语义色就得在每一帧重算对比，任何一处没跟上就是"某类日志看不见"。
+         中性面板色 + 按亮暗各一套语义色，是这里唯一能保证"任何主题、任何模式下都读得清"的做法。
+         （旧实现是自创的深色终端 #CC0B0F14 + 5 个硬编码色，既不在 FCL 色板里，也无法做 night 覆盖。） -->
+    <color name="dsh_log_console_bg">#F4F4F4</color>
+    <!-- 亮色模式的分级色：深色系（压在浅底上才看得清） -->
+    <color name="dsh_log_error">#C62828</color>
+    <color name="dsh_log_warn">#9A6400</color>
+    <color name="dsh_log_ok">#1B7F3B</color>
+    <color name="dsh_log_info">#3C4043</color>
+    <color name="dsh_log_tag">#0B6BCB</color>
 </resources>

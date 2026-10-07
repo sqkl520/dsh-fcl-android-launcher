@@ -8,7 +8,7 @@
       右栏：准备项清单 + 操作按钮
     两栏各自高度都控制在 ~330dp 以内，横屏一屏可见，无需滚动。
 
-  视觉：主题背景图 + 压暗层 + 白卡片 + 主题色进度条；全部走 fcllibrary + ThemeEngine。
+  视觉：主题背景图 + 白卡片 + 主题色进度条；全部走 fcllibrary + ThemeEngine。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -17,25 +17,22 @@
     android:layout_height="match_parent"
     android:transitionName="background">
 
-    <ImageView
-        android:id="@+id/bg_cover"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:scaleType="centerCrop"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+    <!--
+      背景图不再是一个子 ImageView，而是**直接铺在根容器上**（根就是背景承载层）：
+      图片由代码 ImageUtil.loadInto(binding.background, …) 装填，随亮暗主题刷新。
 
-    <View
-        android:id="@+id/bg_scrim"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:background="#66000000"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+      ★ 为什么这么做（原来那套"子 ImageView 铺图 + #66000000 压暗层"已整个删除）：
+      · FCL 的背景写法就是"根容器持有 id=background + 代码把主题图铺上去"
+        —— 启动页的 activity_splash.xml 与外壳的 activity_main.xml 都是根 ConstraintLayout 上挂
+        id=background / transitionName=background，再由 ThemeEngine 给图。本页照抄同一套，
+        不再自创第二层容器。
+      · 压暗层是为"白字压在任意背景图上仍可读"而存在的。现在对比问题已经由 FCL 的取色体系解决：
+        图上方的文字一律走 FCLTextView 的 auto_text_tint（按主题色算出的黑/白），卡片靠
+        auto_tint 取主题底色。多盖一层固定半透明黑，只会让背景在亮色主题下发灰，且暗色主题下
+        叠成双重变暗，属于 FCL 没有的语言。
+      · 首启准备页虽然可能"用户还没配过主题"，但 ThemeData.getTheme() 对亮/暗两张背景都做了
+        内置默认图兜底，所以这里一定有图可铺，不存在空白页。
+    -->
 
     <ScrollView
         android:id="@+id/content_scroll"
@@ -105,12 +102,15 @@
                     android:padding="16dp"
                     app:auto_tint="true">
 
+                    <!-- ★ 图标走 android:background 而不是 android:src：FCLImageView 的主题着色
+                         只作用于 getBackground()，走 src 时 use_theme_color 会完全失效
+                         （图标保持 vector 自带的颜色）。代码里换图同样用 setBackgroundResource。 -->
                     <com.tungsten.fcllibrary.component.view.FCLImageView
                         android:id="@+id/state_icon"
                         android:layout_width="24dp"
                         android:layout_height="24dp"
+                        android:background="@drawable/ic_baseline_download_24"
                         android:padding="0dp"
-                        android:src="@drawable/ic_baseline_download_24"
                         app:layout_constraintBottom_toBottomOf="@id/progress_title"
                         app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintTop_toTopOf="@id/progress_title"

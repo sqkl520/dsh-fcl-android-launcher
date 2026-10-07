@@ -254,13 +254,20 @@ class DshMainActivity : FCLActivity(), DshShellHost {
 
     /**
      * 换启动/停止图标。
-     * ★ `FCLImageView` 的着色发生在**主题刷新时**（`use_theme_color` → `getBackground().setTint(color2)`），
-     * 运行期换背景图不会自动带上主题色 —— 新图标会保持 vector 自带的黑色。
-     * 这里换完立刻补一次上色；之后主题切换时控件自己的回调会继续维持。
+     *
+     * ★ 取色必须走 `ThemeData.getColor2()`（**按当前亮暗模式**取次要色），不能用原始 `.color2`：
+     *   原始值不分模式，而 `color2` 的默认值是纯黑（`color2Dark` 默认白）—— 暗色模式下就会把图标
+     *   染成黑色，在深色底上等于看不见。控件自己的主题回调（`FCLImageView` 的 `use_theme_color`
+     *   分支）用的也是 `getColor2()`，两处取同一个来源，才不会出现"运行期换图标"与"主题刷新"
+     *   给出两种颜色。
+     *
+     * ★ 为什么还要在这里手动补一次着色：`FCLImageView` 的上色只发生在**主题刷新时**，
+     *   运行期换背景图不会自动带上主题色 —— 新图标会保持 vector 自带的颜色。
+     *   换完立刻补一次；之后主题切换时控件自己的回调会继续维持。
      */
     private fun setStartIcon(res: Int) {
         binding.rightStartIcon.setBackgroundResource(res)
-        binding.rightStartIcon.background?.setTint(ThemeEngine.getInstance().getTheme().color2)
+        binding.rightStartIcon.background?.setTint(ThemeEngine.getInstance().getTheme().getColor2())
     }
 
     private fun describeState(inst: DshInstance, state: DshRuntime.State): String = when {
