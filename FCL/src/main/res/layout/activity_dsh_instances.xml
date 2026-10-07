@@ -20,7 +20,9 @@
     android:paddingTop="10dp"
     android:paddingEnd="10dp">
 
-    <!-- ===== 进行中任务区 ===== -->
+    <!-- ===== 进行中任务区 =====
+         task_area 是 FCLConstraintLayout（不是 androidx 的）：app:auto_tint 只有它会读，
+         挂错控件类会静默失效，任务区这块"白底"在暗色主题下就永远是白的。 -->
     <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
         android:id="@+id/task_area"
         android:layout_width="0dp"
@@ -48,12 +50,17 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <LinearLayout
+        <!-- 任务区列表 —— 与设置页 / 关于页那几处一样是 RecyclerView + SpacingItemDecoration：
+             行的间距交给装饰器（三处共用同一套间距规则），行的结构由 view_dsh_task_row.xml 提供。
+             任务条数通常只有 0~3，换 RecyclerView 不是为复用，而是**不再用裸 LinearLayout
+             手工 addView** —— 那样每次任务状态变化都要 removeAllViews 重建整片行，
+             行的间距也只能手写在行内的 margin 里，与别处两套规则。
+             高度 wrap_content：任务区整体高度仍随条数走（与换之前一致）。 -->
+        <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/task_list"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:orientation="vertical"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/task_header" />

@@ -1,9 +1,14 @@
 package com.dsh.ui.shell
 
 import android.content.Context
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.mio.ui.adapter.SpacingItemDecoration
+import com.mio.util.AnimUtil
 import com.dsh.core.DshCredentials
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
@@ -16,7 +21,9 @@ import com.dsh.core.DshTasks
 import com.dsh.ui.DshInstanceAdapter
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshInstancesBinding
+import com.dsh.fcl.androidlauncher.databinding.ViewDshTaskRowBinding
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -245,6 +252,27 @@ private class InstanceListPage(
 
     private val binding = ActivityDshInstancesBinding.bind(contentView)
     private lateinit var adapter: DshInstanceAdapter
+    private lateinit var taskAdapter: TaskAdapter
+
+    /**
+     * 上一帧已经播过入场动画的任务 id。
+     *
+     * ## 为什么需要它
+     * 任务列表是 `StateFlow<List<DshTask>>`，安装进度一变就整份重新发射（每秒好几次）。
+     * FCL 的列表行在绑定时无条件播入场动画（版本列表就是这么写的），但那一套的前提是
+     * DiffUtil 增量更新 —— 只有真正的新行才会被绑。任务区若照抄"绑定即播"，
+     * **每一次进度更新都会让整个任务区重新滑入一遍**，表现就是"动画在诡异地重播"。
+     *
+     * 所以这里自己记住上一帧的 id 集合，只让**这一帧新出现**的任务播：比对 id，差集里的才动。
+     * 用 id 而不是位置/对象：`DshTask` 是 data class，进度一变整个对象就不相等了，
+     * 按对象或按 index 比对都会把老任务误判成新任务；而 id 在 [com.dsh.core.DshTasks] 里
+     * 本来就是"同一种任务同 id"的稳定标识。
+     *
+     * 集合每帧整体替换，所以任务消失后它的 id 自然被摘掉：同一个实例再次安装会得到
+     * **同一条 id**（`install:<实例id>`），不摘的话第二次安装就不会有入场动画了。
+     */
+    private var animatedTaskIds: Set<String> = emptySet()
+
     private var lastNotifiedState: DshRuntime.State? = null
 
     override fun onCreate() {
@@ -263,10 +291,20 @@ private class InstanceListPage(
         binding.instanceList.layoutManager = LinearLayoutManager(context)
         binding.instanceList.adapter = adapter
 
+        // 任务区与设置页 / 关于页那几处列表同构：RecyclerView + LinearLayoutManager
+        // + SpacingItemDecoration（同一套间距规则，不必每处各写一遍）。
+        // 行布局里因此**不再**写行间距；装饰器自己会跳过最后一行，不需要"末行不留间距"的特判。
+        taskAdapter = TaskAdapter()
+        binding.taskList.layoutManager = LinearLayoutManager(context)
+        binding.taskList.addItemDecoration(SpacingItemDecoration(dp(8)))
+        binding.taskList.adapter = taskAdapter
+
         observeState()
         observeTasks()
         maybeAdoptOrphan()
     }
+
+    private fun dp(v: Int): Int = (v * context.resources.displayMetrics.density).toInt()
 
     /**
      * 订阅「进行中任务」并渲染任务区。
@@ -283,54 +321,14 @@ private class InstanceListPage(
 
     private fun renderTasks(tasks: List<DshTask>) {
         binding.taskArea.visibility = if (tasks.isEmpty()) View.GONE else View.VISIBLE
-        binding.taskList.removeAllViews()
-        if (tasks.isEmpty()) return
 
-        val inflater = android.view.LayoutInflater.from(context)
-        tasks.forEach { task ->
-            val row = com.dsh.fcl.androidlauncher.databinding.ViewDshTaskRowBinding
-                .inflate(inflater, binding.taskList, false)
+        // 只在"新出现"的任务上播入场动画（理由见 [animatedTaskIds]）。
+        // 差集要在**替换** animatedTaskIds 之前算：先算差集、再整份替换成这一帧的集合。
+        val ids = tasks.map { it.id }.toSet()
+        val fresh = ids - animatedTaskIds
+        animatedTaskIds = ids
 
-            row.taskTitle.text = taskTitle(task)
-
-            val f = task.fraction
-            if (f == null) {
-                row.taskProgress.isIndeterminate = true
-            } else {
-                row.taskProgress.isIndeterminate = false
-                row.taskProgress.progress = (f * 1000).toInt().coerceIn(0, 1000)
-            }
-
-            if (task.detail.isNullOrEmpty()) {
-                row.taskDetail.visibility = View.GONE
-            } else {
-                row.taskDetail.visibility = View.VISIBLE
-                row.taskDetail.text = task.detail
-            }
-
-            when (task.action) {
-                DshTask.Action.NONE -> row.taskAction.visibility = View.GONE
-                DshTask.Action.CANCEL -> {
-                    row.taskAction.visibility = View.VISIBLE
-                    row.taskAction.setImageResource(R.drawable.ic_baseline_close_24)
-                    row.taskAction.contentDescription = context.getString(R.string.dsh_tasks_cancel)
-                    row.taskAction.setOnClickListener { DshTasks.cancel(task) }
-                }
-                DshTask.Action.STOP -> {
-                    row.taskAction.visibility = View.VISIBLE
-                    row.taskAction.setImageResource(R.drawable.ic_baseline_close_24)
-                    row.taskAction.contentDescription = context.getString(R.string.dsh_tasks_stop)
-                    row.taskAction.setOnClickListener { DshTasks.cancel(task) }
-                }
-            }
-            binding.taskList.addView(row.root)
-        }
-    }
-
-    /** 任务标题：运行环境用固定文案，其余用「实例名 · 阶段」 */
-    private fun taskTitle(task: DshTask): String = when (task.kind) {
-        DshTask.Kind.BOOTSTRAP -> context.getString(R.string.dsh_task_bootstrap)
-        else -> listOf(task.title, task.stage).filter { it.isNotBlank() }.joinToString(" · ")
+        taskAdapter.submit(tasks, fresh)
     }
 
     private fun observeState() {
@@ -469,4 +467,113 @@ private class InstanceListPage(
             .create()
             .show()
     }
+}
+
+/**
+ * 任务区 Adapter —— 本文件私有，不另开文件：它只服务 [InstanceListPage] 这一处，
+ * 和"任务区怎么画"的其余逻辑（新任务判定、标题文案）放在一起读才完整。
+ *
+ * ## 为什么不用 DiffUtil
+ * 任务只有 0~3 条，区分"哪条变了"的复杂度（DiffUtil 回调、稳定 id）换不来收益。
+ * 直接 `notifyDataSetChanged()` 在这里是**正确**的：RecyclerView 只重绑可见的那几行，
+ * 不会像原来 `removeAllViews() + addView` 那样把行整个重建 —— 行重建正是
+ * "进度每跳一次、任务区就闪一下"的来源。
+ *
+ * ## 它和 RecyclerView 的关系
+ * 任务区换成 RecyclerView 不是为了复用（才 0~3 行），而是为了和本项目其它列表**同构**：
+ * 设置页 / 关于页那几处都是 RecyclerView + [SpacingItemDecoration] 管间距，
+ * 任务区跟着走，"间距"这类规则就只需要定义一遍，而不是在这里再手搓一套行内 margin。
+ */
+private class TaskAdapter : RecyclerView.Adapter<TaskAdapter.VH>() {
+
+    private var items: List<DshTask> = emptyList()
+
+    /**
+     * 这一帧**新出现**的任务 id（差集由调用方算，理由见调用处注释）。
+     * `onBindViewHolder` 拿不到"哪些是新增"，所以在 [submit] 时记下来带过去。
+     */
+    private var freshIds: Set<String> = emptySet()
+
+    fun submit(tasks: List<DshTask>, freshIds: Set<String>) {
+        items = tasks
+        this.freshIds = freshIds
+        notifyDataSetChanged()
+    }
+
+    class VH(val binding: ViewDshTaskRowBinding) : RecyclerView.ViewHolder(binding.root)
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
+        VH(ViewDshTaskRowBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        val task = items[position]
+        val b = holder.binding
+        val context = b.root.context
+
+        b.taskTitle.text = task.titleText(context)
+
+        val f = task.fraction
+        if (f == null) {
+            b.taskProgress.isIndeterminate = true
+        } else {
+            b.taskProgress.isIndeterminate = false
+            b.taskProgress.progress = (f * 1000).toInt().coerceIn(0, 1000)
+        }
+
+        if (task.detail.isNullOrEmpty()) {
+            b.taskDetail.visibility = View.GONE
+        } else {
+            b.taskDetail.visibility = View.VISIBLE
+            b.taskDetail.text = task.detail
+        }
+
+        // 右侧动作图标：★ 用 setBackgroundResource 而不是 setImageResource ——
+        // view_dsh_task_row.xml 里的 task_action 是 FCLImageView，它的 use_theme_color
+        // 只给 getBackground() 上色，走 src 会既没有主题色、又保留 vector 自带的静态 tint。
+        when (task.action) {
+            DshTask.Action.NONE -> b.taskAction.visibility = View.GONE
+            DshTask.Action.CANCEL, DshTask.Action.STOP -> {
+                b.taskAction.visibility = View.VISIBLE
+                b.taskAction.setBackgroundResource(R.drawable.ic_baseline_close_24)
+                // 运行期换背景图不会自动带上主题色（FCLImageView 的着色只在主题刷新时跑），
+                // 换完补一次；之后主题切换由控件自己的回调维持。用 getColor2()（带亮暗判断），
+                // 原始 .color2 不分模式，暗色下会把图标染成黑的。
+                b.taskAction.background
+                    ?.setTint(ThemeEngine.getInstance().getTheme().getColor2())
+                b.taskAction.contentDescription = context.getString(
+                    if (task.action == DshTask.Action.CANCEL) R.string.dsh_tasks_cancel
+                    else R.string.dsh_tasks_stop
+                )
+                b.taskAction.setOnClickListener { DshTasks.cancel(task) }
+            }
+        }
+
+        // 入场动画（FCL 同款：AnimUtil.playTranslationX，时长随「动画速度」设置）——
+        // 只在**这一帧新出现**的任务上播，见上面的说明。
+        if (task.id in freshIds) {
+            AnimUtil.playTranslationX(
+                b.root,
+                ThemeEngine.getInstance().getTheme().animationSpeed * 30L,
+                -100f,
+                0f
+            ).start()
+        } else {
+            // 复用/重绑的行可能停在上一次动画的中间态（新任务插在前面时，后面的行会换位重绑），
+            // 归零一次，避免"没播动画的行却歪在一边"。
+            b.root.translationX = 0f
+        }
+    }
+
+    override fun getItemCount(): Int = items.size
+}
+
+/**
+ * 任务标题：「运行环境」那条用固定文案（它的 title 是空的，只有阶段），其余用「实例名 · 阶段」。
+ *
+ * 写成 [DshTask] 的扩展而不是页面里的私有方法：这是"任务怎么显示"的规则，
+ * 归渲染它的 [TaskAdapter] 管，页面不必知道。函数是文件私有的，不外泄。
+ */
+private fun DshTask.titleText(context: Context): String = when (kind) {
+    DshTask.Kind.BOOTSTRAP -> context.getString(R.string.dsh_task_bootstrap)
+    else -> listOf(title, stage).filter { it.isNotBlank() }.joinToString(" · ")
 }

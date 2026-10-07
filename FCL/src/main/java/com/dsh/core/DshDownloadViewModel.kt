@@ -58,6 +58,10 @@ class DshDownloadViewModel(
                         // ★ 只移除**本次失败的那个版本**：原来清空整个集合，会让其它仍在跑的
                         // 安装也"解除安装中"，按钮重新可点 → 用户连点 → 并发 npm + 堆实例
                         is DshInstaller.Progress.Failed -> p.version?.let { v -> _installingVersions.value -= v }
+                        // ★ 取消也是终态：**必须**和 Done/Failed 一样解除"安装中"标记。
+                        //   这条事件是本次新加的（[DshInstaller.cancel] 原来什么都不发）—— 少了它，
+                        //   用户取消后按钮永远显示"安装中"、而且再也点不动，只能重启 App 才恢复。
+                        is DshInstaller.Progress.Cancelled -> p.version?.let { v -> _installingVersions.value -= v }
                         else -> {}
                     }
                     rebuild()

@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   实例列表的一行 —— **照搬 FCL 的 item_profile.xml 范式**（实例列表 ↔ FCL 的「档案列表」是同一个位置）：
-    外层 ConstraintLayout → 内层 clickable/focusable 容器
+    外层 SwipeMenuLayout（左滑菜单）→ 内层 clickable/focusable 的 FCLConstraintLayout
       background = @drawable/bg_container_white_clickable（白色可点击卡片，与下载页版本卡片一致）
       padding = 10dp，stateListAnimator = @xml/anim_scale（按压缩放反馈）
     文字用 FCLTextView + app:auto_text_tint（与卡片底自动对比）
   内容：名称 + 版本/端口/状态 + 体积 + 安装阶段/进度 + 失败原因 + 启动/更多。
+
+  ★ 卡片容器必须是 com.tungsten.fcllibrary.component.view.FCLConstraintLayout，
+    **不能**用 androidx 的 ConstraintLayout：
+    `app:auto_tint` 只有 FCLConstraintLayout 会读（它在 init 里读这个属性，并在主题刷新时
+    `setBackgroundTintList(ltColor)`）。挂错控件类时这个属性**静默失效** —— 构建期不报错
+    （自定义属性不与控件类做匹配校验），运行期也不抛异常，卡片于是恒为纯白。
+    本文件里另外两处 app:auto_tint 挂在 FCLImageButton 上，那是它自己的属性，逐处说明见下。
 -->
 <com.mio.ui.widget.SwipeMenuLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -14,7 +21,8 @@
     android:layout_height="wrap_content"
     android:layout_marginBottom="10dp">
 
-    <!-- 左滑菜单层（靠右垫底）：实例的管理动作（设置 / 删除），与 FCL item_favorite 同构 -->
+    <!-- 左滑菜单层（靠右垫底）：实例的管理动作（设置 / 删除），与 FCL item_favorite 同构。
+         auto_linear_background_tint 是 FCLLinearLayout 自己的属性（**不是** auto_tint），这里用对了。 -->
     <com.tungsten.fcllibrary.component.view.FCLLinearLayout
         android:id="@+id/swipe_menu"
         android:layout_width="wrap_content"
@@ -27,10 +35,13 @@
         android:paddingEnd="10dp"
         app:auto_linear_background_tint="true">
 
+        <!-- 可点击的图标按钮 = FCLImageButton：它自带着色逻辑（refreshStyle() 给 getDrawable() 上色，
+             并自己设 Ripple 背景），读的正是 app:auto_tint —— 所以这两个 auto_tint 是生效的。 -->
         <com.tungsten.fcllibrary.component.view.FCLImageButton
             android:id="@+id/menu_settings"
             android:layout_width="40dp"
             android:layout_height="40dp"
+            android:contentDescription="@string/dsh_action_settings"
             android:padding="8dp"
             android:src="@drawable/ic_baseline_settings_24"
             app:auto_tint="true" />
@@ -39,6 +50,7 @@
             android:id="@+id/menu_delete"
             android:layout_width="40dp"
             android:layout_height="40dp"
+            android:contentDescription="@string/dsh_action_delete"
             android:padding="8dp"
             android:src="@drawable/ic_baseline_delete_24"
             app:auto_tint="true" />
@@ -46,7 +58,7 @@
     </com.tungsten.fcllibrary.component.view.FCLLinearLayout>
 
 
-    <androidx.constraintlayout.widget.ConstraintLayout
+    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
         android:id="@+id/parent"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -146,28 +158,86 @@
             app:layout_constraintTop_toBottomOf="@id/install_progress"
             tools:text="npm install 失败：ETIMEDOUT" />
 
-        <com.tungsten.fcllibrary.component.view.FCLButton
+        <!-- 主操作（启动 / 停止 / 重试）：**图标 + 文字**的组合容器，
+             形态照外壳右面板的启动按钮（activity_dsh_main.xml 的 right_start）：
+             无边框 clickable 容器 + 按压缩放（anim_scale）+ 图标与文字居中成链，
+             图标用 FCLImageView + background + use_theme_color，文字 use_theme_color。
+
+             ★ 为什么不用纯图标按钮（行内动作在 FCL 里的默认形态，如 item_profile.xml 的 delete）：
+               这一行是实例的**主操作**，它的动作在三个状态间切换（启动 / 停止 / 重试），
+               文案由 DshInstanceAdapter 从那三个 dsh_action_* 字符串里取。
+               只留图标，就把"这一行现在点下去会发生什么"整个压进了图形里 —— 重试与启动
+               两个图标（刷新箭头 / 播放三角）在列表里很难一眼分清，而这一行常常是用户
+               唯一能点的东西（实例装坏时只剩重试一条路）。
+               图标 + 文字则两样都在，且这个形态 FCL 自己就有（右面板启动键），不是新造的样子。
+
+             ★ id 仍是 btn_start（Adapter 按 id 取它挂监听、设 enabled、切图标），
+               文案仍来自同一组 R.string.dsh_action_*（只是落到了内部的 btn_start_text 上）。 -->
+        <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
             android:id="@+id/btn_start"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:text="@string/dsh_action_start"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="4dp"
+            android:stateListAnimator="@xml/anim_scale"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@id/btn_more"
-            app:layout_constraintTop_toTopOf="parent"
-            app:ripple="true" />
+            app:layout_constraintTop_toTopOf="parent">
 
-        <com.tungsten.fcllibrary.component.view.FCLButton
+            <!-- 纯展示的图标 = FCLImageView：它的着色只作用于 background
+                 （use_theme_color → getBackground().setTint(color2)），
+                 所以图标必须走 android:background，走 android:src 就完全没有主题色。
+                 图标随状态在代码里换（见 DshInstanceAdapter 里换完补的那次上色）。 -->
+            <com.tungsten.fcllibrary.component.view.FCLImageView
+                android:id="@+id/btn_start_icon"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:background="@drawable/ic_start"
+                app:layout_constraintBottom_toBottomOf="@id/btn_start_text"
+                app:layout_constraintEnd_toStartOf="@id/btn_start_text"
+                app:layout_constraintHorizontal_chainStyle="packed"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="@id/btn_start_text"
+                app:use_theme_color="true" />
+
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/btn_start_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:gravity="center"
+                android:singleLine="true"
+                android:text="@string/dsh_action_start"
+                android:textSize="14sp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintStart_toEndOf="@id/btn_start_icon"
+                app:layout_constraintTop_toTopOf="parent"
+                app:use_theme_color="true" />
+
+        </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+
+        <!-- 行内次要动作（更多）：FCL 的列表行内动作一律是图标按钮 ——
+             照 item_profile.xml 的 delete：FCLImageButton + 20dp + no_padding + use_theme_color
+             + anim_scale_large。可点击的图标用 FCLImageButton 而不是 FCLImageView：
+             前者自带 Ripple 与按压反馈，着色走 getDrawable()（所以它的图标用 android:src）。
+             文字按钮丢掉的"更多"这个词，这里补进 contentDescription 供无障碍朗读。 -->
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
             android:id="@+id/btn_more"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="0dp"
-            android:text="@string/dsh_action_more"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginStart="10dp"
+            android:contentDescription="@string/dsh_action_more"
+            android:src="@drawable/ic_baseline_more_horiz_24"
+            android:stateListAnimator="@xml/anim_scale_large"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="parent"
-            app:ripple="true" />
+            app:no_padding="true"
+            app:use_theme_color="true" />
 
-    </androidx.constraintlayout.widget.ConstraintLayout>
+    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
 
 </com.mio.ui.widget.SwipeMenuLayout>

@@ -257,6 +257,24 @@ object DshInstances {
             //   实例页此刻正在被关掉，日志文件也已被删，写实例流没有任何接收方。
             DshLogBus.append("[instances] 删除实例 ${inst?.name ?: id} 目录: ${if (ok) "完成" else "有文件残留"}")
             _deleting.update { it - id }
+            // ★ 终态上报要在 `_deleting` 移除**之后**，但要注意它不能改写"删除是否成功"的判定 ——
+            //   失败（有文件残留）在**任务语义**里算 DONE 还是 FAILED？这里选 DONE + 把残留写进 stage：
+            //   "删除"这个动作本身确实执行完了（目录删到不能再删），失败的是文件系统层面的残留，
+            //   实例记录已经从清单里摘掉、用户也不会再看到它 —— 把它标成 FAILED 反而像"删除没发生"。
+            //   真正需要追残留的人看的是上面那行日志（全局流）与实例卡片。
+            //   还有一处**必须**这么做：`_deleting` 已移除 → 投影（DshTasks.tasks）里那条"删除中"
+            //   已经消失，若终态上报还标 CANCELLED/FAILED，界面会出现"删着删着突然说被取消"的怪状态。
+            DshTasks.report(
+                DshTask(
+                    id = DshTasks.deleteTaskId(id),
+                    kind = DshTask.Kind.DELETE,
+                    title = inst?.name ?: id,
+                    stage = if (ok) "已删除" else "已删除（有文件残留）",
+                    action = DshTask.Action.NONE,
+                    state = DshTask.State.DONE,
+                    instanceId = id
+                )
+            )
             onFinished?.invoke(ok)
         }
     }

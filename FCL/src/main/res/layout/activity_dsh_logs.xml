@@ -7,14 +7,16 @@
     —— FCLImageButton 自带 Ripple 涟漪（颜色 ltColor）、setScaleType(FIT_XY)，1.5 倍按压缩放
     正是 FCL 图标按钮的既定做法（item_version / item_profile / item_remote_version 都这么写）。
   文字（状态）用 FCLTextView，开关用 FCLSwitch（FCL 的开关行都是独占一行）。
+
+  页面左右留白 10dp：与侧边菜单、右面板、以及其余列表页同一档（FCL 列表左右留白就是 10dp）。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:paddingStart="12dp"
+    android:paddingStart="10dp"
     android:paddingTop="10dp"
-    android:paddingEnd="12dp">
+    android:paddingEnd="10dp">
 
     <!-- ===== 工具行：状态（左） + 三个图标动作（右，统一 28dp） ===== -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
@@ -88,6 +90,13 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/switch_auto_scroll">
 
+        <!-- 日志正文。
+             ⚠️ 这里**刻意不挂** `app:auto_text_tint`（那一族取的是"与用户主题色对比的黑/白"）：
+             正文的底色是**中性**的日志底板（@color/dsh_log_console_bg，亮暗各一套），
+             跟用户选的主题色没关系 —— 按主题色算出来的黑/白会与底板撞色（浅底配白字）。
+             不挂属性时文字色走 AppCompat DayNight 主题默认（亮=深、暗=浅），
+             与底板同为 DayNight 切换，天然对得上。
+             另外每一行都会被 ForegroundColorSpan 按级别整体覆盖，基础色只作兜底。 -->
         <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/log_text"
             android:layout_width="match_parent"
@@ -114,7 +123,13 @@
         app:layout_constraintBottom_toBottomOf="@id/log_scroll"
         app:layout_constraintEnd_toEndOf="@id/log_scroll" />
 
-    <!-- ===== 信息行 ===== -->
+    <!-- ===== 信息行 =====
+         这一行压在**页面背景**上（和工具行的状态文字同一块底），所以取色用 `app:auto_text_tint`
+         —— 与那一行同源，整页文字色才一致。
+
+         ⚠️ 原来这里用 `android:alpha="0.7"` 代替弱化色：alpha 是对**整个控件**做透明，
+         底板也会跟着变淡，看着像"这块背景没铺好"；而且它与同一块底上的其它文字不同源，
+         主题一换两者就会分家。弱化该由**文字色**表达，不该由控件透明度表达。 -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/log_info"
         android:layout_width="0dp"
@@ -122,7 +137,6 @@
         android:layout_marginTop="4dp"
         android:singleLine="true"
         android:textSize="10sp"
-        android:alpha="0.7"
         app:auto_text_tint="true"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"

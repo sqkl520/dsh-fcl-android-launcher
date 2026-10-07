@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  全局启动器设置页 —— **照搬 FCL 的 page_setting_list.xml**：
-    RecyclerView（左右 10dp 边距、clipToPadding=false、paddingBottom 10dp）
-    + 居中空态提示。行间 8dp 间距、组内 1dp 分割线由 SpacingItemDecoration 负责
+  全局启动器设置页 —— **照搬 FCL 的 page_setting_list.xml** 的几何：
+    RecyclerView（左右 10dp 边距、clipToPadding=false、paddingBottom 10dp）。
+    行间 8dp 间距、组内 1dp 分割线由 SpacingItemDecoration 负责
     （与 FCL 的 LauncherSettingPage 完全一致，不在行布局里写 margin）。
+
+  ★ 有意**不**照搬 FCL 的 `empty_view`：FCL 的 page_setting_list.xml 里那个空态提示
+  是**插件管理页在用**（PluginManagePage 的插件列表按版本/环境动态生成，可能真的为空），
+  同模板被启动器设置页、版本设置页、关于页顺带复用。
+  本项目的这两处列表（本页与「关于」页）行清单都是**代码里写死的常量**
+  （见 DshLauncherSettingAdapter.rebuild 与 DshAboutUI.links），永远不可能为空 ——
+  补一个空态只会得到一个永远不会显示的死控件。
+  三个设置容器（本文件 / ui_dsh_about / ui_dsh_instance_detail）因此统一为"没有空态"。
+  若将来本页出现按条件生成的行动态，再按 FCL 的写法补回 empty_view。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -18,18 +27,6 @@
         android:layout_marginEnd="10dp"
         android:clipToPadding="false"
         android:paddingBottom="10dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <com.tungsten.fcllibrary.component.view.FCLTextView
-        android:id="@+id/empty_view"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:textSize="14sp"
-        android:visibility="gone"
-        app:auto_text_tint="true"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"

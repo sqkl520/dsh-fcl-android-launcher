@@ -127,7 +127,18 @@ class DshInstanceSettingAdapter(
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val row = rows[position]) {
-            is Row.Group -> (holder as GroupHolder).binding.groupTitle.setText(row.title)
+            is Row.Group -> {
+                val b = (holder as GroupHolder).binding
+                b.groupTitle.setText(row.title)
+                // 组标题的弱化提示色由代码设置（布局里不能再挂 app:auto_text_tint：那是与卡片底最高
+                // 对比的主标题强度，与"弱化"正相反），所以这里要自己注册主题刷新，否则换主题后标题
+                // 会停在旧颜色上。registerEvent 注册时立即执行一次，因此下面不再手动 setTextColor。
+                // 注：GroupHolder.itemView 就是这个 FCLTextView 本身，注册会**替换**控件构造函数里那个回调；
+                // 该回调在"没有 auto_text_tint / use_theme_color"的布局上什么也不做，颜色由这里的规则统一负责。
+                ThemeEngine.getInstance().registerEvent(holder.itemView) {
+                    b.groupTitle.setTextColor(ThemeEngine.getInstance().getTheme().autoHintTint)
+                }
+            }
 
             is Row.Value -> {
                 val b = (holder as ValueHolder).binding
@@ -145,6 +156,12 @@ class DshInstanceSettingAdapter(
                 b.root.setOnClickListener(if (row.editable) click else null)
                 b.buttonEdit.setOnClickListener(if (row.editable) click else null)
                 b.buttonEdit.isEnabled = row.editable
+                // ★ 点击反馈按可点性开关，而不是在布局里写死 clickable：同一个布局也承载 editable=false
+                //   的只读行（状态 / 版本 / 体积 / 路径），而 View.setOnClickListener(null) 并不会把
+                //   clickable 复位，布局上写死会让只读行"看着能点、按下去有缩放、实际没反应"。
+                //   动画资源本身固定在布局里（stateListAnimator），这里只决定它有没有机会被触发。
+                b.root.isClickable = row.editable
+                b.root.isFocusable = row.editable
                 applyRowBackground(holder.itemView, position)
             }
 
@@ -167,6 +184,12 @@ class DshInstanceSettingAdapter(
     /**
      * 位置感知圆角 + 主题色 tint。
      * 与 FCL 的 ListAdapter 一致：行底用「提亮后的主题色」(ltColor)。
+     *
+     * ★ 底色是**代码**设的（bg_item_rounded* 的 solid 是白，白底上这套配色读不出来），
+     * 所以必须注册主题刷新：只在新绑定/新提交时 tint 的话，主题切换后已经绑好的行会一直保持旧色。
+     * registerEvent 会把回调立即执行一次，因此下面不再手动设一遍 tint。
+     * 注册前先 unregister：回调表以 View 为键，重复注册只是替换表项（不会堆积），
+     * 这里先注销是为了和 FCL 的 LauncherSettingAdapter 保持同一种写法，语义也更明确。
      */
     private fun applyRowBackground(view: View, position: Int) {
         val prevSame = isPrevInSameGroup(position)
@@ -177,8 +200,24 @@ class DshInstanceSettingAdapter(
             nextSame -> R.drawable.bg_item_rounded_top
             else -> R.drawable.bg_item_rounded
         }
+        // 先换形状，颜色只在下面的回调里设一次 —— 否则"行底颜色"就有两个出处，
+        // 以后改配色时得同时记得改两处。
         view.setBackgroundResource(bg)
-        view.backgroundTintList =
-            ColorStateList.valueOf(ThemeEngine.getInstance().getTheme().ltColor)
+        ThemeEngine.getInstance().unregisterEvent(view)
+        ThemeEngine.getInstance().registerEvent(view) {
+            view.backgroundTintList =
+                ColorStateList.valueOf(ThemeEngine.getInstance().getTheme().ltColor)
+        }
+    }
+
+    /**
+     * 行被回收时注销主题回调。
+     * ThemeEngine 的回调表是 WeakHashMap<View, Runnable>：同一个 View 反复注册只会替换表项，
+     * 但表项的值（闭包）反向持有这个 View，弱键因此永远收不到回收通知；等这个行被丢出复用池
+     * （换 adapter / 列表整体重建 / 页面关闭）后就再没人来清它了，回调会一直挂着一个已脱离视图树的 View。
+     */
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        ThemeEngine.getInstance().unregisterEvent(holder.itemView)
+        super.onViewRecycled(holder)
     }
 }

@@ -22,6 +22,8 @@ import com.dsh.core.DshLogBus
 import com.dsh.core.DshRuntime
 import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.FCLActivity
+import com.tungsten.fcllibrary.component.view.FCLProgressBar
+import com.tungsten.fcllibrary.component.view.FCLTextView
 import kotlinx.coroutines.launch
 
 /**
@@ -128,7 +130,7 @@ class DshWebViewActivity : FCLActivity() {
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                val bar = findViewById<android.widget.ProgressBar>(R.id.progress)
+                val bar = findViewById<FCLProgressBar>(R.id.progress)
                 bar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
                 bar.progress = newProgress
             }
@@ -274,7 +276,7 @@ class DshWebViewActivity : FCLActivity() {
         webView.visibility = View.GONE
         findViewById<View>(R.id.state_panel).visibility = View.VISIBLE
         findViewById<View>(R.id.state_progress).visibility = View.VISIBLE
-        findViewById<android.widget.TextView>(R.id.state_text).text = text
+        findViewById<FCLTextView>(R.id.state_text).text = text
         findViewById<View>(R.id.btn_retry).visibility = View.GONE
         findViewById<View>(R.id.btn_logs).visibility = View.VISIBLE
         findViewById<View>(R.id.btn_stop).visibility = View.VISIBLE
@@ -290,7 +292,7 @@ class DshWebViewActivity : FCLActivity() {
         webView.visibility = View.GONE
         findViewById<View>(R.id.state_panel).visibility = View.VISIBLE
         findViewById<View>(R.id.state_progress).visibility = View.GONE
-        findViewById<android.widget.TextView>(R.id.state_text).text = message
+        findViewById<FCLTextView>(R.id.state_text).text = message
         findViewById<View>(R.id.btn_retry).visibility = View.VISIBLE
         findViewById<View>(R.id.btn_logs).visibility = View.VISIBLE
         findViewById<View>(R.id.btn_stop).visibility = View.VISIBLE

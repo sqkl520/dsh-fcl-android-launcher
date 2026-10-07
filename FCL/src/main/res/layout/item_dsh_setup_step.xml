@@ -15,13 +15,17 @@
     android:paddingStart="16dp"
     android:paddingEnd="16dp">
 
+    <!-- ★ 图标走 android:background 而不是 android:src：FCLImageView 的主题着色只作用于
+         getBackground()（走 src 时 use_theme_color 静默失效，图标恒为 vector 自带的颜色）。
+         代码里换图同样用 setBackgroundResource。 -->
     <com.tungsten.fcllibrary.component.view.FCLImageView
         android:id="@+id/step_icon"
         android:layout_width="22dp"
         android:layout_height="22dp"
+        android:background="@drawable/ic_baseline_download_24"
         android:padding="0dp"
         app:use_theme_color="true"
-        tools:src="@drawable/ic_baseline_done_24" />
+        tools:background="@drawable/ic_baseline_done_24" />
 
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/step_name"

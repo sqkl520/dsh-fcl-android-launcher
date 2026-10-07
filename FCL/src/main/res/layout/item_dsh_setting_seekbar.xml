@@ -2,7 +2,9 @@
 <!--
   滑条型设置行 —— 照搬 FCL 的 item_launcher_setting_seekbar.xml：
     [label（FCLTextView，单行）] [FCLNumberSeekBar，weight=1] + 描述 12sp
-  FCLNumberSeekBar 自带数值显示与"点数字改值"（EditDialog）。
+  FCLNumberSeekBar 自带数值显示与"点数字改值"（EditDialog），并且自己注册了主题刷新
+  （滑块与按钮的颜色随主题走），所以这里不给它加任何颜色或尺寸属性；
+  行高照旧由外层行容器承载（minHeight 48dp + paddingTop/Bottom 8dp），与其它行对齐。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"

@@ -3,6 +3,12 @@
   多动作按钮行 —— 照搬 FCL item_launcher_setting_button.xml 的多图标按钮形态：
   [label] [占位] [FCLImageButton1] [FCLImageButton2] [FCLImageButton3] + 描述。
   用于 FCL 里的「重置 / 从背景取色 / 设置」这类"一行三个图标动作"（主题色、背景图）。
+
+  图标用 app:auto_tint 而不是 app:use_theme_color：FCLImageButton 的两个分支作用点不同 ——
+  auto_tint 走 setImageTintList（染**图标本身**，颜色取与主色对比的黑/白），use_theme_color 走
+  getDrawable().setTint(getColor2())。列表行里的图标（android:src）用前者，与 FCL 自己的
+  item_version.xml / item_remote_version.xml 完全一致；后者在本项目里还有一层坑：原始 color2
+  亮色下是纯黑，暗色下会把图标染成与卡片底同色（看不见），所以行内图标一律不用它。
 -->
 <androidx.appcompat.widget.LinearLayoutCompat xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"

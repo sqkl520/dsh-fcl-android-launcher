@@ -99,7 +99,11 @@ class DshInstanceSettingPage(
                     if (a?.isNextInSameGroup(position) == true) dp(1) else rowSpacing
                 },
                 true,
-                { ThemeEngine.getInstance().getTheme().color }
+                // ★ 取色走 getColor()（按当前亮暗模式取主色），不能用原始 .color：
+                //   原始值只跟着「设置里改了什么」变、不跟亮暗模式变（getColor() 才会按模式在
+                //   color / colorDark 之间取）。用原始值画分割线，暗色模式下拿到的还是亮色那一套，
+                //   在深色底上会过亮甚至看不见。（FCL 的 VersionSettingPage 也是 getColor()。）
+                { ThemeEngine.getInstance().getTheme().getColor() }
             )
         )
         ThemeEngine.getInstance().registerEvent(binding.settingList, themeInvalidate)

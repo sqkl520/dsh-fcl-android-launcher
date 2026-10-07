@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 日志控制台底色：深色半透明 + 8dp 圆角（终端观感，任何主题下都可读） -->
+<!-- 日志控制台底板：8dp 圆角（全库唯一的卡片圆角）+ **资源化的中性底色**。
+     底色本身写在 @color/dsh_log_console_bg 里，亮/暗各一套（values / values-night）——
+     这样控制台底色才跟得上亮暗切换，而不是像旧实现那样把一个深色值钉死在 drawable 里。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <corners android:radius="8dp" />
-    <solid android:color="#CC0B0F14" />
+    <solid android:color="@color/dsh_log_console_bg" />
 </shape>
