@@ -105,15 +105,15 @@ fi
 
 if [ -z "$BIN_JS" ]; then
   echo "[start-dsh] FAILED reason=package-missing"
-  echo "[start-dsh] 错误: 实例目录与预装目录都找不到 @deepseek-ai/dsh。" >&2
-  echo "[start-dsh]   实例: $INSTANCE_DIR/$DSH_REL" >&2
-  echo "[start-dsh]   预装: $DSH_PREINSTALL_DIR/$DSH_REL" >&2
+  echo "[start-dsh] ERROR: @deepseek-ai/dsh not found in the instance directory or the preinstalled directory" >&2
+  echo "[start-dsh]   instance:     $INSTANCE_DIR/$DSH_REL" >&2
+  echo "[start-dsh]   preinstalled: $DSH_PREINSTALL_DIR/$DSH_REL" >&2
   exit 1
 fi
 
 if ! command -v node >/dev/null 2>&1; then
   echo "[start-dsh] FAILED reason=node-missing"
-  echo "[start-dsh] 错误: PATH 中找不到 node（期望 /opt/node22/bin/node）" >&2
+  echo "[start-dsh] ERROR: node not found in PATH (expected /opt/node22/bin/node)" >&2
   exit 1
 fi
 
@@ -223,7 +223,7 @@ NODE_PID=$!
 if printf '%s %s\n' "$NODE_PID" "$PORT" > "$NODE_PID_FILE" 2>/dev/null; then
   echo "[start-dsh] node pid: $NODE_PID"
 else
-  echo "[start-dsh] 警告: 无法写 node pid 文件 $NODE_PID_FILE（停止时可能残留 node）" >&2
+  echo "[start-dsh] WARN: cannot write node pid file $NODE_PID_FILE (a leftover node process is possible on stop)" >&2
 fi
 
 URL_RE='http://[^ ]*token=[A-Za-z0-9_-]*'
@@ -298,7 +298,7 @@ if [ "$READY" -ne 1 ]; then
   # 超时：把 node 收掉再退出，避免半死进程占着端口（收尾同时会删掉 pid 文件）
   echo "[start-dsh] FAILED reason=ready-timeout after ${READY_TIMEOUT}s"
   if grep -q 'EADDRINUSE' "$LOGFILE" 2>/dev/null; then
-    echo "[start-dsh] 提示: 日志里有 EADDRINUSE，端口 $PORT 被占用" >&2
+    echo "[start-dsh] HINT: EADDRINUSE in the log, port $PORT is taken" >&2
   fi
   flush_new
   terminate_node 2

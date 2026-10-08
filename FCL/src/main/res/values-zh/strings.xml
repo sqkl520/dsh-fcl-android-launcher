@@ -59,10 +59,20 @@
         <string name="dsh_download_warning">当前展示的是缓存数据（%1$s）</string>
         <string name="dsh_install_cancelled">已取消安装</string>
         <string name="dsh_install_done">已安装 %1$s</string>
+        <!-- 安装失败原因：只要能从 npm 的输出里认出是哪一类，就说清楚"是什么 + 怎么办"。
+             认不出时由代码原样回放 npm 的尾部摘要，最后才是 dsh_install_failed_generic -->
+        <string name="dsh_install_error_dns">DNS 解析失败：当前网络无法解析域名（npm 连不上 registry.npmjs.org）。请换个网络（Wi-Fi 或移动数据）或稍后重试。</string>
+        <string name="dsh_install_error_network">网络异常导致下载失败。请检查网络后重试；具体 npm 错误码见日志。</string>
+        <!-- %1$s = npm 报的错误码（如 EAI_AGAIN），认不出网络类时至少把这个码摆出来 -->
+        <string name="dsh_install_error_npm">npm 错误 %1$s</string>
+        <string name="dsh_install_error_timeout">网络超时或连接中断：下载被打断。请检查网络后重试，已下载的包有缓存，不会从头再来。</string>
+        <string name="dsh_install_error_unreachable">网络不可达：当前没有可用连接（或代理/VPN 拦截）。请重新联网后重试。</string>
         <string name="dsh_install_failed">安装失败：%1$s</string>
         <string name="dsh_install_failed_generic">安装失败（详见日志）</string>
         <string name="dsh_install_timeout">安装超时（%1$d 分钟）。网络可能较慢或 npm 卡住，请查看日志后重试。</string>
         <string name="dsh_install_incomplete">安装已结束但 dsh 包不完整，请重新安装。</string>
+        <!-- 起 npm 之前的空间检查：%1$s = 本次需要多少，%2$s = 当前剩多少（都是 DshPaths.formatSize 的结果） -->
+        <string name="dsh_install_no_space">空间不足：本次安装需要约 %1$s，当前只剩 %2$s。请清理空间后重试。</string>
         <string name="dsh_install_started">正在安装 %1$s…</string>
         <string name="dsh_install_started_message">正在后台安装 %1$s，可在实例列表查看进度。</string>
         <string name="dsh_install_started_title">已开始安装</string>
@@ -103,6 +113,18 @@
         <string name="dsh_reason_missing_entry">缺少 dsh 入口文件，安装不完整，请重新安装。</string>
         <string name="dsh_reason_not_installed">该实例尚未安装 dsh，请先安装或重新安装。</string>
         <string name="dsh_reason_start_timeout">%1$d 秒内未就绪，请查看日志（网络/端口问题）。</string>
+        <string name="dsh_reason_user_stop">用户停止</string>
+        <string name="dsh_reason_deleted">实例被删除</string>
+        <string name="dsh_reason_from_notification">从通知栏停止</string>
+        <string name="dsh_reason_service_recycled">已停止：后台服务被系统回收</string>
+        <string name="dsh_start_port_in_use">端口被占用（EADDRINUSE）。下次启动会自动改用系统分配的端口。</string>
+        <string name="dsh_task_deleted">已删除</string>
+        <string name="dsh_task_deleted_with_leftover">已删除（有文件残留）</string>
+        <string name="dsh_task_port">端口 %1$s</string>
+        <string name="dsh_download_fetch_failed">拉取版本列表失败</string>
+        <string name="dsh_notify_channel_desc">保活 dsh web 进程</string>
+        <string name="dsh_notify_text_port">%1$s · 端口 %2$s · %3$s</string>
+        <string name="dsh_notify_text">%1$s · %2$s</string>
         <string name="dsh_reinstall_pick_version">还没有成功安装过任何版本，请到下载页选择一个版本。</string>
         <string name="dsh_runtime_exited">dsh 进程已退出（退出码 %1$d）</string>
         <string name="dsh_saved">已保存</string>
@@ -117,6 +139,15 @@
         <string name="dsh_settings_version">已安装 dsh：%1$s</string>
         <string name="dsh_size_calculating">正在统计体积…</string>
         <string name="dsh_stage_prepare">正在准备 Node 运行时并安装 dsh…</string>
+        <!-- ▼ 安装阶段：脚本输出的是**稳定 key**（`[setup] STAGE=<key> [args]`），
+             由 DshInstaller.stageText() 翻成当前语言。key 与脚本一一对应，加新阶段时
+             两边要一起改；启动器不认识的 key 会原样显示（见那个函数的兜底规则）。 -->
+        <string name="dsh_stage_node_ready">Node %1$s 已就绪</string>
+        <string name="dsh_stage_adding_npm">正在补充 npm</string>
+        <string name="dsh_stage_installing_node">正在安装 Node %1$s（首次较慢）</string>
+        <string name="dsh_stage_using_preinstalled_dsh">使用随包预装的 dsh %1$s（跳过下载）</string>
+        <string name="dsh_stage_installing">正在下载并安装 %1$s</string>
+        <string name="dsh_stage_verifying_install">正在校验安装结果</string>
         <string name="dsh_start_failed">实例启动失败</string>
         <string name="dsh_start_not_ready">运行时或实例尚未就绪</string>
         <string name="dsh_state_broken">损坏</string>
@@ -271,4 +302,36 @@
     <string name="dsh_lang_system">跟随系统</string>
     <string name="dsh_setting_custom_name">自定义启动器名</string>
     <string name="dsh_setting_custom_name_desc">用于关于页；写 ${launcher_version} 会替换成版本号</string>
+
+    <!-- ===== 运行时底座：预检 / 解压 / 自检（DshBootstrap、ProotCommand）=====
+         与 values/strings.xml 的同一组文案一一对应，措辞与改造前的中文界面**逐字一致**：
+         这些句子在真机排障时已经被用户截过图、在日志里出现过，临时换说法会让老截图对不上。
+         新增的两条（缺哪个原生库、两次空间不足）在改造前是现拼的中文，这里把拼法固定下来。 -->
+    <string name="dsh_bootstrap_missing_scripts">缺少启动脚本</string>
+    <string name="dsh_bootstrap_missing_rootfs">rootfs 未就绪</string>
+    <string name="dsh_bootstrap_missing_proot">缺少 proot 可执行文件（jniLibs）</string>
+    <string name="dsh_bootstrap_proot_not_executable">proot 可执行文件没有执行权限（jniLibs 打包异常）</string>
+    <string name="dsh_bootstrap_missing_proot_loader">缺少 proot loader（jniLibs）</string>
+    <string name="dsh_bootstrap_outdated">运行时底座需要更新</string>
+    <string name="dsh_bootstrap_extract_scripts">解压启动脚本</string>
+    <string name="dsh_bootstrap_proot_ready">proot 运行时已就位（jniLibs）</string>
+    <string name="dsh_bootstrap_extract_rootfs">解压 Linux rootfs（较大，请稍候）</string>
+    <string name="dsh_bootstrap_verify_check">运行时自检</string>
+    <string name="dsh_bootstrap_busy">已有解压任务在进行（%1$s）</string>
+    <string name="dsh_bootstrap_data_dir_failed">无法创建数据目录：%1$s（磁盘空间或权限问题）</string>
+    <string name="dsh_bootstrap_missing_artifacts">缺少 %1$s（应随 APK 的 jniLibs/arm64-v8a 提供）。这属于打包问题，请检查构建产物是否包含该原生库。</string>
+    <string name="dsh_bootstrap_artifact_no_exec">%1$s（无执行位）</string>
+    <string name="dsh_bootstrap_no_space_extract">可用空间不足：解压 rootfs 需要约 %1$s，当前 %2$s。</string>
+    <string name="dsh_bootstrap_no_space_replace">可用空间不足：升级 rootfs 需要约 %1$s（升级期间新旧两份 rootfs 会同时存在），当前 %2$s。</string>
+    <string name="dsh_bootstrap_verify_failed_prefix">自检未通过：%1$s</string>
+    <string name="dsh_bootstrap_verify_ok">proot + rootfs 正常</string>
+    <string name="dsh_bootstrap_verify_proot_failed">proot 执行失败（退出码 %1$d）：%2$s</string>
+    <string name="dsh_bootstrap_rootfs_layout_bad">rootfs 内容异常：找不到 bin/sh 或 usr/bin/env（请确认打包时没有多套一层目录）</string>
+    <string name="dsh_preflight_no_proot">缺少 proot 可执行文件（期望 jniLibs 里的 libproot.so 或 assets/dsh/proot/libproot.so）</string>
+    <string name="dsh_preflight_proot_not_executable">proot 二进制没有执行权限（assets 方案在 Android 10+ 常因 W^X 限制无法执行，请改用 jniLibs 打包）</string>
+    <string name="dsh_preflight_rootfs_not_ready">rootfs 未就绪（未解压或解压不完整）</string>
+    <string name="dsh_preflight_rootfs_incomplete">rootfs 内容不完整（找不到 /bin/sh 或 /usr/bin/env）——常见原因：rootfs.tar.xz 里带了顶层目录，解压后多套了一层</string>
+    <string name="dsh_preflight_missing_script">缺少脚本 %1$s（运行时底座未解压）</string>
+    <!-- 与英文的 ", " 对应：中文列表用顿号 -->
+    <string name="dsh_list_separator">、</string>
 </resources>

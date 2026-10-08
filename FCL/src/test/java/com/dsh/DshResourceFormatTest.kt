@@ -36,7 +36,29 @@ class DshResourceFormatTest {
         "dsh_state_running_short" to arrayOf<Any>("dsh 0.1.5", 3080),
         "dsh_state_failed" to arrayOf<Any>("boom"),
 
-        // DshBootstrap / DshInstancesActivity
+        // ===== 运行时底座（DshBootstrap / ProotCommand）=====
+        // 这一组是**全程 user-facing** 的一条链：准备页进度与失败提示、首页任务区、
+        // 启动失败对话框、实例卡片错误行、自检对话框。带占位符的每一条都在这里登记。
+
+        // %1$s = 任务归属者标识（"setup" 这类内部字符串，不是给人看的名字）
+        "dsh_bootstrap_busy" to arrayOf<Any>("setup"),
+        // %1$s = 创建失败的目录路径
+        "dsh_bootstrap_data_dir_failed" to arrayOf<Any>("/data/user/0/com.tungsten.fcl/files/dsh/rootfs"),
+        // %1$s = 拼好的库名列表（分隔符来自 @string/dsh_list_separator：英文 ", "、中文"、"）；
+        // 下面那条 %1$s 是库名本身（带不带"无执行位"这句由它承载，好让中英文各自决定括号用全角还是半角）
+        "dsh_bootstrap_missing_artifacts" to arrayOf<Any>("libproot.so, libproot-loader.so"),
+        "dsh_bootstrap_artifact_no_exec" to arrayOf<Any>("libproot.so"),
+        // 两条空间不足各自两个参数，都是 DshPaths.formatSize 的文本。
+        // ★ 分成两条（而不是"共用一条 + 一条可选的尾注"）是有意的：升级时那句解释
+        //   （"升级期间新旧两份 rootfs 会同时存在"）是**为什么需要双倍空间**的理由，
+        //   塞进一个可选参数里，英文就没有自然的安放位置了。
+        "dsh_bootstrap_no_space_extract" to arrayOf<Any>("2.20 GB", "312.4 MB"),
+        "dsh_bootstrap_no_space_replace" to arrayOf<Any>("3.85 GB", "1.20 GB"),
+        // %1$s = 内层自检细节；下面那条 %1$d 是 proot 退出码
+        "dsh_bootstrap_verify_failed_prefix" to arrayOf<Any>("proot exited with code 1"),
+        "dsh_bootstrap_verify_proot_failed" to arrayOf<Any>(1, "dsh-probe: node = FAIL"),
+        // ProotCommand.preflight：%1$s 是宿主侧脚本的绝对路径
+        "dsh_preflight_missing_script" to arrayOf<Any>("/data/user/0/com.tungsten.fcl/files/dsh/scripts/start-dsh.sh"),
 
         // DshSettingsActivity / 实例详情页
         "dsh_settings_version" to arrayOf<Any>("0.1.5-rc.2"),
@@ -66,6 +88,22 @@ class DshResourceFormatTest {
         "dsh_install_done" to arrayOf<Any>("0.1.5-rc.2"),
         "dsh_install_skipped" to arrayOf<Any>("0.1.5-rc.2"),
         "dsh_install_failed" to arrayOf<Any>("npm ERR! code ENETUNREACH"),
+        // DshInstaller：失败原因会被翻译成这几条专门文案（%1$s = 错误码；其余几条无占位符，
+        // 按本测试的规则不需要登记），以及起 npm 之前的空间检查（两个参数都是 formatSize 的文本）
+        "dsh_install_error_npm" to arrayOf<Any>("EAI_AGAIN"),
+        "dsh_install_no_space" to arrayOf<Any>("600.0 MB", "1.20 GB"),
+
+        // 安装阶段：脚本报 key，启动器翻文案（见 DshInstaller.stageText）。
+        // 这几条带 %1$s，参数是版本号 / Node 版本号。
+        "dsh_stage_node_ready" to arrayOf<Any>("v22.23.3"),
+        "dsh_stage_installing_node" to arrayOf<Any>("22"),
+        "dsh_stage_using_preinstalled_dsh" to arrayOf<Any>("0.1.6-alpha.2"),
+        "dsh_stage_installing" to arrayOf<Any>("@deepseek-ai/dsh@0.2.1-alpha.1"),
+
+        // 通知栏与任务行的端口/状态文案（参数都是字符串 —— 状态本身已经是本地化过的文本）
+        "dsh_task_port" to arrayOf<Any>("3080"),
+        "dsh_notify_text_port" to arrayOf<Any>("dsh 0.2.1", "3080", "Running"),
+        "dsh_notify_text" to arrayOf<Any>("dsh 0.2.1", "Running"),
         "dsh_install_timeout" to arrayOf<Any>(30),
 
         // DshWebViewActivity / DshLogsActivity

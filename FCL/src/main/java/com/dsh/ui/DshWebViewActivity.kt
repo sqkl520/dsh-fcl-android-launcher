@@ -102,7 +102,7 @@ class DshWebViewActivity : FCLActivity() {
             startActivity(intent)
         }
         findViewById<View>(R.id.btn_stop).setOnClickListener {
-            DshRuntime.stop("用户从界面停止")
+            DshRuntime.stop(getString(R.string.dsh_reason_user_stop))
             finish()
         }
         findViewById<View>(R.id.btn_back).setOnClickListener { finish() }

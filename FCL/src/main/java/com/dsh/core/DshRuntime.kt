@@ -270,7 +270,8 @@ object DshRuntime {
             "${ProotCommand.GUEST_ROOT}/scripts/start-dsh.sh"
         )
         if (!pre.ok) {
-            val reason = pre.reason ?: "运行时未就绪"
+            val reason = pre.reason
+                ?: appContext?.getString(R.string.dsh_start_not_ready) ?: "runtime not ready"
             // 兜底重试阶段如果连预检都过不去，说明这次重试也没戏：把状态落到 Failed，
             // 否则状态会永远停在 Starting（界面上是"启动中"转圈不动）。
             if (noSeccomp) failRetry(instance, reason)
@@ -498,9 +499,16 @@ object DshRuntime {
 
     // --- 停止 ---------------------------------------------------------------
 
-    /** 停止当前实例。[reason] 只用于日志。 */
-    fun stop(reason: String = "用户停止") {
+    /**
+     * 停止当前实例。
+     *
+     * @param reason 停止原因，用于**日志**与任务区那行的阶段文案。空串表示"调用方没给原因"，
+     *   此时由 [stopReasonDefault] 填一句本地化的默认值（`"用户停止"` 这类词会显示给用户，
+     *   所以不能写死在代码里）。
+     */
+    fun stop(reason: String = "") {
         val instanceId = runningInstanceId()
+        val resolvedReason = reason.ifBlank { stopReasonDefault() }
         adoptWatcher?.cancel()
         adoptWatcher = null
         if (instanceId == null) {
@@ -509,10 +517,10 @@ object DshRuntime {
             return
         }
         val name = nameOf[instanceId] ?: instanceId
-        stopRequestedFor = instanceId // 标记：接下来的进程退出是\"我们要它停\"，不是崩溃
+        stopRequestedFor = instanceId // 标记：接下来的进程退出是"我们要它停"，不是崩溃
         _state.value = State.Stopping(instanceId, name)
         // 实例级：停止动作发生在该实例的生命周期里，实例页要能看到"谁在什么时候停了它"
-        DshLogBus.appendFor(instanceId, "[runtime] 停止 $name（$reason）")
+        DshLogBus.appendFor(instanceId, "[runtime] 停止 $name（$resolvedReason）")
         val h = handle
         handle = null
         val np = nodePid
@@ -561,7 +569,7 @@ object DshRuntime {
                 }
             }
         }
-        reportRuntimeCancelled(instanceId, name, reason)
+        reportRuntimeCancelled(instanceId, name, resolvedReason)
     }
 
     /**
@@ -579,7 +587,7 @@ object DshRuntime {
      * @return true = 已发起停止；false = 当前跑的不是它（或压根没在跑），**什么都没做**
      */
     @Synchronized
-    fun stopIf(instanceId: String, reason: String = "用户停止"): Boolean {
+    fun stopIf(instanceId: String, reason: String = ""): Boolean {
         // 判据用 runningInstanceId()（Starting/Running 都算"当前跑的"）：
         // Stopping 已经不属于"还在跑"，对它再发一次停止是空转，返回 false 更诚实。
         if (runningInstanceId() != instanceId) return false
@@ -636,6 +644,16 @@ object DshRuntime {
     private fun reportRuntimeCancelled(instanceId: String, name: String, reason: String) {
         reportRuntime(instanceId, name, DshTask.State.CANCELLED, reason)
     }
+
+    /**
+     * 调用方没给停止原因时的默认文案。
+     *
+     * 为什么不在参数默认值里直接写 `"用户停止"`：这个字符串会**显示在任务区那一行**上
+     * （`reportRuntimeCancelled` 把它当 stage），写死在代码里就等于"英文界面下也是中文"。
+     * 默认值取空串，到这里再按当前语言补 —— 这样"没给原因"与"给了空原因"是同一条路径。
+     */
+    private fun stopReasonDefault(): String =
+        appContext?.getString(R.string.dsh_reason_user_stop) ?: "stopped by user"
 
     /**
      * 读取 rootfs 内 node 的 pid 并终止它（B10 修复的主路径）。
@@ -924,7 +942,11 @@ object DshRuntime {
         DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 就绪：端口 $port")
         // 终态上报：任务区那条"启动中"到这里就该有个结局（成功）；不报的话它只是**消失**，
         // 用户看不出"起来了"还是"没起来"。
-        reportRuntime(instance.id, instance.name, DshTask.State.DONE, "端口 $port")
+        reportRuntime(
+            instance.id, instance.name, DshTask.State.DONE,
+            // 阶段文案跟着界面语言（任务行会显示它）
+            appContext?.getString(R.string.dsh_task_port, port) ?: "port $port"
+        )
     }
 
     private fun onProcessExit(instance: DshInstance, code: Int) {
@@ -983,7 +1005,10 @@ object DshRuntime {
             }
             if (portInUse) {
                 // 文案不放进 strings.xml（本轮改动范围只允许三个文件）：直接给一句可操作的中文。
-                val reason = "端口被占用（EADDRINUSE）。重试启动会自动改用系统分配的端口。"
+                // 文案跟着界面语言走（这条会显示在启动失败对话框里）。
+                // 拿不到 Context 时回落到英文短句 —— 这是个不该发生的分支，但不能让它变成空字符串。
+                val reason = appContext?.getString(R.string.dsh_start_port_in_use)
+                    ?: "Port in use (EADDRINUSE). The next start will pick a free port automatically."
                 setStateIfOwned(instance.id) { State.Failed(instance.id, instance.name, reason) }
                 DshLogBus.appendFor(instance.id, "[runtime] 启动失败：$reason")
                 reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)

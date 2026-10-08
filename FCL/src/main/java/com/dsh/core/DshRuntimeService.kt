@@ -56,7 +56,7 @@ class DshRuntimeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                DshRuntime.stop("通知栏停止")
+                DshRuntime.stop(getString(R.string.dsh_reason_from_notification))
                 stopSelfSafely()
                 return START_NOT_STICKY
             }
@@ -83,7 +83,7 @@ class DshRuntimeService : Service() {
         super.onDestroy()
         // 服务被系统回收时确保进程也停掉，避免僵尸 node 进程
         if (DshRuntime.runningInstanceId() != null) {
-            DshRuntime.stop("前台服务被回收")
+            DshRuntime.stop(getString(R.string.dsh_reason_service_recycled))
         }
     }
 
@@ -155,7 +155,14 @@ class DshRuntimeService : Service() {
                 // Idle/Failed/Exited：只会在服务即将自停的极短窗口出现，文案别再误导成"运行中"
                 else -> context.getString(R.string.dsh_notify_stopping)
             }
-            val text = if (port != null && port > 0) "$name · 端口 $port · $status" else "$name · $status"
+            // 端口与状态都是用户可见的（通知栏），跟着界面语言走。
+            // 有端口用带 %2$s 的那条、没有就用两条参数的 —— 两条都带占位符，不做字符串拼接：
+            // 拼接会把"· "这类分隔符也固化进代码，译文里想换成分号就没辙。
+            val text = if (port != null && port > 0) {
+                context.getString(R.string.dsh_notify_text_port, name, port.toString(), status)
+            } else {
+                context.getString(R.string.dsh_notify_text, name, status)
+            }
 
             val contentIntent = Intent(context, DshMainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -195,7 +202,7 @@ class DshRuntimeService : Service() {
                 "DeepSeek Harness Runtime",
                 NotificationManager.IMPORTANCE_LOW
             )
-            channel.description = "dsh web 进程保活通知"
+            channel.description = context.getString(R.string.dsh_notify_channel_desc)
             manager.createNotificationChannel(channel)
         }
     }

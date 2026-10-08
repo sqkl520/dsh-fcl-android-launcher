@@ -1,5 +1,7 @@
 package com.dsh.core
 
+import com.dsh.fcl.androidlauncher.R
+
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
@@ -276,7 +278,7 @@ object DshInstances {
             // 与传入的 id 无关。原来无条件调用，导致\"删除一个没在跑的实例 B\"会把正在跑的
             // 实例 A 一起杀掉（用户只点了删除 B，A 的会话却断了）。
             val stopped = if (DshRuntime.runningInstanceId() == id) {
-                DshRuntime.stopAndWait("实例被删除")
+                DshRuntime.stopAndWait(DshAppContextHolder.context?.getString(R.string.dsh_reason_deleted) ?: "Instance deleted")
             } else {
                 true
             }
@@ -303,7 +305,12 @@ object DshInstances {
                     id = DshTasks.deleteTaskId(id),
                     kind = DshTask.Kind.DELETE,
                     title = inst?.name ?: id,
-                    stage = if (ok) "已删除" else "已删除（有文件残留）",
+                    stage = if (ok) {
+                        DshAppContextHolder.context?.getString(R.string.dsh_task_deleted) ?: "Deleted"
+                    } else {
+                        DshAppContextHolder.context?.getString(R.string.dsh_task_deleted_with_leftover)
+                            ?: "Deleted (some files remain)"
+                    },
                     action = DshTask.Action.NONE,
                     state = DshTask.State.DONE,
                     instanceId = id

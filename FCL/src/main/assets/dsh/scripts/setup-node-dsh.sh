@@ -19,7 +19,7 @@
 #   NODE_MAJOR         需要安装 Node 时用的主版本，默认 22
 #   NPM_CONFIG_CACHE   npm 缓存目录（启动器指向 <filesDir>/dsh/npm-cache，跨实例复用）
 #
-# 机器可读输出：`[setup] STAGE=...`、`[setup] DONE version=... source=...`；
+# 机器可读输出：`[setup] STAGE=<key>[ <args>]`、`[setup] DONE version=... source=...`；
 # 失败一律 `[setup] FAILED reason=...` 并以非 0 退出（启动器据此判定 BROKEN）。
 set -eu
 
@@ -34,7 +34,22 @@ NODE_MAJOR="${NODE_MAJOR:-22}"
 
 mkdir -p "$INSTANCE_DIR"
 
-stage() { echo "[setup] STAGE=$*"; }
+# 阶段标记：`[setup] STAGE=<key>[ <args>]`。
+# ★ 第一个词是**稳定的 key**（小写 ASCII、kebab-case），其余部分是它的参数。
+#   为什么 key 偏偏写成"读起来像英文短语"的样子（installing / verifying-install）
+#   而不是纯符号（stage_install / S3）：启动器侧不认识某个 key 时会**原样显示整行**，
+#   那时 `installing @deepseek-ai/dsh@0.2.1-alpha.1` 至少还是一句英文，
+#   而 `S3 v=0.2.1-alpha.1` 就成了一行机器码。详见 DshUiText.stage() 的兜底规则。
+stage() {
+  stage_key="${1:-unknown}"
+  shift || true          # 位置参数已空时 shift 会返回非 0，set -e 下必须兜住
+  if [ "$#" -gt 0 ]; then
+    echo "[setup] STAGE=$stage_key $*"
+  else
+    echo "[setup] STAGE=$stage_key"
+  fi
+}
+
 
 # --- 检测发行版/libc ------------------------------------------------------
 LIBC="glibc"
@@ -59,11 +74,11 @@ preinstall_ver() {
 }
 
 if node_ok && npm_ok; then
-  stage "已有可用 Node $(node -v)"
+  stage "node-ready" "$(node -v)"
 else
   if node_ok && ! npm_ok; then
     # node 有但 npm 没有：单独补 npm，避免走整包安装
-    stage "补充 npm"
+    stage "adding-npm"
     if [ "$LIBC" = "musl" ]; then
       apk add --no-cache npm >/dev/null 2>&1 || true
     else
@@ -73,7 +88,7 @@ else
   fi
 
   if ! node_ok; then
-    stage "安装 Node $NODE_MAJOR（首次较慢）"
+    stage "installing-node" "$NODE_MAJOR"
     if [ "$LIBC" = "musl" ]; then
       apk add --no-cache nodejs npm >/dev/null
     else
@@ -85,7 +100,7 @@ else
   fi
 
   if ! node_ok; then
-    echo "[setup] FAILED reason=node-version（当前 $(node -v 2>/dev/null || echo '无 node')，要求 ^22.19 || >=24）" >&2
+    echo "[setup] FAILED reason=node-version node=$(node -v 2>/dev/null || echo none) required=^22.19||>=24" >&2
     exit 1
   fi
   echo "[setup] Node OK: $(node -v)"
@@ -103,12 +118,12 @@ if [ ! -f "$INSTANCE_BIN" ]; then
   if [ -n "${PRE_VER:-}" ]; then
     case "$DSH_VERSION" in
       latest|"$PRE_VER")
-        stage "使用 rootfs 预装 dsh $PRE_VER（跳过下载）"
+        stage "using-preinstalled-dsh" "$PRE_VER"
         echo "[setup] DONE version=$PRE_VER source=preinstalled"
         exit 0
         ;;
     esac
-    echo "[setup] 预装版本 $PRE_VER ≠ 请求版本 $DSH_VERSION，将安装到实例目录"
+    echo "[setup] preinstalled $PRE_VER != requested $DSH_VERSION; installing into the instance directory"
   fi
 fi
 
@@ -121,12 +136,12 @@ if [ -n "${NPM_CONFIG_CACHE:-}" ]; then
   echo "[setup] npm cache: $NPM_CONFIG_CACHE"
 fi
 
-stage "下载并安装 @deepseek-ai/dsh@$DSH_VERSION"
-echo "[setup] 安装 @deepseek-ai/dsh@$DSH_VERSION 到 $INSTANCE_DIR ..."
+stage "installing" "@deepseek-ai/dsh@$DSH_VERSION"
+echo "[setup] installing @deepseek-ai/dsh@$DSH_VERSION into $INSTANCE_DIR ..."
 # --prefer-offline：命中缓存时不打网络
 npm install --no-fund --no-audit --prefer-offline "@deepseek-ai/dsh@$DSH_VERSION"
 
-stage "校验安装结果"
+stage "verifying-install"
 INSTALLED="$(node -e "console.log(require('./node_modules/@deepseek-ai/dsh/package.json').version)" 2>/dev/null || true)"
 if [ -z "$INSTALLED" ]; then
   echo "[setup] FAILED reason=verify-version" >&2
@@ -138,4 +153,4 @@ if [ ! -f "node_modules/@deepseek-ai/dsh/lib/bin.js" ]; then
 fi
 
 echo "[setup] DONE version=$INSTALLED source=instance"
-echo "[setup] node_modules 体积: $(du -sh node_modules 2>/dev/null | cut -f1)"
+echo "[setup] node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1)"
