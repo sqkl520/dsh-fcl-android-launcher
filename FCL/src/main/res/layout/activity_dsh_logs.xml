@@ -96,14 +96,21 @@
              跟用户选的主题色没关系 —— 按主题色算出来的黑/白会与底板撞色（浅底配白字）。
              不挂属性时文字色走 AppCompat DayNight 主题默认（亮=深、暗=浅），
              与底板同为 DayNight 切换，天然对得上。
-             另外每一行都会被 ForegroundColorSpan 按级别整体覆盖，基础色只作兜底。 -->
+             另外每一行都会被 ForegroundColorSpan 按级别整体覆盖，基础色只作兜底。
+
+             ⚠️ **不要加回 `android:textIsSelectable="true"`**（曾经有，已删除）：
+             它等价于 `setFocusableInTouchMode(true)` + `setMovementMethod(ArrowKeyMovementMethod)`，
+             而 `TextView.setText` 每次都会调 `ArrowKeyMovementMethod.initialize()`
+             —— 那一句会把光标选择**重置到第 0 个字符**；随后 `onPreDraw()` 会拿着这个位置
+             请求父 ScrollView"把第 0 行显示出来"（前提是正文拿到了焦点），于是整个日志视图
+             被拽回**最顶部**（只要内容高于一屏就会发生，与「自动滚动」开关无关）。
+             复制日志用工具行上的「复制全部」按钮，不需要靠长按选中。 -->
         <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/log_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
             android:lineSpacingExtra="2dp"
-            android:textIsSelectable="true"
             android:textSize="11sp" />
 
     </ScrollView>

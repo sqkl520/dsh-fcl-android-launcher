@@ -380,22 +380,23 @@ class DshLauncherSettingsPage(
     }
 
 
-    /** 语言：与 FCL 相同 —— 写入偏好后重建界面，让 attachBaseContext 重新应用 */
+    /**
+     * 语言：写入偏好后重建界面，让 `attachBaseContext` 重新应用。
+     *
+     * ## 为什么只有四项（原来是 12 项）
+     * 这个列表的下标必须与 [LocaleUtils.getLocale] 一一对应，而本项目**只维护三套文案**
+     * （`values/` 英文、`values-zh/` 简体、`values-zh-rTW/` 繁体）。多出来的选项（俄语、波斯语…）
+     * 没有对应资源，选进去只会得到一份半英半中的界面 —— 比"没有这个选项"更糟。
+     *
+     * ⚠️ 老用户存的旧下标由 [LocaleUtils.getLanguage] 归一（繁体两项已合并、其余下线语言归到
+     * "跟随系统"），所以这里拿到的 `current` 一定是 `0..3`，可以直接当选中项用。
+     */
     private fun pickLanguage() {
-        // 顺序必须与 LocaleUtils.getLocale(index) 的 0..11 一一对应（照 FCL）
         val labels = listOf(
-            context.getString(R.string.dsh_lang_system),                    // 0 跟随系统
-            context.getString(R.string.dsh_lang_english),                   // 1
-            context.getString(R.string.dsh_lang_simplified_chinese),        // 2
-            context.getString(R.string.dsh_lang_russian),                   // 3
-            context.getString(R.string.dsh_lang_brazilian_portuguese),      // 4
-            context.getString(R.string.dsh_lang_persian),                   // 5
-            context.getString(R.string.dsh_lang_ukrainian),                 // 6
-            context.getString(R.string.dsh_lang_german),                    // 7
-            context.getString(R.string.dsh_lang_traditional_chinese_hk),    // 8
-            context.getString(R.string.dsh_lang_japanese),                  // 9
-            context.getString(R.string.dsh_lang_turkish),                   // 10
-            context.getString(R.string.dsh_lang_traditional_chinese_tw),    // 11
+            context.getString(R.string.dsh_lang_system),                 // LocaleUtils.LANG_SYSTEM
+            context.getString(R.string.dsh_lang_english),                // LANG_ENGLISH
+            context.getString(R.string.dsh_lang_simplified_chinese),     // LANG_CHINESE_SIMPLIFIED
+            context.getString(R.string.dsh_lang_traditional_chinese),    // LANG_CHINESE_TRADITIONAL
         )
         val current = LocaleUtils.getLanguage(context)
         // FCL 的选项对话框（条目高亮主题色、条目多时自动滚动）

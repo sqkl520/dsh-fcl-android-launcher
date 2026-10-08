@@ -13,6 +13,15 @@
 #   5) npm                    插件安装依赖它
 #   6) 预装 dsh                bin.js 存在且能报出版本
 #   7) 原生模块 dlopen         .node 能被 Node 加载（插件扩展的前提）
+#
+# ## 为什么输出是英文，而不是「脚本报 key、Kotlin 侧翻文案」
+# 这套输出会经 DshBootstrap.verifySync 进到自检对话框，是用户可见的；但它**不是**一条阶段名，
+# 而是一份**人读的报告**：逐项名字（node / bash / child_process.execSync / native.dlopen、以及
+# dlopen 命中的那个模块路径）、软件自报的版本号、工具原样吐出的错误消息混在一起。
+# 要整份本地化，就得为每一条都设计 key + 参数，还要在 Kotlin 侧重建"哪一项、什么结果、什么附加信息"
+# 的结构 —— 而这份结构本来就已经是脚本里最直白的几行 stdout 了。
+# 折中取英文：英文在三套界面语言下都是中性的技术报告语，中文界面里看到一行英文自检报告不刺眼，
+# 而英文界面里看到中文才是这一轮要修的问题本身。
 set -u
 
 PATH="/opt/node22/bin:$PATH"
@@ -25,13 +34,13 @@ export NARB_DISABLE_NATIVE_CACHE
 
 # 前置：rootfs 布局
 if [ ! -x /bin/sh ] && [ ! -x /usr/bin/env ]; then
-  echo "dsh-probe: rootfs-layout = FAIL（找不到 /bin/sh 或 /usr/bin/env）"
+  echo "dsh-probe: rootfs-layout = FAIL (no /bin/sh or /usr/bin/env found)"
   exit 2
 fi
 echo "dsh-probe: rootfs-layout = ok ($(uname -s 2>/dev/null || echo unknown) $(uname -m 2>/dev/null || echo unknown))"
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "dsh-probe: node = FAIL（PATH 中找不到 node）"
+  echo "dsh-probe: node = FAIL (node not found in PATH)"
   exit 3
 fi
 
@@ -40,7 +49,7 @@ CHK="${TMPDIR:-/tmp}/dsh-probe-$$.js"
 if ! : > "$CHK" 2>/dev/null; then
   # 回退到 /var/tmp（不要写到 /opt/dsh/*：那是宿主 filesDir/dsh 的 bind 挂载点）
   CHK="/var/tmp/dsh-probe-$$.js"
-  : > "$CHK" 2>/dev/null || { echo "dsh-probe: tmp = FAIL（无可写临时目录）"; exit 4; }
+  : > "$CHK" 2>/dev/null || { echo "dsh-probe: tmp = FAIL (no writable temp directory)"; exit 4; }
 fi
 
 cat > "$CHK" <<'JSEOF'
@@ -61,7 +70,7 @@ function reportCritical(name, ok, extra) {
 // 2) Node 版本
 const v = process.versions.node.split('.').map(Number);
 const nodeOk = (v[0] === 22 && v[1] >= 19) || v[0] >= 24;
-reportCritical('node', nodeOk, 'v' + process.versions.node + (nodeOk ? '' : '，需要 ^22.19 || >=24'));
+reportCritical('node', nodeOk, 'v' + process.versions.node + (nodeOk ? '' : ', requires ^22.19 || >=24'));
 
 // 3) bash
 let bashOk = false, bashVer = '';
@@ -99,7 +108,7 @@ try {
   const nv = cp.execSync('npm --version').toString().trim();
   reportCritical('npm', /^\d+\./.test(nv), 'v' + nv);
 } catch (e) {
-  reportCritical('npm', false, 'npm 不可用');
+  reportCritical('npm', false, 'npm unavailable');
 }
 
 // 6) 预装 dsh
@@ -108,7 +117,7 @@ let dshVer = '';
 try {
   dshVer = JSON.parse(fs.readFileSync(preDir + '/node_modules/@deepseek-ai/dsh/package.json', 'utf8')).version;
 } catch (e) { /* 读不到就只报 FAIL */ }
-reportCritical('dsh.preinstalled', fs.existsSync(binJs), dshVer ? ('v' + dshVer) : 'bin.js 缺失');
+reportCritical('dsh.preinstalled', fs.existsSync(binJs), dshVer ? ('v' + dshVer) : 'bin.js missing');
 
 // 7) 原生模块 dlopen（插件扩展的前提）
 const candidates = [
@@ -124,11 +133,11 @@ for (const p of candidates) {
     dlOk = true; dlWhich = p.split('/node_modules/')[1] || p;
     break;
   } catch (e) {
-    dlWhich = (p.split('/node_modules/')[1] || p) + ' 加载失败: ' + String(e.message).slice(0, 60);
+    dlWhich = (p.split('/node_modules/')[1] || p) + ' failed to load: ' + String(e.message).slice(0, 60);
     break;
   }
 }
-reportCritical('native.dlopen', dlOk, dlWhich || '未找到可测试的 .node');
+reportCritical('native.dlopen', dlOk, dlWhich || 'no testable .node found');
 
 process.exit(critical === 0 ? 0 : 1);
 JSEOF
@@ -140,6 +149,6 @@ rm -f "$CHK" 2>/dev/null || true
 if [ "$rc" -eq 0 ]; then
   echo "dsh-probe-ok"
 else
-  echo "dsh-probe: 自检未通过（见上面的 FAIL 项）"
+  echo "dsh-probe: self-check failed (see the FAIL items above)"
 fi
 exit "$rc"

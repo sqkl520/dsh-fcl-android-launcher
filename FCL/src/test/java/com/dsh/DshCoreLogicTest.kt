@@ -8,6 +8,7 @@ import com.dsh.core.DshVersionListItem
 import com.dsh.core.TarLinkPolicy
 import com.dsh.core.UrlScanner
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -455,6 +456,88 @@ class DshCoreLogicTest {
         // 多级 `..` 也不能被改写
         val multi = "../../../git-core/contrib/hooks"
         assertEquals(multi, TarLinkPolicy.symlinkTarget(multi))
+    }
+
+    // --- npm 错误行判定（npm 9 的 `npm ERR!` 与 npm 10 的 `npm error`） ------------
+
+    /**
+     * npm 10 的错误行必须收进来 —— 这就是真机那次失败的形态：装 29 分钟后失败，
+     * 日志里躺着 `npm error code EAI_AGAIN`，而改造前的判据只认 `npm ERR!`，一行都收不到，
+     * 界面只剩一句"安装失败（详见日志）"。
+     */
+    @Test
+    fun collectsNpm10ErrorLines() {
+        assertTrue(DshInstaller.isNpmErrorLine("npm error code EAI_AGAIN"))
+        assertTrue(
+            DshInstaller.isNpmErrorLine(
+                "npm error request to https://registry.npmjs.org/sharp failed, " +
+                    "reason: getaddrinfo EAI_AGAIN registry.npmjs.org"
+            )
+        )
+        // npm 10 的完整失败块（真机日志的形态）逐行都要能收进错误尾部
+        assertTrue(DshInstaller.isNpmErrorLine("npm error syscall getaddrinfo"))
+        assertTrue(DshInstaller.isNpmErrorLine("npm error errno EAI_AGAIN"))
+    }
+
+    /** 旧版本 npm（≤9）的 `npm ERR!` 仍然要认，否则老 rootfs 上又会退化成泛化文案 */
+    @Test
+    fun collectsLegacyNpmErrorLines() {
+        assertTrue(DshInstaller.isNpmErrorLine("npm ERR! code ENETUNREACH"))
+        assertTrue(DshInstaller.isNpmErrorLine("npm ERR! network request to https://x failed"))
+    }
+
+    /**
+     * 警告不是错误。
+     *
+     * 真机日志里那批 `npm warn ... ERESOLVE overriding peer dependency` 有几十条，
+     * 收进来会把真正的错误行挤出 12 行窗口 —— 改造前那句 `contains("ERR!")` 正是这么错的。
+     */
+    @Test
+    fun ignoresNpmWarnings() {
+        assertFalse(DshInstaller.isNpmErrorLine("npm warn ERESOLVE overriding peer dependency"))
+        assertFalse(DshInstaller.isNpmErrorLine("npm WARN deprecated foo@1.0.0: use bar"))
+        // 只是**提到** ERR!（但不在行首）的 notice 行不是错误行：旧的 contains 判据会把它收走
+        assertFalse(DshInstaller.isNpmErrorLine("npm notice see the ERR! section of the docs"))
+        // setup 脚本的进度行也不是（它有自己的 STAGE 分支，不该挤进错误窗口）
+        assertFalse(DshInstaller.isNpmErrorLine("[setup] STAGE=下载并安装 @deepseek-ai/dsh@0.2.1-alpha.1"))
+    }
+
+    /** 两种前缀混在同一个文件里也必须逐行判对（不能靠"看到过一次 ERR! 就全都收"） */
+    @Test
+    fun handlesMixedLegacyAndModernLines() {
+        val lines = listOf(
+            "npm warn ERESOLVE overriding peer dependency",
+            "npm ERR! code ETIMEDOUT",
+            "npm error code EAI_AGAIN"
+        )
+        assertEquals(listOf(false, true, true), lines.map { DshInstaller.isNpmErrorLine(it) })
+    }
+
+    // --- 装前空间检查 -------------------------------------------------------
+
+    /**
+     * 只有"剩余 < 需要"才拦。
+     *
+     * 真机那次是 110.78G / 111.90G（约 1.1G 可用），而一次安装要写 500 MB 上下 ——
+     * 边界正好卡在这里，所以相等要放行（略微紧一点但装得下的机器不该被拦住）。
+     */
+    @Test
+    fun spaceCheckBlocksOnlyWhenClearlyTooSmall() {
+        val need = 600L * 1024 * 1024
+        assertFalse(DshInstaller.isEnoughSpaceForInstall(need, need - 1))
+        assertTrue(DshInstaller.isEnoughSpaceForInstall(need, need))
+        assertTrue(DshInstaller.isEnoughSpaceForInstall(need, need + 1))
+        // 典型"充裕"与"几乎写满"两种极端
+        assertTrue(DshInstaller.isEnoughSpaceForInstall(need, 50L * 1024 * 1024 * 1024))
+        assertFalse(DshInstaller.isEnoughSpaceForInstall(need, 10L * 1024 * 1024))
+    }
+
+    /** 读不出来（负数）一律放行：拿"未知"当"不足"会拦下本来能装的实例 */
+    @Test
+    fun spaceCheckPassesWhenUnknown() {
+        val need = 600L * 1024 * 1024
+        assertTrue(DshInstaller.isEnoughSpaceForInstall(need, -1L))
+        assertTrue(DshInstaller.isEnoughSpaceForInstall(-1L, need))
     }
 
     /** 造一个「能被 readVersionFromPackageJson 读出真实版本」的最小 dsh 包 */

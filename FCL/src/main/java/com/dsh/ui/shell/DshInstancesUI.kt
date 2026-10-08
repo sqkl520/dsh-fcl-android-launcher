@@ -311,7 +311,7 @@ private class InstanceListPage(
 
         adapter = DshInstanceAdapter(
             onStart = ::startInstance,
-            onStop = { DshRuntime.stop("用户停止") },
+            onStop = { DshRuntime.stop() },
             // 行的「更多 → 设置」与左滑菜单的「设置」：统一走外壳那条入口
             // （它先切到「实例」tab 再让那一页把详情压栈，语义是"打开这个实例的详情"）
             onOpenSettings = { host.openInstanceDetail(it.id) },

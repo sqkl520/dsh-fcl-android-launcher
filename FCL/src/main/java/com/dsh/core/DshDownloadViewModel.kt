@@ -1,5 +1,6 @@
 package com.dsh.core
 
+import com.dsh.fcl.androidlauncher.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -100,7 +101,10 @@ class DshDownloadViewModel(
                     lastWarning = e.message ?: e.toString()
                     rebuild()
                 } else {
-                    _uiState.value = UiState.Error(e.message ?: "拉取版本列表失败")
+                    _uiState.value = UiState.Error(
+                        e.message ?: DshAppContextHolder.context?.getString(R.string.dsh_download_fetch_failed)
+                            ?: "Failed to load the version list"
+                    )
                 }
             }
         }

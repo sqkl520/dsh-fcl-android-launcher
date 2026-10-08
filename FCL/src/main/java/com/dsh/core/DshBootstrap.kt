@@ -1,6 +1,7 @@
 package com.dsh.core
 
 import android.content.Context
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcl.util.RuntimeUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,8 +53,15 @@ object DshBootstrap {
      */
     private const val ROOTFS_EXTRACTED_BYTES = 1650L * 1024 * 1024
 
-    /** 一个实例的 dsh 依赖树（node_modules）大致占用，实测 300~500 MB，取 600 MB 留余量 */
-    private const val INSTANCE_NODE_MODULES_BYTES = 600L * 1024 * 1024
+    /**
+     * 一个实例的 dsh 依赖树（node_modules）大致占用，实测 300~500 MB，取 600 MB 留余量。
+     *
+     * ★ 从 `private` 放开到 `internal`：这条门槛现在有**两个**使用方 —— 本类解压 rootfs 前的
+     *   空间检查，以及 [DshInstaller] 起 npm 之前的空间检查。两处必须用同一个数：
+     *   各写一个魔数的话迟早分叉，用户会遇到"底座说够、安装说不够"（或反过来），
+     *   而这种前后矛盾的提示比不给提示更让人糊涂。
+     */
+    internal const val INSTANCE_NODE_MODULES_BYTES = 600L * 1024 * 1024
 
     /**
      * 首装需要的最小可用空间：rootfs 一份 + 一个实例的 node_modules。
@@ -138,18 +146,31 @@ object DshBootstrap {
     /** 一句话描述当前缺口（界面提示用） */
     fun missingSummary(): String? {
         if (isReady()) return null
+        val ctx = DshUiText.contextOrNull() ?: return null
         val prootBin = DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
         val prootLoader = DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
         return when {
-            !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile -> "缺少启动脚本"
-            !File(DshPaths.ROOTFS_DIR).isDirectory || !DshPaths.rootfsLooksUsable() -> "rootfs 未就绪"
-            !prootBin.isFile -> "缺少 proot 可执行文件（jniLibs）"
-            !prootBin.canExecute() -> "proot 可执行文件没有执行权限（jniLibs 打包异常）"
-            !prootLoader.isFile -> "缺少 proot loader（jniLibs）"
-            else -> "运行时底座需要更新"
+            !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile -> ctx.getString(R.string.dsh_bootstrap_missing_scripts)
+            !File(DshPaths.ROOTFS_DIR).isDirectory || !DshPaths.rootfsLooksUsable() -> ctx.getString(R.string.dsh_bootstrap_missing_rootfs)
+            !prootBin.isFile -> ctx.getString(R.string.dsh_bootstrap_missing_proot)
+            !prootBin.canExecute() -> ctx.getString(R.string.dsh_bootstrap_proot_not_executable)
+            !prootLoader.isFile -> ctx.getString(R.string.dsh_bootstrap_missing_proot_loader)
+            else -> ctx.getString(R.string.dsh_bootstrap_outdated)
         }
     }
 
+    /**
+     * 界面文案用的 Context。
+     *
+     * ## 为什么不是调用方传进来的那个
+     * 这里的文案最终显示在准备页与首页任务区，而进程级单例（[DshServices]、[DshTasks]）持有的
+     * 是 `applicationContext` —— Android 的**资源级**语言（`values-zh/…` 选哪一套）是在每个 Context
+     * 上解析的，Application 那份跟随系统，**不认启动器设置里选的语言**。直接用它就等于"界面切成英文
+     * 了，这里还是中文"。所以每次取这条链上的文本时都现取一份**当前 Activity** 的 Context
+     * （`setLanguage` 在 `FCLActivity.attachBaseContext` 里生效），拿不到才退回 App Context。
+     *
+     * 一个字段缓存不成立：这条链是进程级的，用户可以在 App 存活期间切语言，缓存会把它钉死在旧语言上。
+     */
     /**
      * 首启解压（幂等）。在 IO 线程调用。逐项检查 version，只解压过期的子项。
      */
@@ -161,7 +182,14 @@ object DshBootstrap {
                 // ★ 同一入口重复点击：不报错，只把"最新进度"重放给本次调用方（幂等）
                 _progress.value?.let(onProgress)
             } else {
-                onProgress(Progress.Failed("已有解压任务在进行（$cur）"))
+                // owner 是**内部标识**（两个界面同时进来时用来分辨"是不是同一入口重复点了"），
+                // 不是给人看的名字。这里把标识保留在括号里：它是排障时唯一能对上日志的信息，
+                // 而把它翻成一句人话反而会丢掉"是谁在跑"。
+                onProgress(
+                    Progress.Failed(
+                        context.getString(R.string.dsh_bootstrap_busy, cur ?: "")
+                    )
+                )
             }
             return
         }
@@ -171,10 +199,13 @@ object DshBootstrap {
             _progress.value = p
             onProgress(p)
         }
+        // 界面文案统一用 DshUiText.contextOrNull()：它与调用方传进来的 context 可能不是同一个
+        // （DshInstaller 那条链拿的是 applicationContext，不认启动器语言），详见 DshUiText.contextOrNull()。
+        val ui = DshUiText.contextOrNull() ?: context
         try {
             val pathErr = DshPaths.loadPaths(context)
             if (pathErr != null) {
-                fail(emit, "无法创建数据目录：$pathErr（磁盘空间或权限问题）")
+                fail(emit, ui.getString(R.string.dsh_bootstrap_data_dir_failed, pathErr))
                 return
             }
 
@@ -192,7 +223,7 @@ object DshBootstrap {
             if (!RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") ||
                 !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile
             ) {
-                emit(Progress.Stage("解压启动脚本", 0.05))
+                emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_extract_scripts), 0.05))
                 RuntimeUtils.install(
                     context, DshPaths.SCRIPTS_DIR, "$ASSET_ROOT/scripts",
                     listener(emit)
@@ -207,19 +238,21 @@ object DshBootstrap {
             val prootLoader = DshPaths.resolveProotLoader(nativeLibDir)
             if (!prootBin.isFile || !prootBin.canExecute() || !prootLoader.isFile) {
                 // 明确报出缺哪个，并给出可操作指引（这是打包问题，不是运行环境问题）
-                val missing = buildList {
+                // 缺哪个原生库是**构建产物的事实**，不是给人读的句子：库名（含"无执行位"这个
+                // 形态差异）原样列出即可，列表分隔符走资源（中文用顿号、英文用逗号），
+                // 拼句子的事交给 dsh_bootstrap_missing_artifacts 一条文案整体负责。
+                val sep = ui.getString(R.string.dsh_list_separator)
+                val libs = buildList {
                     if (!prootBin.isFile) add("libproot.so")
-                    else if (!prootBin.canExecute()) add("libproot.so（无执行位）")
+                    else if (!prootBin.canExecute()) {
+                        add(ui.getString(R.string.dsh_bootstrap_artifact_no_exec, "libproot.so"))
+                    }
                     if (!prootLoader.isFile) add("libproot-loader.so")
-                }.joinToString("、")
-                fail(
-                    emit,
-                    "缺少 $missing（应随 APK 的 jniLibs/arm64-v8a 提供）。" +
-                        "这属于打包问题，请检查构建产物是否包含该原生库。"
-                )
+                }.joinToString(sep)
+                fail(emit, ui.getString(R.string.dsh_bootstrap_missing_artifacts, libs))
                 return
             }
-            emit(Progress.Stage("proot 运行时已就位（jniLibs）", 0.1))
+            emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_proot_ready), 0.1))
 
             // 3) rootfs（tar.xz，最耗时）
             if (!RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") ||
@@ -234,24 +267,31 @@ object DshBootstrap {
                     ROOTFS_EXTRACTED_BYTES * (if (replacing) 2L else 1L)
                 val free = DshPaths.freeSpaceBytes()
                 if (free in 0 until need) {
+                    // 首装与升级**各一条**文案，而不是"共用一条 + 补一段括号说明"：
+                    // 升级时那句"新旧两份会同时存在"是解释**为什么**要这么多空间，英文重写后
+                    // 放进一条 %3$s 尾注里怎么排都不顺；分成两条让两边都能把话说明白，
+                    // 也顺手避开了"缺了这句解释的译文看起来像凭空要双倍空间"。
+                    // 两条都登记进 DshResourceFormatTest.callSites（两个参数都是 formatSize 的文本）。
                     fail(
                         emit,
-                        "可用空间不足：${if (replacing) "升级" else "解压"} rootfs 需要约 " +
-                            "${DshPaths.formatSize(need)}" +
-                            (if (replacing) "（升级期间新旧两份 rootfs 会同时存在）" else "") +
-                            "，当前 ${DshPaths.formatSize(free)}"
+                        ui.getString(
+                            if (replacing) R.string.dsh_bootstrap_no_space_replace
+                            else R.string.dsh_bootstrap_no_space_extract,
+                            DshPaths.formatSize(need),
+                            DshPaths.formatSize(free)
+                        )
                     )
                     return
                 }
-                emit(Progress.Stage("解压 Linux rootfs（较大，请稍候）", 0.2))
+                emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_extract_rootfs), 0.2))
                 extractRootfs(context, emit)
             }
 
             // 4) 自检：能不能真跑
-            emit(Progress.Stage("运行时自检", 0.98))
+            emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_verify_check), 0.98))
             val report = verifySync(context)
             if (!report.ok) {
-                fail(emit, "自检未通过：${report.detail}")
+                fail(emit, ui.getString(R.string.dsh_bootstrap_verify_failed_prefix, report.detail))
                 return
             }
             emit(Progress.Done)
@@ -304,8 +344,12 @@ object DshBootstrap {
     suspend fun verify(context: Context): VerifyReport = verifySync(context)
 
     private fun verifySync(context: Context): VerifyReport {
+        val ui = DshUiText.contextOrNull() ?: context
         val pre = ProotCommand.preflight(context, DshPaths.ROOTFS_DIR)
-        if (!pre.ok) return VerifyReport(false, pre.reason ?: "预检失败")
+        // 预检失败时 reason 必非空（[ProotCommand.Preflight] 的约定），这里的兜底串只是
+        // "万一"——真到了那一步说明 ProotCommand 自己也出问题了，所以它不配文案，用一句
+        // 不带语言的机器可读串，免得把一条**本该永不出现**的兜底也塞进三套翻译里。
+        if (!pre.ok) return VerifyReport(false, pre.reason ?: "preflight failed")
 
         // 自检脚本：随底座一起解压的 scripts 目录里放一个最小探针（不存在则现写）
         val probe = File(DshPaths.SCRIPTS_DIR, "probe.sh")
@@ -323,10 +367,14 @@ object DshBootstrap {
             ) { lines += it }
             when {
                 code == 0 && lines.any { it.contains("dsh-probe-ok") } ->
-                    VerifyReport(true, "proot + rootfs 正常")
+                    VerifyReport(true, ui.getString(R.string.dsh_bootstrap_verify_ok))
                 else -> VerifyReport(
                     false,
-                    "proot 执行失败（退出码 $code）：${lines.takeLast(3).joinToString(" / ").take(300)}"
+                    ui.getString(
+                        R.string.dsh_bootstrap_verify_proot_failed,
+                        code,
+                        lines.takeLast(3).joinToString(" / ").take(300)
+                    )
                 )
             }
         } catch (e: Exception) {
@@ -352,8 +400,10 @@ object DshBootstrap {
 
         if (!looksUsable(tmpDir)) {
             tmpDir.deleteRecursively()
+            // 异常消息的去向是 catch → fail() → 准备页/首页任务区（用户可见），所以必须能本地化。
+            // 这是首启最容易撞上的一条：rootfs.tar.xz 一旦多套了一层目录，用户看到的就是它。
             throw IllegalStateException(
-                "rootfs 内容异常：找不到 bin/sh 或 usr/bin/env（请确认打包时没有多套一层目录）"
+                (DshUiText.contextOrNull() ?: context).getString(R.string.dsh_bootstrap_rootfs_layout_bad)
             )
         }
 

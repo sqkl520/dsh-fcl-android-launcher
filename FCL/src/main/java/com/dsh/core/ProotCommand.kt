@@ -1,6 +1,7 @@
 package com.dsh.core
 
 import android.content.Context
+import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fclauncher.utils.FCLPath
 import java.io.File
 
@@ -63,45 +64,50 @@ object ProotCommand {
     /**
      * 启动前预检：proot 二进制可执行 + rootfs 可引导 + 脚本存在。
      * @param scriptRootfsPath 要执行的 rootfs 内脚本路径（可空表示只查底座）
+     *
+     * ## 文案为什么要现取一份 Context
+     * [reason] 的去向是启动失败对话框与实例卡片的错误行 —— 是**给人看的话**，不是日志。
+     * 但调用方传进来的 Context 常常是 `applicationContext`（见 [DshServices] 的单例口径），
+     * 而它的资源语言只跟随系统、**不认启动器设置里选的语言**。所以这里和 [DshBootstrap] 用同一招：
+     * 取当前 Activity 的 Context 并套上设置里的语言，拿不到才退回传进来的那个。
      */
     @JvmStatic
     fun preflight(context: Context, rootfsDir: String, scriptRootfsPath: String? = null): Preflight {
+        val ctx = DshUiText.context(context)
         val proot = DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR)
         when {
             !proot.exists() ->
-                return Preflight(
-                    false,
-                    "缺少 proot 可执行文件（期望 jniLibs 里的 libproot.so 或 assets/dsh/proot/libproot.so）"
-                )
+                return Preflight(false, ctx.getString(R.string.dsh_preflight_no_proot))
             !proot.canExecute() ->
-                return Preflight(
-                    false,
-                    "proot 二进制没有执行权限（assets 方案在 Android 10+ 常因 W^X 限制无法执行，" +
-                        "请改用 jniLibs 打包）"
-                )
+                return Preflight(false, ctx.getString(R.string.dsh_preflight_proot_not_executable))
         }
         if (!File(rootfsDir).isDirectory) {
-            return Preflight(false, "rootfs 未就绪（未解压或解压不完整）")
+            return Preflight(false, ctx.getString(R.string.dsh_preflight_rootfs_not_ready))
         }
         // ★ 走 proot 之前先把宿主 DNS 同步进 guest（Android 没有 /etc/resolv.conf，
         //   不写的话 guest 内 getaddrinfo 必失败 → npm/curl 全部 EAI_AGAIN）。
         //   放在这里是因为所有 proot 调用（安装 / 启动 / 自检）都先过 preflight。
         DshDns.sync(context, rootfsDir)
         if (!DshPaths.rootfsLooksUsable(File(rootfsDir))) {
-            return Preflight(
-                false,
-                "rootfs 内容不完整（找不到 /bin/sh 或 /usr/bin/env）——" +
-                    "常见原因：rootfs.tar.xz 里带了顶层目录，解压后多套了一层"
-            )
+            return Preflight(false, ctx.getString(R.string.dsh_preflight_rootfs_incomplete))
         }
         if (scriptRootfsPath != null) {
             val rel = scriptRootfsPath.removePrefix("$GUEST_ROOT/scripts/")
             val host = File(DshPaths.SCRIPTS_DIR, rel)
-            if (!host.isFile) return Preflight(false, "缺少脚本 $host（运行时底座未解压）")
+            if (!host.isFile) {
+                return Preflight(false, ctx.getString(R.string.dsh_preflight_missing_script, host.path))
+            }
         }
         return Preflight(true)
     }
 
+    /**
+     * 预检文案用的 Context（当前 Activity 优先，见 [preflight] 的说明）。
+     *
+     * `setLanguage()` 在这里是**读**偏好 + `createConfigurationContext`，没有写盘：
+     * 它只在生成 locale 相关的资源表，不会与 UI 线程正在读的同一张表较劲，
+     * 在 IO 线程上调用是安全的。
+     */
     /**
      * 构造一次 proot 调用。
      *
