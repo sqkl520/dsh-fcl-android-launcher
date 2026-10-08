@@ -245,6 +245,9 @@
     <string name="dsh_task_starting">正在启动…</string>
     <string name="dsh_task_stopping">正在停止…</string>
     <string name="dsh_task_deleting">正在删除…</string>
+    <string name="dsh_tasks_header_finished">已完成</string>
+    <string name="dsh_tasks_clear_finished">清空已完成</string>
+    <string name="dsh_task_cancelled_suffix">%1$s（已取消）</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">将重新解压运行环境（不会影响实例与 API Key）。</string>
     <string name="dsh_setup_steps_header">准备项</string>
