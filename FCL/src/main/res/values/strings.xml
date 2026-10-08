@@ -59,10 +59,20 @@
         <string name="dsh_download_warning">Showing cached data (%1$s)</string>
         <string name="dsh_install_cancelled">Install cancelled</string>
         <string name="dsh_install_done">Installed %1$s</string>
+        <!-- 安装失败原因：只要能从 npm 的输出里认出是哪一类，就说清楚"是什么 + 怎么办"。
+             认不出时由代码原样回放 npm 的尾部摘要，最后才是 dsh_install_failed_generic -->
+        <string name="dsh_install_error_dns">DNS lookup failed: this network cannot resolve domain names, so npm could not reach the registry. Switch networks (Wi-Fi / mobile data) or retry later.</string>
+        <string name="dsh_install_error_network">Network error while downloading packages. Check the connection and retry; the npm error code is in the log.</string>
+        <!-- %1$s = npm 报的错误码（如 EAI_AGAIN），认不出网络类时至少把这个码摆出来 -->
+        <string name="dsh_install_error_npm">npm error %1$s</string>
+        <string name="dsh_install_error_timeout">Network timeout or dropped connection: the download was interrupted. Check the connection and retry — packages already downloaded are cached.</string>
+        <string name="dsh_install_error_unreachable">Network unreachable: there is no working connection right now (or a proxy/VPN is blocking it). Reconnect and retry.</string>
         <string name="dsh_install_failed">Install failed: %1$s</string>
         <string name="dsh_install_failed_generic">Install failed (see logs for details)</string>
         <string name="dsh_install_timeout">Install timed out (%1$d min). Network may be slow or npm hung; check the log and retry.</string>
         <string name="dsh_install_incomplete">Install finished but the dsh package is incomplete; please reinstall.</string>
+        <!-- 起 npm 之前的空间检查：%1$s = 本次需要多少，%2$s = 当前剩多少（都是 DshPaths.formatSize 的结果） -->
+        <string name="dsh_install_no_space">Not enough space: this install needs about %1$s, but only %2$s is free. Free up space and retry.</string>
         <string name="dsh_install_started">Installing %1$s…</string>
         <string name="dsh_install_started_message">Installing %1$s in the background. You can watch progress on the instance list.</string>
         <string name="dsh_install_started_title">Installation started</string>
@@ -103,6 +113,18 @@
         <string name="dsh_reason_missing_entry">The dsh entry file is missing; the installation looks incomplete. Reinstall it.</string>
         <string name="dsh_reason_not_installed">dsh is not installed in this instance. Install or reinstall it first.</string>
         <string name="dsh_reason_start_timeout">dsh did not become ready within %1$d s. Check the logs (network/port).</string>
+        <string name="dsh_reason_user_stop">Stopped by user</string>
+        <string name="dsh_reason_deleted">Instance deleted</string>
+        <string name="dsh_reason_from_notification">Stopped from the notification</string>
+        <string name="dsh_reason_service_recycled">Stopped: the background service was reclaimed by the system</string>
+        <string name="dsh_start_port_in_use">Port in use (EADDRINUSE). The next start will pick a free port automatically.</string>
+        <string name="dsh_task_deleted">Deleted</string>
+        <string name="dsh_task_deleted_with_leftover">Deleted (some files remain)</string>
+        <string name="dsh_task_port">port %1$s</string>
+        <string name="dsh_download_fetch_failed">Failed to load the version list</string>
+        <string name="dsh_notify_channel_desc">Keeps the dsh web process alive</string>
+        <string name="dsh_notify_text_port">%1$s · port %2$s · %3$s</string>
+        <string name="dsh_notify_text">%1$s · %2$s</string>
         <string name="dsh_reinstall_pick_version">No version has been installed successfully yet; pick one on the download page.</string>
         <string name="dsh_runtime_exited">dsh process exited (code %1$d)</string>
         <string name="dsh_saved">Saved</string>
@@ -117,6 +139,15 @@
         <string name="dsh_settings_version">Installed dsh: %1$s</string>
         <string name="dsh_size_calculating">Calculating size…</string>
         <string name="dsh_stage_prepare">Preparing Node runtime and installing dsh…</string>
+        <!-- ▼ 安装阶段：脚本输出的是**稳定 key**（`[setup] STAGE=<key> [args]`），
+             由 DshInstaller.stageText() 翻成当前语言。key 与脚本一一对应，加新阶段时
+             两边要一起改；启动器不认识的 key 会原样显示（见那个函数的兜底规则）。 -->
+        <string name="dsh_stage_node_ready">Node %1$s is ready</string>
+        <string name="dsh_stage_adding_npm">Adding npm</string>
+        <string name="dsh_stage_installing_node">Installing Node %1$s (first run is slow)</string>
+        <string name="dsh_stage_using_preinstalled_dsh">Using the bundled dsh %1$s (skipping download)</string>
+        <string name="dsh_stage_installing">Downloading and installing %1$s</string>
+        <string name="dsh_stage_verifying_install">Verifying the installation</string>
         <string name="dsh_start_failed">Failed to start instance</string>
         <string name="dsh_start_not_ready">Runtime or instance is not ready</string>
         <string name="dsh_state_broken">Broken</string>
@@ -272,18 +303,48 @@ Version %1$s</string>
     <string name="dsh_settings_desc_verify">Run the minimal chain inside proot (9 checks)</string>
     <string name="dsh_settings_desc_reinstall">Re-run the install script (keeps sessions and key)</string>
     <string name="dsh_settings_desc_delete">Delete the instance directory and key; cannot be undone</string>
+    <!-- 语言选项标签。一律 `translatable="false"` 且用**该语言自己的写法**：
+         语言名是"你正在选什么"，不该被当前界面语言改写（否则英文界面下"繁體中文"会变成
+         "Traditional Chinese"，用户反而认不出自己找的那一项）。 -->
     <string name="dsh_lang_system" translatable="false">Use system language</string>
     <string name="dsh_lang_english" translatable="false">English</string>
     <string name="dsh_lang_simplified_chinese" translatable="false">简体中文</string>
-    <string name="dsh_lang_russian" translatable="false">Русский язык</string>
-    <string name="dsh_lang_brazilian_portuguese" translatable="false">Português brasileiro</string>
-    <string name="dsh_lang_persian" translatable="false">فارسی</string>
-    <string name="dsh_lang_ukrainian" translatable="false">Українська Мова</string>
-    <string name="dsh_lang_german" translatable="false">Deutsch</string>
-    <string name="dsh_lang_traditional_chinese_hk" translatable="false">繁體中文（香港）</string>
-    <string name="dsh_lang_japanese" translatable="false">日本語</string>
-    <string name="dsh_lang_turkish" translatable="false">Türkçe</string>
-    <string name="dsh_lang_traditional_chinese_tw" translatable="false">繁體中文（台灣）</string>
+    <string name="dsh_lang_traditional_chinese" translatable="false">繁體中文</string>
     <string name="dsh_setting_custom_name">Custom launcher name</string>
     <string name="dsh_setting_custom_name_desc">Shown in About; ${launcher_version} is replaced by the version</string>
+
+    <!-- ===== 运行时底座：预检 / 解压 / 自检（DshBootstrap、ProotCommand）=====
+         这组文案**只出现在界面上**：准备页进度与失败提示、首页任务区、启动失败对话框、
+         实例卡片的错误行、设置页与实例详情页的「运行时自检」对话框。
+         底座自己的日志行仍是中文（DshLogBus.append）—— 日志是排障材料，
+         要能与上游输出、与历史日志逐字对照，翻译它只会把人引错。
+         ⚠️ 带 %N$ 的条目全部登记在 DshResourceFormatTest.callSites；改占位符必须同步改那里。 -->
+    <string name="dsh_bootstrap_missing_scripts">Startup scripts are missing</string>
+    <string name="dsh_bootstrap_missing_rootfs">The Linux rootfs is not ready</string>
+    <string name="dsh_bootstrap_missing_proot">The proot executable is missing (jniLibs)</string>
+    <string name="dsh_bootstrap_proot_not_executable">proot does not have execute permission (bad jniLibs packaging)</string>
+    <string name="dsh_bootstrap_missing_proot_loader">The proot loader is missing (jniLibs)</string>
+    <string name="dsh_bootstrap_outdated">The runtime needs to be updated</string>
+    <string name="dsh_bootstrap_extract_scripts">Extracting startup scripts</string>
+    <string name="dsh_bootstrap_proot_ready">proot runtime ready (jniLibs)</string>
+    <string name="dsh_bootstrap_extract_rootfs">Extracting the Linux rootfs (large, this takes a while)</string>
+    <string name="dsh_bootstrap_verify_check">Running the runtime self-check</string>
+    <string name="dsh_bootstrap_busy">Another extraction is already running (%1$s)</string>
+    <string name="dsh_bootstrap_data_dir_failed">Could not create the data directory: %1$s (out of space or permission denied)</string>
+    <string name="dsh_bootstrap_missing_artifacts">Missing %1$s. These files should ship inside the APK under jniLibs/arm64-v8a — this is a packaging problem, so check that the build includes those native libraries.</string>
+    <string name="dsh_bootstrap_artifact_no_exec">%1$s (no execute permission)</string>
+    <string name="dsh_bootstrap_no_space_extract">Not enough space: extracting the rootfs needs about %1$s, but only %2$s is free.</string>
+    <string name="dsh_bootstrap_no_space_replace">Not enough space: upgrading the rootfs needs about %1$s — the old and new copies both exist while it runs — but only %2$s is free.</string>
+    <string name="dsh_bootstrap_verify_failed_prefix">Self-check failed: %1$s</string>
+    <string name="dsh_bootstrap_verify_ok">Everything looks good: proot and the rootfs are working</string>
+    <string name="dsh_bootstrap_verify_proot_failed">proot exited with code %1$d: %2$s</string>
+    <string name="dsh_bootstrap_rootfs_layout_bad">The rootfs looks wrong: no bin/sh or usr/bin/env found. Check that the archive does not have an extra top-level directory.</string>
+    <string name="dsh_preflight_no_proot">The proot executable is missing (expected libproot.so in jniLibs or assets/dsh/proot/libproot.so)</string>
+    <string name="dsh_preflight_proot_not_executable">proot does not have execute permission. On Android 10+ the assets approach usually cannot exec it because of W^X, so ship it in jniLibs instead.</string>
+    <string name="dsh_preflight_rootfs_not_ready">The rootfs is not ready (never extracted, or the extraction was incomplete)</string>
+    <string name="dsh_preflight_rootfs_incomplete">The rootfs contents are incomplete (no /bin/sh or /usr/bin/env). This usually means rootfs.tar.xz has a top-level directory and extracted one level too deep.</string>
+    <string name="dsh_preflight_missing_script">Script %1$s is missing (the runtime has not been extracted)</string>
+    <!-- 列表分隔符：中文用顿号、英文用逗号。走在资源里而不是写死在代码里 —— 顿号是中文的
+         排版习惯，英文标点混进中文句子一样是"没做完的本地化"。 -->
+    <string name="dsh_list_separator">", "</string>
 </resources>

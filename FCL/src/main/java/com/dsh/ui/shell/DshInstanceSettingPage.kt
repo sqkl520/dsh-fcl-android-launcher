@@ -377,7 +377,7 @@ class DshInstanceSettingPage(
                 // 启动中/停止中不接受第二次点击：状态行已经把这件事说清楚了，重复下发只会
                 // 让运行时收到自相矛盾的指令
                 if (isBusy()) return
-                if (isRunning()) DshRuntime.stop("用户停止") else startInstance(i)
+                if (isRunning()) DshRuntime.stop() else startInstance(i)
             }
             DshInstanceSettingAdapter.Tag.VERIFY -> verifyRuntime()
             DshInstanceSettingAdapter.Tag.REINSTALL -> reinstall(i)

@@ -201,7 +201,7 @@ class DshMainActivity : FCLActivity(), DshShellHost {
             val inst = panelInstance ?: return@setOnClickListener
             val running = DshRuntime.runningInstanceId() == inst.id
             if (running) {
-                DshRuntime.stop("用户停止")
+                DshRuntime.stop()
             } else {
                 DshLauncher.startInstance(
                     activity = this,
