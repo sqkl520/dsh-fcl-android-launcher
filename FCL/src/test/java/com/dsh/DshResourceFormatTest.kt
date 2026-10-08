@@ -80,7 +80,10 @@ class DshResourceFormatTest {
 
         // 实例详情页 / 日志范围标示：%1$s 都是实例名（用户起的名字，什么都可能有）
         "dsh_logs_scope_instance" to arrayOf<Any>("dsh 0.1.5"),
-        "dsh_instance_detail_title" to arrayOf<Any>("dsh 0.1.5")
+        "dsh_instance_detail_title" to arrayOf<Any>("dsh 0.1.5"),
+
+        // DshInstancesUI（任务区）：%1$s = 任务标题（"实例名 · 阶段"，实例名是用户起的）
+        "dsh_task_cancelled_suffix" to arrayOf<Any>("dsh 0.1.5 · 安装中…")
     )
 
     @Test
