@@ -2,7 +2,7 @@
 <!--
   dsh 实例列表 —— 现在是「实例」tab 的**子页**内容（不是那一页本身）。
   「实例」tab 本体是个多页容器（只为拿它的临时页栈来承载实例详情），本布局是它唯一的子页：
-  **进行中任务区** + 实例列表 + 空态提示。
+  **任务区（进行中的 + 已结束的历史）** + 实例列表 + 空态提示。
 
   FCL 范式（见 docs/design/app-shell.md §2.5）：FCL 的页面不在页内放标题、也不放页面级动作行 ——
   页名由外壳底部的 FCLDynamicIsland 显示，页面切换等入口都在左侧菜单里，页内保持干净。
@@ -14,13 +14,19 @@
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:paddingStart="10dp"
     android:paddingTop="10dp"
     android:paddingEnd="10dp">
 
-    <!-- ===== 进行中任务区 =====
+    <!-- ===== 任务区 =====
+         进行中的任务在上、已结束的（完成/失败/取消）在下，合起来画在这一个列表里。
+         终态行是**只增不减**的历史，所以头部右端给一个「清空已完成」（见代码里的点击处理）——
+         它是次要动作，不占单独一行，沿日志页那排工具图标的做法（FCLImageButton + src +
+         auto_tint + anim_scale_large）：图标按钮自带 Ripple 与按压反馈，着色走 getDrawable()。
+
          task_area 是 FCLConstraintLayout（不是 androidx 的）：app:auto_tint 只有它会读，
          挂错控件类会静默失效，任务区这块"白底"在暗色主题下就永远是白的。 -->
     <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
@@ -38,23 +44,41 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
+        <!-- 标题文字由代码按数据切换（有进行中的 → "进行中"，只剩历史 → "已完成"），
+             所以这里不写 android:text。 -->
         <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/task_header"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:text="@string/dsh_tasks_header"
             android:textSize="13sp"
             android:textStyle="bold"
             app:auto_text_tint="true"
-            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/task_clear_finished"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+            app:layout_constraintTop_toTopOf="parent"
+            tools:text="@string/dsh_tasks_header" />
+
+        <!-- 「清空已完成」：无历史时由代码置 GONE（它是任务区里唯一的次要动作，
+             放着不管会让人以为"点了会发生什么"，而其实列表里一条历史都没有） -->
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
+            android:id="@+id/task_clear_finished"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/dsh_tasks_clear_finished"
+            android:src="@drawable/ic_baseline_delete_24"
+            android:stateListAnimator="@xml/anim_scale_large"
+            android:visibility="gone"
+            app:auto_tint="true"
+            app:layout_constraintBottom_toBottomOf="@id/task_header"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="@id/task_header"
+            tools:visibility="visible" />
 
         <!-- 任务区列表 —— 与设置页 / 关于页那几处一样是 RecyclerView + SpacingItemDecoration：
              行的间距交给装饰器（三处共用同一套间距规则），行的结构由 view_dsh_task_row.xml 提供。
-             任务条数通常只有 0~3，换 RecyclerView 不是为复用，而是**不再用裸 LinearLayout
-             手工 addView** —— 那样每次任务状态变化都要 removeAllViews 重建整片行，
-             行的间距也只能手写在行内的 margin 里，与别处两套规则。
+             任务条数通常只有 0~3 条进行中 + 若干条历史，换 RecyclerView 不是为复用，而是
+             **不再用裸 LinearLayout 手工 addView** —— 那样每次任务状态变化都要 removeAllViews
+             重建整片行，行的间距也只能手写在行内的 margin 里，与别处两套规则。
              高度 wrap_content：任务区整体高度仍随条数走（与换之前一致）。 -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/task_list"

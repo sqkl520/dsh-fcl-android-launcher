@@ -10,6 +10,10 @@
     FCLImageView 的 use_theme_color 只给 `getBackground()` 上色（android:src 是 image drawable，
     根本不参与着色），走 src 的图标不但没有主题色，还会保留 vector 自带的静态 tint（灰）。
 
+  同一行的外观还随**任务状态**变（终态：进度条收起、标题/明细换色、动作按钮消失），
+  那些全在 TaskAdapter 的绑定里按 `DshTask.state` 算 —— XML 里只保留"什么状态都一样"的部分，
+  否则同一件事会有两份互相打架的默认值。
+
   行的上下留白只给 4dp：行间距交给任务区的 SpacingItemDecoration（与实例列表、版本列表一致），
   两边都加会得到"按两遍"的间距。
 -->
@@ -61,6 +65,11 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/task_title" />
 
+    <!-- 明细行：进行中时是"正在解压的文件名"这类一闪而过的内容（单行 + 中间省略即可），
+         失败时则是**结论本身**（"安装失败：xxx"）—— 单行会把最关键的那半句吃掉。
+         所以这里用 maxLines 而不是 singleLine：singleLine 会把 maxLines 钉死在 1，
+         代码里再想按状态放宽到两行就没辙了（setSingleLine 同时还会换掉 transformation method）。
+         具体的行数与省略方式由 TaskAdapter 按 state 设。 -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/task_detail"
         android:layout_width="0dp"
@@ -69,7 +78,7 @@
         android:alpha="0.7"
         android:ellipsize="middle"
         android:fontFamily="monospace"
-        android:singleLine="true"
+        android:maxLines="1"
         android:textSize="10sp"
         android:visibility="gone"
         app:auto_text_tint="true"

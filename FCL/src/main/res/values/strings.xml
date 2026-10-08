@@ -249,6 +249,9 @@ Version %1$s</string>
     <string name="dsh_task_starting">Starting…</string>
     <string name="dsh_task_stopping">Stopping…</string>
     <string name="dsh_task_deleting">Deleting…</string>
+    <string name="dsh_tasks_header_finished">Finished</string>
+    <string name="dsh_tasks_clear_finished">Clear finished</string>
+    <string name="dsh_task_cancelled_suffix">%1$s (cancelled)</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">This will re-extract the runtime on next start. Instances and API keys are not affected.</string>
     <string name="dsh_setup_steps_header">Preparation steps</string>
