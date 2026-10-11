@@ -4,9 +4,7 @@
 
 **DeepSeek Harness FCL Android Launcher**
 
-*dshAndroidLauncher (FCL-based)*
-
-在**未 root** 的安卓手机上运行 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai) —— 基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) 改造的启动器
+在**未 root** 的安卓手机上运行 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) —— 基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) 改造的 dsh 启动器
 
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
@@ -14,19 +12,27 @@
 
 </div>
 
----
+> ⚠️ **这是一个用 AI vibe coding 做的个人项目（早期开发中），有任何问题欢迎提 Issues，如果喜欢就点个 Star 吧！**
 
-## 这是什么
+## 功能特性
 
-一个安卓 App，让你**不用 root** 就能在手机上跑 dsh（DeepSeek Harness —— 对话 / 编码 agent）。
-界面沿用 FCL 的视觉风格与 GUI 框架（fcllibrary + ThemeEngine），底层用 **proot** 兜一个 Linux 环境来跑 Node.js 版 dsh。
+- **多实例管理** —— 多个 dsh 实例独立安装 / 启动 / 停止 / 删除，互不干扰
+- **版本管理** —— 从 npm registry 拉取版本列表，一键安装指定版本的 dsh
+- **一键启动** —— 自动捕获 token URL，应用内直接打开 dsh 界面
+- **任务区** —— 安装 / 启动 / 停止的进行态与终态（完成 / 失败 / 已取消）都看得见
+- **按实例分流的日志** —— 每个实例独立日志 + 应用全局日志，均落盘可查
+- **三页外壳** —— 实例 / 版本 / 设置，FCL 原版视觉风格，亮暗主题跟随
+- **中英繁三语** —— 简体中文 / 繁體中文 / English 可切换
+- **无 root 运行** —— proot 兜住 Linux 环境，targetSdk 34 不降级
+- **外部浏览器逃生** —— 设备 WebView 过旧时，一键用系统浏览器（Edge / Chrome）打开 dsh
 
-> **项目状态：0.1.5-SNAPSHOT（早期开发中）**
-> 外壳（界面骨架 / 五页 / 横屏右面板）已完成；运行时底座（proot + rootfs + PROOT_LOADER）已集成，
-> 0.1.1 起能出完整 APK（含 rootfs）；**端到端尚未在真机跑通**（真机验证进行中）。
-> 版本号规则：待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+## 安装
 
----
+1. 去 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 下载最新版本的 APK（`dsh-fcl-android-launcher-*-arm64.apk`；文件名带 `-fixN` 的是当前验证包，装它）
+2. 在 arm64 安卓手机上安装（未 root 也行）；首次安装请预留约 **1.4GB** 空闲空间
+3. 首次启动等待运行环境解压完成（几分钟，期间保持应用在前台）
+4. 去「版本」页安装一个 dsh → 回「实例」页启动 → 在 dsh 界面里填 API Key，开聊
+5. 老设备若提示 WebView 过旧：点「用外部浏览器打开」，或去应用商店升级 Android System WebView
 
 ## 怎么工作的
 
@@ -39,17 +45,18 @@ Android App (本仓库)
                        └─ 通过 HTTPS 调 DeepSeek 云端 API
 ```
 
+界面沿用 FCL 的视觉风格与 GUI 框架（fcllibrary + ThemeEngine）。
+
 ### 关键设计：W^X 绕过（PROOT_LOADER）
 
-Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应用数据目录（`filesDir`）里的文件。
+Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应用数据目录里的文件，
 而 proot 需要在数据目录里执行 rootfs 的 `/bin/sh`、`node`。
 
-**解法**：proot 执行 rootfs 程序时，走的是 proot 自带的 **loader**（`PROOT_LOADER` 机制）。
-把这个 loader 放进 APK 的 `jniLibs`（安装后位于 `nativeLibraryDir`，SELinux 允许执行），
-execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无需把 targetSdk 降到 28**。
+**解法**：proot 执行 rootfs 程序时走自带的 **loader**（`PROOT_LOADER` 机制），
+把 loader 放进 APK 的 `jniLibs`（安装后位于 `nativeLibraryDir`，SELinux 允许执行），
+从而**无需把 targetSdk 降到 28**。详见 [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md)。
 
 > 该机制经同类项目 [`oonid/pr`](https://github.com/oonid/pr) 在真机（Android 16 / SDK 36）验证通过。
-> 详见 [`docs/design/wx-exec-proot-loader.md`](docs/design/wx-exec-proot-loader.md)。
 
 ---
 
@@ -57,25 +64,26 @@ execve 的就是 loader 而非数据目录文件 —— 从而绕过 W^X，**无
 
 | 模块 | 状态 |
 |---|---|
-| FCL 改造：移除全部 Minecraft 代码与资源 | ✅ 完成（约 −226k 行，APK 337M → 15M） |
-| 应用外壳：左侧菜单 + ViewPager2 内容区 + 右侧面板 + 动态岛（横屏） | ✅ 完成 |
-| 界面：实例 / 管理 / 下载 / 日志 / 设置 五页 | ✅ 完成 |
-| dsh 版本管理：npm registry 版本列表 + 安装 | ✅ 完成（逻辑） |
-| 运行时底座：proot + rootfs + PROOT_LOADER 集成 | ✅ 已集成（0.1.1 起 APK 含完整 rootfs；待真机验证） |
-| 真机端到端验证 | ⬜ 待做 |
+| FCL 改造：移除全部 Minecraft 代码与资源 | ✅ 完成（约 −226k 行） |
+| 应用外壳：三页（实例 / 版本 / 设置）+ 实例详情 + 右面板 + 动态岛 | ✅ 完成 |
+| dsh 版本管理：npm registry 版本列表 + 安装 | ✅ 完成 |
+| 运行时底座：proot + rootfs + PROOT_LOADER 集成 | ✅ 已集成 |
+| 真机端到端：装 → 启 → 停 → 再启 | ✅ 已点亮（0.1.6；WebView 对话受设备内核版本影响，过旧设备用外部浏览器） |
+| 第三轮反馈修复（fix1） | ✅ 已发预发布验证中 |
+| `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
 ---
 
 ## 构建
 
-**环境要求**：JDK 17、Android SDK 35、NDK 27（仅集成 proot 引擎时需要）；工具链接线见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) §1。
+**环境要求**：JDK 17、Android SDK 35、NDK 27；工具链接线见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) §1。
 
 ```powershell
 # 电脑（Windows，当前主力环境）直接用 Gradle：
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:compileDebugKotlin :FCL:compileDebugJavaWithJavac `
   :FCL:processDebugResources :FCL:processDebugMainManifest
 .\gradlew.bat --no-daemon :FCL:testFordebugUnitTest           # 单测
-.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包 → dsh-fcl-android-launcher-0.1.5-SNAPSHOT-arm64.apk
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包 → dsh-fcl-android-launcher-0.1.6-SNAPSHOT-arm64.apk
 ```
 
 手机（arm64 Linux 沙箱）上用同目录的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh`
@@ -120,5 +128,16 @@ GPL-2.0-or-later）。本项目已是 GPL 系，不构成新障碍。
 ## 致谢
 
 - [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) —— 界面框架与改造起点
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) —— 本启动器承载的 agent 本体
 - [oonid/pr](https://github.com/oonid/pr) —— targetSdk 35+ 下的 proot 适配方案（PROOT_LOADER / seccomp / CLONE 剥离）
 - [proot](https://github.com/proot-me/proot) / [Termux](https://github.com/termux) —— 无 root 的 Linux 环境
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=sqkl520%2Fdsh-fcl-android-launcher&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sqkl520%2Fdsh-fcl-android-launcher&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sqkl520%2Fdsh-fcl-android-launcher&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sqkl520%2Fdsh-fcl-android-launcher&type=date&legend=top-left" />
+ </picture>
+</a>

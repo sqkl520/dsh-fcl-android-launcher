@@ -51,7 +51,8 @@ cd <仓库根>
 
 
 命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
-`dsh-fcl-android-launcher-0.1.3-SNAPSHOT-arm64.apk`）。
+`dsh-fcl-android-launcher-0.1.6-SNAPSHOT-arm64.apk`；带 `-fixN` 后缀的是同一版本下的修复验证包，
+如 `…-0.1.6-SNAPSHOT-fix1-arm64.apk`）。
 
 `SHA256SUMS` 里只写**文件名**（两处同名），因此 `output/` 与 `apk-archive/<version>/`
 都能直接 `sha256sum -c` 校验。
@@ -60,7 +61,8 @@ cd <仓库根>
 > 早期打包曾把 APK 放那里，后来统一改到 `output/`。
 
 第二轮加固（2026-09-22）后，assets 里的 `version` 与 `scripts/version` 已提到 **2**
-（子项版本变化会触发增量重解压）。
+（子项版本变化会触发增量重解压）。**之后脚本又迭代多次，当前 `scripts/version` = 7**；
+rootfs 的 `version` 已改为版本串形式（`debian-…-slim1`，见 `ROOTFS.md`），不再是整数。
 
 ## 布局（`FCL/src/main/assets/dsh/` 目录内）
 
@@ -69,13 +71,12 @@ dsh/
   version              底座总版本（说明用；实际按各子项 version 增量解压）
   proot/
     version            proot 子项版本
-    libproot.so        [已就位] proot 主程序 (arm64，来自 oonid/pr)
-    libproot_loader.so [已就位] proot loader (arm64，来自 oonid/pr)
+    PLACEHOLDER.txt    [占位] proot 实际走 jniLibs 下发（见下文方案 A），assets 里不放二进制
   rootfs/
-    version            rootfs 子项版本
-    rootfs.tar.xz      [已就位·不入 Git] Debian 12 bookworm arm64 + Node 22 + 预装 dsh（见 ROOTFS.md）
+    version            rootfs 子项版本（版本串形式，如 `debian-…-slim1`）
+    rootfs.tar.xz      [已就位·不入 Git] Debian 12 bookworm arm64 + Node 22 + 预装 dsh（瘦身后 142MB，见 ROOTFS.md）
   scripts/
-    version
+    version            （当前 7）
     setup-node-dsh.sh  已放入（打印 STAGE=... 进度；装完硬校验）
     start-dsh.sh       已放入（打印 READY url=/FAILED reason=...；信号转发；支持 PORT=0）
     probe.sh           已放入（自检探针，DshBootstrap.verify 调用）
@@ -89,14 +90,15 @@ dsh/
 ### 1) proot 二进制（二选一，**强烈推荐方案 A**）
 
 **方案 A（推荐）：作为 jniLibs 打包**
-- 把 arm64 的 proot、proot loader 分别命名为 `libproot.so`、`libproot_loader.so`
-  放到 `FCL/src/main/jniLibs/arm64-v8a/`。
+- 把 arm64 的 proot、proot loader 分别命名为 `libproot.so`、`libproot-loader.so`
+  （**连字符**，与 assets 旧写法的下划线 `_loader` 不同；代码的回退路径也已统一为连字符）
+  放到 `FCL/src/main/jniLibs/arm64-v8a/`（另有 `libbusybox.so` 提供 POSIX 工具）。
 - 系统安装时会自动解压到 `nativeLibraryDir` 并**自带执行位**，最稳。
 - `DshPaths.resolveProotBin/Loader` 会优先用这里的；`ProotCommand.preflight` 也会因此通过。
 - 此时 `dsh/proot/` 下的 so 可不放（bootstrap 会跳过，回退逻辑仍在）。
 
 **方案 B：作为 assets 打包**
-- 把二进制放到 assets 目录 `FCL/src/main/assets/dsh/proot/libproot.so`、`.../libproot_loader.so`。
+- 把二进制放到 assets 目录 `FCL/src/main/assets/dsh/proot/libproot.so`、`.../libproot-loader.so`。
 - `DshBootstrap` 解压后会 `setExecutable(true)`。但注意：**targetSdk ≥ 29 起，App 私有数据目录里的
   可执行文件普遍受 W^X/SELinux 限制，多数新机型上会 exec 失败**。
 - 这种情况下启动器**不再静默失败**：预检会直接提示"proot 二进制没有执行权限，请改用 jniLibs 打包"，
@@ -107,8 +109,8 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 ### 2) rootfs.tar.xz
 
 > **现状**：已经做好了 —— **Debian 12 bookworm arm64 + 官方 Node v22.23.3 + 预装 `@deepseek-ai/dsh`**，
-> 就在 `FCL/src/main/assets/dsh/rootfs/`（300MB，不入 Git）。丢了怎么补见 `ROOTFS.md`。
-> 下面是从零重建时的选型说明。
+> 就在 `FCL/src/main/assets/dsh/rootfs/`（瘦身后 **142MB**，不入 Git；sha256 `216cd9ef…`）。
+> 丢了怎么补见 `ROOTFS.md`。下面是从零重建时的选型说明。
 
 - arm64 的 **Debian** rootfs（glibc；dsh 的原生模块只发 glibc/musl，Android 的 bionic 跑不了 —— 见 `PLAN.md §1`）。
 - **强烈建议在打包前把 Node 22/24 预装进 rootfs**，省去首启联网装 Node。
@@ -123,8 +125,8 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 
 ## 首启之后会发生什么（排查用）
 
-1. `DshBootstrap.install()`：检查磁盘空间（< 1.5GB 直接提示）→ 按 `version` 逐项解压
-   （scripts → proot → rootfs）→ rootfs 解到 `rootfs.tmp` 校验后原子替换。
+1. `DshBootstrap.install()`：检查磁盘空间（首装约需 1.4GB / 升级约需 862MB，不够直接提示）
+   → 按 `version` 逐项解压（scripts → proot → rootfs）→ rootfs 解到 `rootfs.tmp` 校验后原子替换。
 2. **自检**：在 proot 里执行 `scripts/probe.sh`，必须打印 `dsh-probe-ok`；
    否则报"自检未通过：<原因>"（这一步会在装 dsh 之前暴露 proot 缺失/权限/loader/rootfs 布局问题）。
 3. 安装 dsh：`setup-node-dsh.sh` 输出 `[setup] STAGE=...` 供界面显示进度；
@@ -133,9 +135,10 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 
 ## 密钥与令牌（安全约定）
 
-- **API key 不再落盘**：启动器通过**子进程环境变量**把 `DEEPSEEK_API_KEY` 传给 proot，
-  既不进命令行参数（`ps` 看不到），也不会产生 `credentials.env`。
-  脚本里的 `CRED_FILE` 分支仅为 Termux/手工调试保留。
+- **API key 不再落盘、不再经启动器**：0.1.5 起 Key 完全由 dsh 自己管
+  （启动器**不再保存、不再注入、不再在启动前检查**，旧版的 `credentials.env` / `credentials.enc`
+  会在启动时自动删除，见 `RELEASES.md` 0.1.5 升级须知）。
+  历史上"通过子进程环境变量传 key"的写法已随 0.1.5 移除 —— 环境变量只传非敏感项。
 - **启动 token 不进日志**：所有进入日志总线（含落盘的 `logs/runtime.log`）的行都会被脱敏为 `token=***`。
 - `dsh.pid` 只记录 `pid` 与 `port`，不记录 URL/token。
 
