@@ -8,7 +8,7 @@
 
 在**未 root** 的安卓手机上运行 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai) —— 基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) 改造的启动器
 
-![Version](https://img.shields.io/badge/version-0.1.5--SNAPSHOT-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 

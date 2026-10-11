@@ -1,16 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 行内小图标按钮的按压缩小反馈：press → 0.9x，松开回 1.0。
+     挂载对象是 FCLImageButton / FCLMenuView / avatar 等小图标（FCL 原版 item_version.xml 的
+     setting/delete、本仓各行内图标、日志页工具图标都挂它）。
+     ★ BL-028 判定结论（2026-10-11）：本文件以前内容是放大 1.5x、与文件名/全仓用法相悖——那是
+     0.9x 内容被错写进本文件（与 anim_scale 的 1.5x 对调了），已改回 0.9x 名实相符。
+     证据：`git show 5bd0e65^` 两文件；FCL 原版全部行内图标（~10 处）都挂 anim_scale_large 作
+     按压缩放；本仓 item_dsh_instance.xml:15 注释"缩到 0.9"与多处用法一致。 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
         <set>
             <objectAnimator
                 android:duration="@android:integer/config_shortAnimTime"
                 android:propertyName="scaleX"
-                android:valueTo="1.5"
+                android:valueTo="0.9"
                 android:valueType="floatType" />
             <objectAnimator
                 android:duration="@android:integer/config_shortAnimTime"
                 android:propertyName="scaleY"
-                android:valueTo="1.5"
+                android:valueTo="0.9"
                 android:valueType="floatType" />
         </set>
     </item>

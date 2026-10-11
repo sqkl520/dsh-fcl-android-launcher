@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 整卡/文字按钮的按压缩小反馈：press → 0.9x，松开回 1.0。
+     挂载对象是大面积可点容器（实例卡片/版本卡片根、FCLButton、btn_start 组合容器等）。
+     ★ 与 anim_scale_large 的分工只有挂载对象大小不同，方向一致（都是下压缩小）——BL-028 判定时
+     把错写成 1.5x 放大的 anim_scale_large 改回了 0.9x，见该文件头注。 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
         <set>

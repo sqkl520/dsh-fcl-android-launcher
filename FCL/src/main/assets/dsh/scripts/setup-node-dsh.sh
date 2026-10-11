@@ -27,6 +27,13 @@ set -eu
 PATH="/opt/node22/bin:$PATH"
 export PATH
 
+# apt-get must never block on an interactive prompt (K35): without a noninteractive frontend a
+# debconf dialog (e.g. tzdata) or a config-file conflict waits for stdin that never comes, so the
+# whole install hangs until the 30-minute watchdog kills it. All apt-get calls below inherit this.
+# (apk ignores it on musl rootfs; the apt install lines already pass -y.)
+DEBIAN_FRONTEND=noninteractive
+export DEBIAN_FRONTEND
+
 INSTANCE_DIR="${INSTANCE_DIR:-$PWD}"
 DSH_VERSION="${DSH_VERSION:-latest}"
 DSH_PREINSTALL_DIR="${DSH_PREINSTALL_DIR:-/opt/dsh-preinstalled}"
