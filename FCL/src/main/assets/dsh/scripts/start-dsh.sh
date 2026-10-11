@@ -306,7 +306,20 @@ if [ "$READY" -ne 1 ]; then
 fi
 
 flush_new
-echo "[start-dsh] READY port=$PORT"
+# When PORT=0 (auto), the kernel picked a real port; dsh prints it inside the token URL
+# (READY_URL). Parse it back so the host gets a usable port instead of the literal 0 (K35).
+# For a fixed PORT the value is already known, so keep it as-is.
+READY_PORT="$PORT"
+if [ "$PORT" = "0" ] && [ -n "$READY_URL" ]; then
+  rest="${READY_URL#*://}"      # strip scheme  -> host:port/path?query
+  hostport="${rest%%/*}"        # drop path     -> host:port
+  parsed="${hostport##*:}"      # drop host     -> port
+  case "$parsed" in
+    ''|*[!0-9]*) : ;;           # not a clean number: keep 0 rather than print garbage
+    *) READY_PORT="$parsed" ;;
+  esac
+fi
+echo "[start-dsh] READY port=$READY_PORT"
 if [ -n "$READY_URL" ]; then
   # 机器可读的就绪标记：启动器不必依赖第三方日志格式
   echo "[start-dsh] READY url=$READY_URL"

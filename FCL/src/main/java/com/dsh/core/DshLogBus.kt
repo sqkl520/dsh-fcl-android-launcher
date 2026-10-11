@@ -2,7 +2,6 @@ package com.dsh.core
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +50,15 @@ object DshLogBus {
     private const val FLUSH_INTERVAL_MS = 200L
     private const val FILE_MAX_BYTES = 1L * 1024 * 1024
 
+    /**
+     * Upper bound on how many per-instance streams stay resident in memory (K10 backstop).
+     * Each stream can hold up to [MAX_LINES] lines plus a StateFlow, so an unbounded map is a
+     * real leak under create/delete churn. The primary cleanup is [removeStream] (wired into
+     * instance deletion by T-B1); this cap only evicts the least-recently-used stream if we ever
+     * exceed it. Generous on purpose — real installs have a handful of instances, not dozens.
+     */
+    private const val MAX_STREAMS = 32
+
     /** 日志快照：UI 只比较 [revision]，避免无谓重绘 */
     data class Snapshot(val revision: Long, val lines: List<String>) {
         companion object {
@@ -60,6 +68,17 @@ object DshLogBus {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
+
+    /**
+     * Separate monitor for **file** mutations (append + rotate + the attach-time truncation).
+     *
+     * K11: rotation used to re-acquire [lock] — the very monitor every append()/appendFor() holds
+     * to touch the in-memory buffers — while it read up to [FILE_MAX_BYTES] of a file and rewrote
+     * it. A single oversized log therefore stalled *all* producers. File IO already runs off [lock]
+     * (in flush()'s tail); serializing it on its own monitor keeps concurrent writers from
+     * interleaving without ever blocking the in-memory hot path.
+     */
+    private val fileIoLock = Any()
 
     // --- 全局流（语义与改造前一致） -----------------------------------------
 
@@ -99,13 +118,24 @@ object DshLogBus {
         var dirty = false
     }
 
-    /** 实例 id → 它的流。**首次调用 [snapshotFor] / [appendFor] 时才创建**，之后复用同一个对象 */
-    private val streams = LinkedHashMap<String, InstanceStream>()
+    /**
+     * 实例 id → 它的流。**首次调用 [snapshotFor] / [appendFor] 时才创建**，之后复用同一个对象。
+     *
+     * K10: access-ordered (`accessOrder = true`) so [streamFor] can evict the least-recently-used
+     * entry once the map exceeds [MAX_STREAMS]. `get`/`put` bump an entry to the most-recent end;
+     * plain iteration (flush, eviction scan) does not reorder.
+     */
+    private val streams = LinkedHashMap<String, InstanceStream>(16, 0.75f, true)
 
     /** 实例 id → 它的落盘文件（惰性推导并缓存，见 [fileFor]） */
     private val instanceFiles = LinkedHashMap<String, File>()
 
-    private var flushJob: Job? = null
+    /**
+     * Guarded by [lock]. True from the moment a merged flush is armed until that flush actually
+     * begins draining (where it is cleared). While true, [scheduleFlush] will not arm a second
+     * delayed job. See [scheduleFlush] / [flush] for the K09 reasoning.
+     */
+    private var flushScheduled = false
 
     @Volatile
     private var logFile: File? = null
@@ -150,8 +180,9 @@ object DshLogBus {
                 file.parentFile?.mkdirs()
                 if (file.exists() && file.length() > FILE_MAX_BYTES) {
                     // 超限：只保留尾部若干行，避免日志无限增长占满手机。
-                    // 在 lock 内做"读尾 + 覆写"，避免与 flush() 的追加写交错导致内容错乱。
-                    synchronized(lock) {
+                    // 在 [fileIoLock] 内做"读尾 + 覆写"，与 flush() 的追加写（也走 fileIoLock）串行，
+                    // 避免内容错乱；不占生产者的 [lock]（见 K11）。
+                    synchronized(fileIoLock) {
                         val tail = file.readLines().takeLast(MAX_LINES / 2)
                         file.writeText(tail.joinToString("\n", postfix = "\n"))
                     }
@@ -187,7 +218,7 @@ object DshLogBus {
         synchronized(lock) {
             // 两条流都写：实例流是"这个实例的视角"，全局流是"所有事情的时间线"，缺一不可
             appendGlobalLocked(stamped)
-            val st = streams.getOrPut(instanceId) { InstanceStream() }
+            val st = streamFor(instanceId)
             st.buffer += stamped
             st.pendingForFile += stamped
             trimLocked(st.buffer)
@@ -227,7 +258,26 @@ object DshLogBus {
      */
     @JvmStatic
     fun snapshotFor(instanceId: String): StateFlow<Snapshot> =
-        synchronized(lock) { streams.getOrPut(instanceId) { InstanceStream() }.state }
+        synchronized(lock) { streamFor(instanceId).state }
+
+    /**
+     * Drop an instance's in-memory stream — its buffer, StateFlow and cached log-file handle — so
+     * a deleted instance stops occupying memory (K10). Idempotent; an unknown id is a no-op.
+     *
+     * ⚠️ NOT yet wired in. Instance deletion lives in [DshInstances.delete], which this task must
+     * not touch; **T-B1 owns that file and must call `DshLogBus.removeStream(id)` there** (right
+     * after the instance directory is removed). Until then this is exercised only by the
+     * [MAX_STREAMS] backstop in [streamFor] and by tests. It deliberately does NOT delete the
+     * on-disk `instance-<id>.log` — removing the instance directory (DshInstances.delete's job)
+     * already takes that file with it.
+     */
+    @JvmStatic
+    fun removeStream(instanceId: String) {
+        synchronized(lock) {
+            streams.remove(instanceId)
+            instanceFiles.remove(instanceId)
+        }
+    }
 
     /**
      * 导出内存日志（复制/分享用）。
@@ -317,6 +367,35 @@ object DshLogBus {
     }
 
     /**
+     * Get or create an instance's stream, enforcing the [MAX_STREAMS] cap (K10).
+     *
+     * Reading an existing entry via `get` also bumps its recency (the map is access-ordered), so
+     * actively-written streams stay; only idle ones are candidates for eviction. The caller must
+     * hold [lock].
+     */
+    private fun streamFor(instanceId: String): InstanceStream {
+        streams[instanceId]?.let { return it } // access touch (LRU bump) + fast path
+        val created = InstanceStream()
+        streams[instanceId] = created
+        if (streams.size > MAX_STREAMS) evictLruStreamsLocked(keep = instanceId)
+        return created
+    }
+
+    /**
+     * Evict least-recently-used streams until the map is back within [MAX_STREAMS]. Never evicts
+     * [keep] (the entry we just created/touched). Caller must hold [lock].
+     */
+    private fun evictLruStreamsLocked(keep: String) {
+        val it = streams.entries.iterator()
+        while (streams.size > MAX_STREAMS && it.hasNext()) {
+            val e = it.next()
+            if (e.key == keep) continue
+            it.remove()
+            instanceFiles.remove(e.key)
+        }
+    }
+
+    /**
      * 实例 id → 落盘文件。
      *
      * ★ 只在 [DshPaths] 已就绪时**缓存**：路径未就绪时 [instanceLogFile] 会落到临时目录兜底，
@@ -340,10 +419,25 @@ object DshLogBus {
 
     // --- 内部：合并刷新 -----------------------------------------------------
 
-    @Synchronized
+    /**
+     * Arm a merged flush ~[FLUSH_INTERVAL_MS] later, unless one is already pending.
+     *
+     * K09: the old guard was `flushJob?.isActive`, which stays true while the job is *running*
+     * flush() — including its off-lock file IO. A line appended during that window set `dirty` but
+     * armed no new job, so if no further append ever came it was never flushed to the snapshot or
+     * to disk (silent log loss). We now gate on [flushScheduled], which [flush] clears the instant
+     * it begins draining, and [flush] re-arms at its tail whenever anything is still dirty.
+     */
     private fun scheduleFlush() {
-        if (flushJob?.isActive == true) return
-        flushJob = scope.launch {
+        synchronized(lock) {
+            if (flushScheduled) return
+            flushScheduled = true
+        }
+        armFlushJob()
+    }
+
+    private fun armFlushJob() {
+        scope.launch {
             delay(FLUSH_INTERVAL_MS)
             flush()
         }
@@ -363,13 +457,21 @@ object DshLogBus {
      * ★ 快照赋值也放在 [lock] 内：`scheduleFlush` 排的那次刷新（200ms 后）可能与 [flushNow]
      *   排的那次撞在一起。若赋值在锁外，两次刷新算出的快照会竞态写入，晚算的那次可能把**更旧**
      *   的快照盖上（UI 少一段日志且 revision 回退，直到下一行才恢复）。放进锁里，赋值顺序与
-     *   递增顺序就一致了。文件 IO 仍在锁外（`rotateIfTooBig` 会自己再取一次锁，是可重入的）。
+     *   递增顺序就一致了。文件 IO 仍在锁外（appendToFile / rotateIfTooBig 走独立的 [fileIoLock]，
+     *   不占生产者的 [lock]，见 K11）。
+     *
+     * ★ K09: `flushScheduled` is cleared at the top of the drain (so a concurrent append re-arms a
+     *   fresh flush), and the tail re-checks dirtiness and re-arms if a line slipped in after the
+     *   drain / during the off-lock IO — otherwise a trailing append with no successor would never
+     *   be flushed.
      */
     private fun flush() {
         var globalWrite: List<String> = emptyList()
         var instanceWrites: List<FileWrite> = emptyList()
 
         synchronized(lock) {
+            // K09: we are draining now — let a subsequent append arm a fresh flush.
+            flushScheduled = false
             val anyInstanceDirty = streams.values.any { it.dirty }
             // 两条流都没新内容：什么都不做（保持原来"无变化不刷"的语义，避免空转重绘）
             if (!dirty && !anyInstanceDirty) return
@@ -407,6 +509,19 @@ object DshLogBus {
         if (globalFile != null) {
             for (w in instanceWrites) appendToFile(w.file, w.lines)
         }
+
+        // K09: lines appended after we cleared `flushScheduled` above (during the drain tail or the
+        // off-lock IO just done) only set `dirty`. With no further append to kick a new job they
+        // would be stranded — never reaching the snapshot or the log file. Re-arm if still dirty.
+        val rearm = synchronized(lock) {
+            if ((dirty || streams.values.any { it.dirty }) && !flushScheduled) {
+                flushScheduled = true
+                true
+            } else {
+                false
+            }
+        }
+        if (rearm) armFlushJob()
     }
 
     /**
@@ -415,22 +530,32 @@ object DshLogBus {
      */
     private fun appendToFile(f: File, lines: List<String>) {
         runCatching {
-            f.parentFile?.mkdirs()
-            f.appendText(lines.joinToString("\n", postfix = "\n"))
-            // ★ 单次进程生命周期内日志可能无限增长（长驻 agent 能连续跑几天），
-            // 光靠 attachFile 时截断是不够的：这里在每次落盘后检查一次，超限就只留尾部。
-            // 实例文件同理：历史遗留的超大文件会在它第一次被写入时被裁到尾部。
-            rotateIfTooBig(f)
+            // K11: serialize file mutations on [fileIoLock], NOT the producer [lock]. flush() calls
+            // this off-lock, but two overlapping flushes (e.g. flushNow() racing the scheduled job)
+            // could otherwise interleave appends or append-vs-rotate on the same file. Producers
+            // (append/appendFor) never touch this monitor, so an oversized log can't stall them.
+            synchronized(fileIoLock) {
+                f.parentFile?.mkdirs()
+                f.appendText(lines.joinToString("\n", postfix = "\n"))
+                // ★ 单次进程生命周期内日志可能无限增长（长驻 agent 能连续跑几天），
+                // 光靠 attachFile 时截断是不够的：这里在每次落盘后检查一次，超限就只留尾部。
+                // 实例文件同理：历史遗留的超大文件会在它第一次被写入时被裁到尾部。
+                rotateIfTooBig(f)
+            }
         }
     }
 
     /**
      * 超过 [FILE_MAX_BYTES] 时只保留尾部一半（按字符切，并丢掉可能被切断的首行）。
-     * 在 [lock] 内调用，避免与别的写入交错。
+     *
+     * K11: serialized on [fileIoLock] (the file-IO monitor), **not** the producer [lock], so a
+     * rotation never blocks append()/appendFor(). [appendToFile] already holds [fileIoLock] when it
+     * calls this, so the nested `synchronized` is a reentrant no-op there; direct test callers take
+     * it themselves.
      */
     private fun rotateIfTooBig(f: File) {
         if (f.length() <= FILE_MAX_BYTES) return
-        synchronized(lock) {
+        synchronized(fileIoLock) {
             if (f.length() <= FILE_MAX_BYTES) return
             val keep = (FILE_MAX_BYTES / 2).toInt()
             val text = runCatching { f.readText() }.getOrNull() ?: return
@@ -441,4 +566,16 @@ object DshLogBus {
 
     /** 退出/测试前强制刷一次 */
     fun flushNow() = flush()
+
+    // --- 测试钩子（test-only seams；生产代码不要调用）---------------------------
+
+    /**
+     * Test hook: run the oversize rotation on [f] directly (no in-memory state, no attached file),
+     * so the byte-based truncation can be asserted deterministically. Mirrors what [appendToFile]
+     * does after each write (K11 regression anchor).
+     */
+    fun rotateFileForTest(f: File) = rotateIfTooBig(f)
+
+    /** Test hook: current number of resident per-instance streams (K10 cap regression anchor). */
+    fun streamCountForTest(): Int = synchronized(lock) { streams.size }
 }

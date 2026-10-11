@@ -49,6 +49,29 @@
 - 前置页 / 首页任务区 / 实例详情页 / 右面板按钮的实际观感与行为
 - proot 内 `dsh web` 能否起来、WebView token/cookie、息屏保活、失败恢复
 
+#### 怎么连设备 / 怎么抓日志（T-A5 工具包 · 见 `tools/`）
+
+> 工具包：`tools/ondevice.md`（装机/抓日志全手册）、`tools/t6-checklist.md`（批 A 真机门逐条打勾）、
+> `tools/bebug-template.md`（日志记录模板）、`tools/adb.sh` + `tools/adb.cmd`（adb 绝对路径包装）。
+> 装机**主路径免 adb**（手机浏览器下 Release 附件直接装）；adb 链路是「反复装 + 抓详细日志」的可选增强。
+
+- **包名**（装后，fordebug 变体）：`com.dsh.fcl.androidlauncher.debug`
+  （`applicationId` + `applicationIdSuffix=".debug"`）。
+- **adb 不在 PATH**：在 `D:\Android\Sdk\platform-tools\adb.exe`，一律走包装：
+  - Git Bash：`sh tools/adb.sh <参数>`（例 `sh tools/adb.sh devices`）
+  - cmd：`tools\adb.cmd <参数>`　（参数原样透传给真实 adb）
+- **连设备**：`sh tools/adb.sh devices` → 看到 `<序列号>\tdevice`；`unauthorized` 则在手机上允许 USB 调试。
+- **装机（adb 路）**：`sh tools/adb.sh install -r output/dsh-fcl-android-launcher-<ver>-arm64.apk` → `Success`；
+  签名/版本不兼容先 `uninstall com.dsh.fcl.androidlauncher.debug` 再装（会触发重解压）。
+- **抓日志**（证据主次：应用 DshLogBus 落盘为主，logcat 抓崩溃为辅）：
+  - 落盘运行日志：`sh tools/adb.sh shell run-as com.dsh.fcl.androidlauncher.debug cat files/dsh/logs/runtime.log`
+  - 实例日志：`... cat files/dsh/logs/instance-<id>.log`（路径见 `DshPaths.kt` / `DshLogBus.kt`）
+  - logcat：先 `sh tools/adb.sh logcat -c` 清缓冲，再 `sh tools/adb.sh logcat --pid=$(sh tools/adb.sh shell pidof -s com.dsh.fcl.androidlauncher.debug)`；
+    崩溃用 `logcat -d AndroidRuntime:E CrashReporter:E '*:S'`。
+  - 应用内：设置 → 运行时自检（跑 `probe.sh`，末行 `dsh-probe-ok`）；设置/实例详情 → 日志。
+- **设备空间**：跑前 `sh tools/adb.sh shell df -h /data`，确保可用 **≥1.7GB**（解压 862MB + 临时 + 一实例约 523MB）。
+- **记录**：失败一律按 `tools/bebug-template.md`（时间戳 + 原始行，不加工）归档，丢回主编排。
+
 ### T7. rootfs 瘦身与可下载化 —— **瘦身已完成（2026-10-06），待真机验证**
 
 **已做**（用 GNU tar `--delete` 在原包条目上直接剔除，不重打包）：

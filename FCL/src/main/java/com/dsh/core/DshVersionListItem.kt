@@ -45,10 +45,11 @@ data class DshVersionListItem(
             return tags.first()
         }
 
+        /** KB 档改一位小数（BL-031③）：整数除法 1500B 会显示成"1 KB"，截断近半。 */
         private fun formatSize(bytes: Long): String = when {
             bytes <= 0 -> "—"
             bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
             else -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
         }
     }

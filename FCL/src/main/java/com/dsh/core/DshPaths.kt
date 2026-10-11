@@ -210,7 +210,11 @@ object DshPaths {
             val inJni = File(nativeLibDir, "libproot-loader.so")
             if (inJni.isFile) return inJni
         }
-        return File(prootDir(), "libproot_loader.so")
+        // 回退名与 jniLibs 主路径统一用连字符（K36）：实际文件名是 libproot-loader.so，
+        // 旧的下划线 libproot_loader.so 恒指向不存在的文件。
+        // （方案 B 下 proot/loader 一律走 jniLibs，assets 的 proot/ 仅存 PLACEHOLDER，
+        //  故此回退分支实际不会命中；保留它只为与 resolveProotBin 对称，并容忍 nativeLibDir 为空。）
+        return File(prootDir(), "libproot-loader.so")
     }
 
     /**

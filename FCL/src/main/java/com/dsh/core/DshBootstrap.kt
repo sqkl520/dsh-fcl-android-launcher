@@ -18,7 +18,7 @@ import java.io.File
  * ```
  * assets/dsh/
  *   version                 底座版本号（说明用；实际按各子项 version 增量解压）
- *   proot/     version, libproot.so, libproot_loader.so
+ *   proot/     version, libproot.so, libproot-loader.so
  *   rootfs/    version, rootfs.tar.xz
  *   scripts/   version, setup-node-dsh.sh, start-dsh.sh
  * ```
@@ -47,30 +47,44 @@ object DshBootstrap {
     private const val ASSET_ROOT = "dsh"
 
     /**
-     * rootfs 解压后的**实测**体积（Debian bookworm arm64 + 官方 Node 22 + 预装 dsh）。
-     * 压缩包 `rootfs.tar.xz` 314 MB → 解压后 1,607,908,864 B（≈1.50 GiB，膨胀约 5.1×）。
-     * 这里取 1.65 GiB 留一点余量。
+     * rootfs 解压后的**实测**体积（Debian bookworm arm64 + 官方 Node 22 + 预装 dsh，瘦身版 slim1）。
+     *
+     * 实测来源：docs/ROOTFS.md §9「瘦身后（0.1.3 起）」—— 解压后合计 **904,335,360 B（≈862 MiB）**，
+     * tar.xz 压缩后 142 MB。assets 内 `rootfs/version` =
+     * `debian-bookworm-arm64-node22-dsh0.1.6-alpha.2-slim1`，正与该瘦身记录对应。
+     *
+     * ★ K21 修正：旧值 1,650 MiB 是**瘦身前**的数字（当时解压后 ~1.5 GiB，取 1.65 留余量）。
+     *   瘦身后真实只有 862 MiB，旧值把空间门槛抬高近一倍，把本来够用的中低端机误拦在首启页。
+     *   项目惯例：阈值必须有实测依据 —— 这里直接钉死 docs/ROOTFS.md 记录的实测字节数。
      */
-    private const val ROOTFS_EXTRACTED_BYTES = 1650L * 1024 * 1024
+    private const val ROOTFS_EXTRACTED_BYTES = 904_335_360L
 
     /**
      * 一个实例的 dsh 依赖树（node_modules）大致占用，实测 300~500 MB，取 600 MB 留余量。
+     * （瘦身只剔了 rootfs 的 /opt 工具链与文档，不影响实例各自 npm 装出来的 node_modules，故此值不变。）
      *
-     * ★ 从 `private` 放开到 `internal`：这条门槛现在有**两个**使用方 —— 本类解压 rootfs 前的
-     *   空间检查，以及 [DshInstaller] 起 npm 之前的空间检查。两处必须用同一个数：
-     *   各写一个魔数的话迟早分叉，用户会遇到"底座说够、安装说不够"（或反过来），
-     *   而这种前后矛盾的提示比不给提示更让人糊涂。
+     * ★ internal：这条门槛有**两个**使用方 —— 本类解压 rootfs 前的空间检查，以及 [DshInstaller]
+     *   起 npm 之前的空间检查。两处必须用同一个数，否则会出现"底座说够、安装说不够"的矛盾提示。
      */
-    internal const val INSTANCE_NODE_MODULES_BYTES = 600L * 1024 * 1024
+    const val INSTANCE_NODE_MODULES_BYTES = 600L * 1024 * 1024
 
     /**
-     * 首装需要的最小可用空间：rootfs 一份 + 一个实例的 node_modules。
+     * 首装 / 升级分别需要的最小**可用空间**（字节）。纯函数，便于单测（见 DshBootstrapSpaceTest）。
      *
-     * ★ 本轮修正：原值是 `1500 MiB`（=1,572,864,000 B），而**光 rootfs 解压后就已
-     * 1,607,908,864 B** —— 门槛比它要保护的对象还小，于是"空间检查通过"之后照样会在解压中途
-     * 写满磁盘，留下半成品（还带着一个误导性的"空间够用"结论）。现在按实测值给。
+     * 两种口径为什么不同：
+     * - **首装**（replacing=false）：解压把一份 rootfs 写进 `rootfs.tmp`，吃掉 1 份可用空间；
+     *   随后首个实例还要 npm install → 再留 1 份 node_modules。需要 `rootfs + node_modules`。
+     * - **升级/重装**（replacing=true）：旧 rootfs 已占盘（**不计入可用空间**），解压同样只把新的
+     *   一份写进 `.tmp`（吃掉 1 份可用空间）；之后 dest→.old、tmp→dest 全是 rename（不再吃可用
+     *   空间），.old 删除后净增量为 0。新旧两份只是**磁盘占用**上短暂并存，并不要求可用空间里再
+     *   空出一整份；已有实例的 node_modules 原样留着也无需再预留。需要 `rootfs` 一份。
+     *
+     * ★ K21 修正：旧实现升级分支按 `rootfs×2 + node_modules`（把"磁盘占用并存"错当成"可用空间
+     *   要双份"），门槛虚高到 ~3.9 GB，1.1 GB 可用的真机被直接误拦。
      */
-    const val MIN_FREE_BYTES = ROOTFS_EXTRACTED_BYTES + INSTANCE_NODE_MODULES_BYTES
+    fun requiredFreeBytes(replacing: Boolean): Long =
+        if (replacing) ROOTFS_EXTRACTED_BYTES
+        else ROOTFS_EXTRACTED_BYTES + INSTANCE_NODE_MODULES_BYTES
 
     sealed class Progress {
         data class Stage(val text: String, val fraction: Double? = null) : Progress()
@@ -211,8 +225,7 @@ object DshBootstrap {
 
             // 0) 磁盘空间检查**移到了真正要解压 rootfs 的分支里**（见第 3 步）。
             // 原实现把它放在这里，无论是否需要解压都会先卡一道门槛：rootfs 已经就绪、本次只是
-            // 补脚本的场景，也会被"空间不足"直接判失败（假失败）。而且门槛值本身偏小（见
-            // [MIN_FREE_BYTES] 的注释）。
+            // 补脚本的场景，也会被"空间不足"直接判失败（假失败）。门槛口径见 [requiredFreeBytes]。
 
             // 1) 脚本
             // ★ 判定带\"文件存在性\"兜底：RuntimeUtils.isLatest 用 Class.getResourceAsStream(\"/assets/...\")
@@ -258,13 +271,10 @@ object DshBootstrap {
             if (!RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") ||
                 !DshPaths.rootfsLooksUsable()
             ) {
-                // 解压前才做空间检查，且按"这次到底要不要留两份"来算：
-                // - 首装：解到 .tmp 一份，rename 上位 → 峰值 ≈ 1 份 rootfs
-                // - 升级：旧 rootfs 仍在，新内容要同时存在 → 峰值 ≈ 2 份 rootfs
-                // 另外还要给后面 npm install 留出 node_modules 的空间。
+                // 解压前才做空间检查，按"首装 / 升级分别需要多少可用空间"算
+                // （口径见 [requiredFreeBytes] —— 升级分支不再按两份 rootfs 的可用空间要求）。
                 val replacing = DshPaths.rootfsLooksUsable()
-                val need = INSTANCE_NODE_MODULES_BYTES +
-                    ROOTFS_EXTRACTED_BYTES * (if (replacing) 2L else 1L)
+                val need = requiredFreeBytes(replacing)
                 val free = DshPaths.freeSpaceBytes()
                 if (free in 0 until need) {
                     // 首装与升级**各一条**文案，而不是"共用一条 + 补一段括号说明"：
@@ -284,7 +294,10 @@ object DshBootstrap {
                     return
                 }
                 emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_extract_rootfs), 0.2))
-                extractRootfs(context, emit)
+                // 决策 5：解压 rootfs 是数分钟 CPU 密集活，灭屏 Doze 会挂起它。整段持 PARTIAL_WAKE_LOCK。
+                withExtractionWakeLock(context) {
+                    extractRootfs(context, emit)
+                }
             }
 
             // 4) 自检：能不能真跑
@@ -379,6 +392,33 @@ object DshBootstrap {
             }
         } catch (e: Exception) {
             VerifyReport(false, e.message ?: e.toString())
+        }
+    }
+
+    /**
+     * 解压期间持 `PARTIAL_WAKE_LOCK`（决策 5）：解压 rootfs 是数分钟 CPU 密集活，灭屏进入 Doze
+     * 会挂起它。开始前 acquire（带 20 分钟超时兜底，永不无限持锁），结束/异常时 release。
+     *
+     * WAKE_LOCK 权限已在 AndroidManifest 声明（本任务不改 manifest）。拿不到 PowerManager（或
+     * acquire 抛异常）时直接跳过 —— 保活是优化项，绝不能成为新的崩溃点，故全程 runCatching 兜住。
+     */
+    private fun <T> withExtractionWakeLock(context: Context, body: () -> T): T {
+        val wl = runCatching {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG)?.apply {
+                setReferenceCounted(false)
+                acquire(WAKELOCK_TIMEOUT_MS)
+            }
+        }.getOrNull()
+        if (wl != null) {
+            DshLogBus.append("[bootstrap] wake lock held for rootfs extraction")
+        } else {
+            DshLogBus.append("[bootstrap] no wake lock (PowerManager unavailable); extraction continues")
+        }
+        try {
+            return body()
+        } finally {
+            runCatching { wl?.let { if (it.isHeld) it.release() } }
         }
     }
 
@@ -489,4 +529,10 @@ object DshBootstrap {
 
     /** 解压进度明细的最小刷新间隔（毫秒） */
     private const val DETAIL_THROTTLE_MS = 200L
+
+    /** 解压保活用的 WakeLock 标签（决策 5） */
+    private const val WAKELOCK_TAG = "dsh:bootstrap-extract"
+
+    /** WakeLock 超时兜底：20 分钟。即便 release 漏调用，系统也会自动放锁，绝不会无限持有。 */
+    private const val WAKELOCK_TIMEOUT_MS = 20L * 60 * 1000
 }

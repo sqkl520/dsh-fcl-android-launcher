@@ -9,6 +9,13 @@
   文字（状态）用 FCLTextView，开关用 FCLSwitch（FCL 的开关行都是独占一行）。
 
   页面左右留白 10dp：与侧边菜单、右面板、以及其余列表页同一档（FCL 列表左右留白就是 10dp）。
+
+  底部留白 48dp（BL-024）：页面底部悬浮着动态岛（岛高 33dp，见 FCLDynamicIsland.refresh；
+  底边距 15dp，见 activity_dsh_main.xml 的 title），合计占底部 48dp。
+  日志页是唯一"自动钉底 + 底部有静态信息行"的页面：根若无 bottom padding，
+  钉底后最新约 2 行 + 整条信息行正落岛下，且滚不动躲不开。
+  （钉底/裁剪逻辑本身已证无误，纯粹是布局留白缺失。）
+  约束锚在 parent 上会自动尊重 padding，故信息行（Bottom_toBottomOf=parent）随之上移到岛的上方。
 -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -16,7 +23,8 @@
     android:layout_height="match_parent"
     android:paddingStart="10dp"
     android:paddingTop="10dp"
-    android:paddingEnd="10dp">
+    android:paddingEnd="10dp"
+    android:paddingBottom="48dp">
 
     <!-- ===== 工具行：状态（左） + 三个图标动作（右，统一 28dp） ===== -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
@@ -143,6 +151,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:singleLine="true"
+        android:ellipsize="middle"
         android:textSize="10sp"
         app:auto_text_tint="true"
         app:layout_constraintBottom_toBottomOf="parent"

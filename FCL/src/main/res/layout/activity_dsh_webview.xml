@@ -129,4 +129,115 @@
 
     </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
 
+    <!-- 同页日志覆盖层（BL-025：照 FCL LogWindow 做法）。
+         默认 gone；日志按钮只切显隐 —— 不出 Activity、不碰返回栈，
+         WebView 不会被销毁（之前 startActivity(CLEAR_TOP) 是回不去的单程票）。
+         全屏铺在最顶层：声明在最后 + match_parent，就是 z-order 最上。
+         容器必须是 FCLConstraintLayout：app:auto_tint 只被这个类读取，挂在普通
+         ConstraintLayout 上时暗色模式下这层就是一整屏白（同 state_panel 的注释）。 -->
+    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+        android:id="@+id/log_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_container_white"
+        android:padding="10dp"
+        android:visibility="gone"
+        app:auto_tint="true">
+
+        <!-- 标题行：归属（左） + 关闭（右） -->
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/log_overlay_scope"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:singleLine="true"
+            android:text="@string/dsh_webview_logoverlay_title"
+            android:textSize="13sp"
+            app:auto_text_tint="true"
+            app:layout_constraintBottom_toBottomOf="@id/btn_log_overlay_close"
+            app:layout_constraintEnd_toStartOf="@id/btn_log_overlay_close"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="@id/btn_log_overlay_close" />
+
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
+            android:id="@+id/btn_log_overlay_close"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/dsh_webview_logoverlay_close"
+            android:src="@drawable/ic_baseline_close_24"
+            android:stateListAnimator="@xml/anim_scale_large"
+            app:auto_tint="true"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <!-- 控制台：与日志页同底（@drawable/bg_log_console，中性底板，亮暗各一套）。
+             正文刻意不挂 app:auto_text_tint：那一族取的是"与用户主题色对比的黑/白"，
+             配中性底板会撞色（浅底白字）；不挂时走 DayNight 默认，与底板天然对得上
+             （同 activity_dsh_logs.xml 的注释）。
+             ⚠️ 不要加 `android:textIsSelectable="true"`：它会让每次 setText 把光标钉回
+             第 0 个字符、进而在 onPreDraw 里把 ScrollView 拽回最顶部（见 DshLogsUI 类注释）。 -->
+        <ScrollView
+            android:id="@+id/log_overlay_scroll"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_log_console"
+            android:paddingStart="10dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="8dp"
+            app:layout_constraintBottom_toTopOf="@id/log_overlay_info"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/btn_log_overlay_close">
+
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/log_overlay_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:lineSpacingExtra="2dp"
+                android:textSize="11sp" />
+
+        </ScrollView>
+
+        <!-- 信息行：显示行数。它压在覆盖层容器底上（主题着色底），
+             所以取色用 app:auto_text_tint —— 与标题行同源。
+             固定占一行高度（minHeight）：内容刷新时按钮行不跳动。 -->
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/log_overlay_info"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:minHeight="14sp"
+            android:singleLine="true"
+            android:textSize="10sp"
+            app:auto_text_tint="true"
+            app:layout_constraintBottom_toTopOf="@id/log_overlay_btn_row"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent" />
+
+        <!-- 底部按钮行：去外壳看完整日志（保留的外壳跳转出口）。
+             FCL 对话框四键惯例是等宽 weight=1；这里只有一个键，用 wrap_content 居中。 -->
+        <com.tungsten.fcllibrary.component.view.FCLLinearLayout
+            android:id="@+id/log_overlay_btn_row"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent">
+
+            <com.tungsten.fcllibrary.component.view.FCLButton
+                android:id="@+id/btn_log_overlay_full"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:text="@string/dsh_webview_logoverlay_full"
+                app:ripple="true" />
+
+        </com.tungsten.fcllibrary.component.view.FCLLinearLayout>
+
+    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
+
 </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
