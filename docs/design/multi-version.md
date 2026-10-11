@@ -1,5 +1,11 @@
 # 设计：多版本/多实例管理 + npm 下载 UI（在 FCL 里改代码）
 
+> ⚠️ **本文是 2026-09 的早期设计**，管理层范式（StateFlow 仓库、Gson 持久化、npm registry
+> 客户端）仍然有效，但三处已过时：① 实例目录里的 `credentials.env` **已作废**
+> （0.1.5 起 Key 归 dsh 管，见 `../RELEASES.md` 0.1.5）；② §"实测证据"的版本/dist-tags 数据
+> 是当时快照，以实时查询为准；③ §"尚未做"的 UI/保活/ProotExecutor/Android 编译**均已落地**。
+> 当前状态看 `../README.md` 与 `../ROADMAP.md`。
+
 目标：在 FCL 代码库里加一套"dsh 实例/版本"的管理与下载，复用 FCL 的成熟范式
 （StateFlow 单例仓库、Gson 序列化、HttpRequest、前台服务保活），但因为运行时模型不同
 （FCL 是 in-process JVM，dsh 必须 proot），运行层不照搬、管理层照搬。
@@ -37,7 +43,7 @@
     instances/<id>/        每实例独立
       node_modules/        该实例的 dsh（约 300MB）
       home/                DSH_HOME（会话/配置/profile）
-      credentials.env      API key（权限 600）
+      ~~credentials.env      API key（权限 600）~~（已作废，见本文顶部标注）
     instances.json         实例清单
   <cacheDir>/dsh/tarballs/ 下载临时区
   ```
@@ -73,8 +79,8 @@
 ## 实测证据
 
 1. **registry 拉取**：真实请求 `@deepseek-ai/dsh` abbreviated metadata 成功，22 个版本，
-   dist-tags = `{latest:0.1.5-rc.2, next:0.1.5-rc.2, alpha:0.1.6-alpha.2}`。样本存于
-   `dsh-registry-sample.json`。
+   dist-tags = `{latest:0.1.5-rc.2, next:0.1.5-rc.2, alpha:0.1.6-alpha.2}`（⚠️ 当时快照）。
+   样本存于早期 PoC 目录（不随公开仓发布）。
 2. **排序逻辑**：用真实样本跑 `DshRegistry` 的解析+排序等价实现，输出从新到旧正确，
    `0.1.6-alpha.2` 排最前并标 `[alpha]`，`0.1.5-rc.2` 标 `[latest,next]`。
 3. **语义版本比较**：11 条边界用例全过（稳定版>预发布、数字段按数值 rc.2<rc.10、rc>alpha、跨主干等）。
@@ -86,6 +92,10 @@
 ---
 
 ## 尚未做 / 下一步
+
+> ⚠️ **本节已全部落地**（2026-10-03 前）：UI 层（外壳三页 + 实例详情，见 `app-shell.md`）、
+> 前台服务保活（`DshRuntimeService`）、ProotExecutor 真机实现（`ProotProcessExecutor`）、
+> 端口/进程生命周期（`DshRuntime`）、Android 编译验证。保留原貌只作历史记录。
 
 - **UI 层**：只写了 ViewModel 与 item 模型，具体的 FCLPage/RecyclerView Adapter/布局 xml 未写
   （需要 FCL 的主题组件与 databinding，建议照 `ui/version` 的 VersionListPage/Adapter 套一份）。

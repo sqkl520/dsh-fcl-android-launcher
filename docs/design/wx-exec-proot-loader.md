@@ -65,7 +65,7 @@ targetSdk 之外，zygote 的 seccomp BPF 还会拦 18+ 个 syscall（按**系�
 oonid/pr 的静态分析结论：
 - **proot 自己的 seccomp 过滤器是 dead code**（`enable_syscall_filtering()` 定义了但从不调用）；
   `PROOT_NO_SECCOMP=1` 设了也**无意义**。
-  → **这推翻了我们 R-02 兜底逻辑的前提**（我们在 round6 里设想"启动失败自动加 PROOT_NO_SECCOMP 重试"，其实没用）。
+  → **这推翻了我们早先那套兜底逻辑的前提**（曾设想"启动失败自动加 PROOT_NO_SECCOMP 重试"，其实没用）。
 - 被拦的 syscall（arm64）：setuid/setgid 族、mount/umount2/chroot、clock_settime 族、
   reboot/init_module/sethostname 等。
 - **proot 的 SIGSYS handler 对未知拦截 syscall 默认返回 `-ENOSYS`**，优雅降级；
@@ -154,7 +154,7 @@ oonid/pr 的静态分析结论：
 |---|---|
 | "targetSdk 34 下 proot+glibc 无干净绕法，只能降 28" | ❌ 错。PROOT_LOADER 机制可绕，targetSdk 35/36 真机验证过 |
 | "数据目录的 .node 用 dlopen 也会被 W^X 拦" | ❌ 错。W^X 只禁 execve，dlopen 允许（FCL 即反例） |
-| "PROOT_NO_SECCOMP 兜底重试有用"（round6 R-02 设想） | ❌ 错。proot 自带 seccomp 过滤是 dead code，该变量无意义 |
+| "PROOT_NO_SECCOMP 兜底重试有用"（早先的设想） | ❌ 错。proot 自带 seccomp 过滤是 dead code，该变量无意义 |
 | "termux-exec linker 法也许能用" | ✅ 判断正确：bionic-only，对 glibc 无效 |
 
 > 方法论教训：**涉及真机运行时行为的结论，不要凭机制推理下死判断**；

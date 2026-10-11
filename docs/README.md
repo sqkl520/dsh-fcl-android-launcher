@@ -7,7 +7,8 @@
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 **GPL-3.0** 发布。
 >
-> **当前版本：`0.1.6-SNAPSHOT`** —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
+> **当前版本：`0.1.6-SNAPSHOT`**（code 107，fix1 预发布验证中；最新包见 `RELEASES.md` 顶部）
+> —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 > **DeepSeek Harness（dsh）在未 root 安卓手机上的启动器**。
 > 用 proot 兜一个 Linux 环境跑 Node 版 dsh，界面沿用 FCL 的视觉与控件体系。
@@ -38,16 +39,16 @@
 
 ## 当前状态
 
-- **代码**：`com/dsh/` **42 个文件**（`core` 逻辑 + `ui` 界面）+ FCL 基座
-  - `com/tungsten/fcllibrary/` 60 个（UI 框架，保留 FCL 风格）
-  - `com/tungsten/fclcore/` 394 个（`fakefx` / `util` / `task` / `event`）
-  - `com/tungsten/fcl/` 9 个（`FCLApp` / `SplashActivity` / `RuntimeUtils` 等）
-  - `com/tungsten/fclauncher/utils/` 2、`com/mio/util/` 4、`ZipFileSystem/` 12
-- **资源**：`FCL/src/main/res` 109 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + version 标记；
+- **代码**：`com/dsh/` **43 个文件**（`core` 21 + `ui` 22）+ FCL 基座
+  - `com/tungsten/fcllibrary/` 44 个（UI 框架，保留 FCL 风格）
+  - `com/tungsten/fclcore/` 373 个（`fakefx` / `util` / `task` / `event`）
+  - `com/tungsten/fcl/` 4 个（`FCLApp` / `SplashActivity` / `RuntimeUtils` 等）
+  - `com/tungsten/fclauncher/utils/` 2、`com/mio/util/` 5、`ZipFileSystem/` 12（+ 2 个资源文件）
+- **资源**：`FCL/src/main/res` 111 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + version 标记；
   `rootfs.tar.xz` 不入 Git）· jniLibs 3 个（`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
-- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **120/120**；脚本自检 **18/18**
-- **入口**：`SplashActivity` → **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **148/148**；脚本自检 **18/18**
+- **入口**：`SplashActivity` → 首启前置页（`DshSetupActivity`，底座未就绪时）→ **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
   无 MC 运行时门禁、无 EULA、无 MC 主界面）
 
 ### 运行时底座
@@ -65,7 +66,7 @@ rootfs 已于 2026-10-06 瘦身：`rootfs.tar.xz` **314 MB → 142 MB（−52.7%
 
 | 位置 | 说明 |
 |---|---|
-| `FCL/src/main/java/com/dsh/` | **dsh 启动器主体**（`core` 逻辑 + `ui` 界面），42 个文件 |
+| `FCL/src/main/java/com/dsh/` | **dsh 启动器主体**（`core` 21 + `ui` 22），43 个文件 |
 | `FCL/src/main/java/com/tungsten/` | FCL 基座（`fcllibrary` UI 框架 + `fclcore` 工具） |
 | `FCL/src/main/assets/dsh/` | 运行时底座：`scripts/`（3 个 POSIX sh）+ `rootfs/`（tar.xz 不入 Git） |
 | `FCL/src/test/java/com/dsh/` | JVM 单测 |

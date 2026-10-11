@@ -12,7 +12,7 @@
 > | 运行时底座**当前实现**（自研 proot 层 + 预打包 rootfs） | `PACKAGING.md` + `ROOTFS.md` |
 > | 技术选型与取舍 | `docs/PLAN.md` |
 >
-> **两点更正**（本文与新文档冲突时以下面为准）：
+> **三点更正**（本文与新文档冲突时以下面为准）：
 > 1. **运行时底座没有改走 `:proot-engine`** —— 2026-10-01 一度决定集成 oonid/pr 的 `:proot-engine`，
 >    但**最终没有采用**，项目继续走"自研 proot 层 + 预打包 rootfs"（阶段 A~E-1 已落地）。
 >    `design/proot-engine-integration.md` 作为**未采用的备选路线**保留。**targetSdk 保持 34、用
@@ -20,6 +20,10 @@
 > 2. **本文多数章节已落地或已过时**：应用外壳（§架构中"MC 启动器 + 长按进 dsh"的描述）、
 >    proot 启动链、rootfs 准备（现成 rootfs 已就位，见 `ROOTFS.md`）、真机联调步骤（§8.5）。
 >    其中 **§8.5 的"补齐 proot/rootfs 大文件"那一步已无必要**（文件已就位），其余步骤仍可参考。
+> 3. **API Key 不再经启动器**（2026-10-07，0.1.5 起）：§4.2 的 `credentials.env` / `credentials.enc`、
+>    §4.3 的 `DshCredentials.kt`、§5.2 第 1/6 步的写入与抹除、§6 的整段 key 管理设计**全部作废** ——
+>    Key 完全由 dsh 自己管（在 dsh 界面里填），`DshCredentials.kt` 已删除，旧文件会在启动时自动清理。
+>    见 `RELEASES.md` 0.1.5 的"变更"与"升级须知"。
 
 ---
 
@@ -40,7 +44,7 @@
   安装假成功、界面退出即中断安装、主线程删 300MB 必 ANR、孤儿进程占端口、启动无超时、WebView
   无限转圈…）、6 处性能问题（日志 O(n²)、全量重绘…）、11 处可靠性/安全问题（明文 key 落盘、
   密钥进 argv、token 进日志…），并补齐交互层（新增实例设置页、日志入口、底座引导横幅、安装进度、
-  失败出口、热恢复）。**逐项清单见 第二轮加固报告**。
+  失败出口、热恢复）。
 - **核心架构**：Android App（借鉴 FCL 的下载/实例/前台服务范式）+ 自带 proot rootfs（跑 Node+dsh）
   + WebView（加载 dsh 自带的 Web UI）+ 云端 DeepSeek API。
 - **关键约束**：dsh 原生模块只发 glibc/musl（无 android/bionic），所以**必须 proot**，不能用 Termux
@@ -77,7 +81,8 @@
 ## 2. 关键技术事实（实地拉仓库 + PoC 验证）
 
 ### 2.1 dsh
-- 包名 `@deepseek-ai/dsh`；npm 上 22 个版本，dist-tags：`latest/next=0.1.5-rc.2`、`alpha=0.1.6-alpha.2`。
+- 包名 `@deepseek-ai/dsh`；npm 上 22 个版本，dist-tags：`latest/next=0.1.5-rc.2`、`alpha=0.1.6-alpha.2`
+  （⚠️ **过时**：2026-09 快照，当前版本列表以 `npm view` 实时查询为准）。
 - **engines 要求 Node `^22.19.0 || >=24.0.0`**（较新，rootfs 里要装够新的 Node）。
 - **原生模块只发 `linux-x64` / `linux-arm64`（glibc+musl 两份）/ `darwin`，无 android/bionic。**
   这条决定了必须 proot 跑标准 Linux（glibc 的 Ubuntu 或 musl 的 Alpine）。
@@ -163,16 +168,21 @@
     node_modules/        该实例的 dsh 及依赖（约 300MB）
     package.json
     home/                DSH_HOME（会话/配置/profile）
-    credentials.env      运行时明文 key（权限 600，用后抹除）
-    credentials.enc      长期密文 key（Keystore AES-GCM）
+    ~~credentials.env      运行时明文 key（权限 600，用后抹除）~~
+    ~~credentials.enc      长期密文 key（Keystore AES-GCM）~~
   instances.json         实例清单（DshInstances 持久化）
 <cacheDir>/dsh/tarballs/ 下载临时区
 ```
+> ⚠️ 上面 `credentials.*` 两行**已作废**（0.1.5 起 Key 归 dsh 管，见本文顶部更正 3）。
+> 另：rootfs 实际是 Debian 12（Ubuntu/Alpine 二选一是早期选型，已定案）。
 
 ### 4.3 已写的 Kotlin 文件（`com.dsh.core` 17 个 + `com.dsh.ui` 7 个 ≈ 4310 行）
 
-> 本节已按**第二轮加固**（2026-09-22）更新；逐项改动与原因见
-> 第二轮加固报告。
+> ⚠️ **过时（数量与清单）**：这是 2026-09-22 的快照，当前 `com/dsh/` 已涨到 **43 个文件**
+> （`core` 21 + `ui` 22，含 `shell/` 外壳与 `setup/` 前置页），且 `DshCredentials.kt` 已删除、
+> `DshDownloadViewModel.kt` 已搬到 `core`。当前清单见 `README.md`「当前状态」。
+
+> 本节已按**第二轮加固**（2026-09-22）更新。
 
 **数据/管理层**
 - `DshPaths.kt`（204）— 路径中心（rootfs/proot/scripts/npm-cache/logs/tmp/instances）+ 磁盘占用助手
@@ -192,7 +202,8 @@
 - `ProotProcessExecutor.kt`（197）— `ProotExecutor` 真机实现 + `ProotRunner`（长驻进程句柄/优雅终止）
 - `DshRuntime.kt`（487）— 长驻 `dsh web` 进程管理：**状态机 / 启动看门狗 / 端口回读 / 认领孤儿进程**
 - `DshRuntimeService.kt`（186）— 前台保活服务（specialUse、通知可停、进程退出自动收尾）
-- `DshCredentials.kt`（153）— API key 安全存取（Keystore 加密 + AAD + 状态区分；**明文不再落盘**）
+- `DshCredentials.kt`（153）— ⚠️ **已删除**（0.1.5 起 Key 归 dsh 管，见本文顶部更正 3）。
+  当时是：API key 安全存取（Keystore 加密 + AAD + 状态区分；**明文不再落盘**）
 - `DeepSeekApi.kt`（80）— **新增**：DeepSeek `/models` 密钥校验（设置页"测试连接"）
 
 **界面层（`com.dsh.ui`，7 个）**
@@ -209,7 +220,7 @@
 
 ### 4.4 脚本
 
-`dsh-launcher-poc/scripts/`（与 `FCL/src/main/assets/dsh/scripts/` 同源，脚本版本号 2）：
+早期 PoC 脚本目录（当时与 `FCL/src/main/assets/dsh/scripts/` 同源，脚本版本号 2；现脚本版本已到 7）：
 - `setup-node-dsh.sh` — rootfs 内备 Node（校验 ^22.19||>=24）+ 装指定版 dsh 到实例目录；
   打印 `STAGE=...` 供界面显示进度；共享 npm 缓存；装完硬校验
 - `start-dsh.sh` — rootfs 内起 `dsh web`；**主动探测就绪**并打印 `READY url=/port=`，
@@ -229,19 +240,26 @@
 4. 成功 → 实例状态置 READY，记录真实版本号。
 
 ### 5.2 启动并使用
-1. `DshCredentials.writeRuntimeCredential()` 把明文 key 写进 `credentials.env`（权限 600）。
+
+> ⚠️ **过时（凭据部分）**：第 1 步的写入 `credentials.env` 与第 6 步的抹除**已作废**
+> （0.1.5 起 Key 归 dsh 管，见本文顶部更正 3）。其余启动/保活/捕获 URL 流程仍然有效。
+
+1. ~~`DshCredentials.writeRuntimeCredential()` 把明文 key 写进 `credentials.env`（权限 600）。~~（已作废）
 2. `DshRuntime.start()` → proot 里跑 `start-dsh.sh` 起 `dsh web`。
 3. `DshRuntimeService`（前台服务）拉起，保活进程。
 4. `DshRuntime` 后台读输出，正则捕获 `http://127.0.0.1:<port>/?token=XXXX`。
 5. `DshWebViewActivity` 订阅到 URL 就绪 → `loadUrl()` → dsh 完整 Web UI 显示，可对话/编码。
-6. 停止：`DshRuntime.stop()` 杀进程 + `clearRuntimeCredential()` 抹明文 + 停前台服务。
+6. 停止：`DshRuntime.stop()` 杀进程 + 停前台服务。（原"抹明文"一步已作废，见本节顶部标注。）
 
 ---
 
 ## 6. 安全设计
 
-- **API key**：长期用 Android Keystore AES-GCM 加密落盘（只存密文 `credentials.enc`）；
-  启动前才解密写入 `credentials.env`（权限 600），停止后抹除。明文只在运行瞬间落受限文件。
+> ⚠️ **过时（API key 条）**：下面第一条"Keystore 加密落盘 + 启动前解密写入"**已作废**
+> （0.1.5 起 Key 归 dsh 管，见本文顶部更正 3）。其余条（回环绑定、命令注入防护、隔离告知、进程解耦）仍然有效。
+
+- ~~**API key**：长期用 Android Keystore AES-GCM 加密落盘（只存密文 `credentials.enc`）；
+  启动前才解密写入 `credentials.env`（权限 600），停止后抹除。明文只在运行瞬间落受限文件。~~（已作废）
 - **网络绑定**：`dsh web` 只绑 `127.0.0.1`，不暴露局域网。
 - **命令注入防护**：proot 命令用数组参数（非字符串拼接）；注入的环境变量走 key 白名单，
   挡掉 `LD_PRELOAD` 等危险变量。
@@ -272,7 +290,7 @@
 | registry 解析/排序 | 真实数据驱动真实 Kotlin | 13/13 断言通过 |
 | XML/资源静态一致性 | 脚本交叉校验 | 9 个 XML 良构；R.string/R.id/binding 属性/类名/drawable 全匹配 |
 
-**第二轮加固后的验证（2026-09-22，详见 第二轮加固报告 §8）**
+**第二轮加固后的验证（2026-09-22）**
 
 | 项 | 方法 | 结果 |
 |---|---|---|
@@ -295,6 +313,10 @@
 >    `aapt2` 改为 `exec qemu-x86_64-static <真二进制> "$@"`），清除已解出的 transforms 缓存后重编。
 
 ### 7.2 未验证 / 未做
+
+> ⚠️ **本节多数条目已过时**（写于 2026-09-22）：完整 APK（含 native + 新 assets）自 0.1.1 起每版都出；
+> proot 三件套在 `jniLibs/`、rootfs 在 `assets/dsh/rootfs/`，都已就位；真机端到端已于 0.1.6 点亮。
+> 保留原貌只作历史记录，当前状态看 `ROADMAP.md` 与 `TASKS.md`。
 - **含新 assets 的完整 APK 重新产出**：`DshBootstrap` 等新代码已编译通过、assets 已确认进入
   mergeAssets/dex 中间产物；但受沙箱限制（每次命令返回会 SIGTERM 掉 proot 内 gradle，
   重新打包的 dexBuilder 耗时超单次超时上限），未能再生成一次最终 APK 文件。现有 APK 为上一轮
@@ -306,7 +328,8 @@
   `PACKAGING.md` 补齐（proot 推荐走 jniLibs，rootfs 建议内置 Node）。
 - **proot 真机执行**：沙箱自身在 proot 内无法嵌套 proot，`ProotProcessExecutor`/`DshRuntime`
   的 proot 执行是真机接口约定（rootfs 内部流程已在等价环境验证）。
-- **运行期行为**：WebView 实际加载、前台服务保活、Keystore 加解密，均需真机。
+- **运行期行为**：WebView 实际加载、前台服务保活~~、Keystore 加解密~~，均需真机。
+  （~~Keystore~~ Key 归 dsh 管之后，"加解密"一项已不存在。）
 
 ---
 
@@ -322,14 +345,15 @@
    待打包方按 `PACKAGING.md` 补齐）。
 4. **真机联调**：补齐 proot 二进制（jniLibs）+ rootfs.tar.xz → 首启解压 → 下载页装 dsh → 启动 → WebView 出 UI。
 5. **打磨**
-   - ~~设置页：API key 录入 UI（接 `DshCredentials`）、模型选择、端口~~ ✅ 已完成
-     （第二轮：新增实例设置页，含"测试连接"与 Keystore 加密存取）
+   - ~~设置页：API key 录入 UI（接 `DshCredentials`）、模型选择、端口~~ ⚠️ **key 部分已作废**
+     （0.1.5 起 Key 归 dsh 管，见本文顶部更正 3；页面本身已并入实例详情临时页）
      > ⚠️ 2026-10-07 起该页面已并入**实例详情临时页**；API Key 行已移除（交给 dsh 自己的页面填）。
    - ~~实例重命名、体积清理入口、错误提示~~ ✅ 已完成（第二轮；重命名/体积在设置页，错误提示落到行内 + 对话框）
    - 仍未做：下载断点续传、Landlock 弱隔离提示、实例配置导出/导入。
-   - 若要做正式入口：在主界面加独立按钮/菜单项（现为长按"设置"的隐藏入口）。
-   - **第二轮的完整改动清单**：第二轮加固报告（10 个致命/严重 bug、
-     6 处性能、11 处可靠性/安全、交互层补齐、脚本信号协议重写）
+   - ~~若要做正式入口：在主界面加独立按钮/菜单项（现为长按"设置"的隐藏入口）。~~
+     ⚠️ **已作废**：M0 外壳改造后启动即进 dsh 主界面，不再有隐藏入口（见 `design/app-shell.md`）。
+   - **第二轮的完整改动**：10 个致命/严重 bug、6 处性能、11 处可靠性/安全、
+     交互层补齐、脚本信号协议重写（均为当时记录）
 
 ---
 
@@ -363,7 +387,8 @@ arm64 编译机需按 §7.1 处理 aapt2/cmake/ninja 的 x86_64→qemu 问题；
 
 ### 步骤 3：装机与入口
 1. `adb install -r <apk>` 安装到真机。
-2. 进入 dsh 启动器：主界面**长按左侧"设置"**菜单（隐藏入口）→ 打开 `DshInstancesActivity`。
+2. ~~进入 dsh 启动器：主界面**长按左侧"设置"**菜单（隐藏入口）→ 打开 `DshInstancesActivity`。~~
+   ⚠️ **已作废**：M0 后启动即进 dsh 外壳（三页：实例 / 版本 / 设置），无隐藏入口。
 
 ### 步骤 4：首启解压 + 装实例
 1. 点"下载" → 进 `DshDownloadActivity`，首次会触发 `DshBootstrap` 解压 proot/rootfs/scripts
@@ -373,8 +398,9 @@ arm64 编译机需按 §7.1 处理 aapt2/cmake/ninja 的 x86_64→qemu 问题；
 3. 装完实例状态变 READY。
 
 ### 步骤 5：配置 key 并启动
-1. 用 `DshCredentials.storeEncrypted()` 存入 DeepSeek API key（设置页 UI 待补，见 §8 第 5 步；
-   临调可先在代码里调一次或临时写入实例 `credentials.env`）。
+1. ~~用 `DshCredentials.storeEncrypted()` 存入 DeepSeek API key（设置页 UI 待补，见 §8 第 5 步；
+   临调可先在代码里调一次或临时写入实例 `credentials.env`）。~~
+   ⚠️ **已作废**：0.1.5 起 Key 在 **dsh 界面 → 设置 → 模型** 里填，启动器不再管（见本文顶部更正 3）。
 2. 实例列表点"启动" → `DshRuntime` 起 `dsh web`，前台服务保活 → 捕获 token URL →
    `DshWebViewActivity` 加载，出 dsh 完整 Web UI，即可对话/编码。
 
@@ -384,7 +410,8 @@ arm64 编译机需按 §7.1 处理 aapt2/cmake/ninja 的 x86_64→qemu 问题；
 - **Node 版本不符**：rootfs 内 `node -v` 必须 `^22.19||>=24`（`setup-node-dsh.sh` 会校验）。
 - **dsh web 起不来**：确认用 `node --expose-internals bin.js`（不能进 NODE_OPTIONS）；看 `DshLogsActivity`。
 - **WebView 401**：token→cookie 未生效；确认加载的是带 `?token=` 的完整 URL、WebView 允许 cookie。
-- **对话失败但 UI 正常**：多半是 key 未注入或额度问题；检查实例 `credentials.env` 的 `DEEPSEEK_API_KEY`。
+- **对话失败但 UI 正常**：多半是 key 未填/额度问题；Key 在 **dsh 界面 → 设置 → 模型** 里填
+  （启动器 0.1.5 起不再注入，旧的 `credentials.env` 检查法已作废）。
 - **后台被杀**：确认 `DshRuntimeService` 前台通知常驻、已授予通知权限。
 
 ---
@@ -456,5 +483,7 @@ arm64 编译机需按 §7.1 处理 aapt2/cmake/ninja 的 x86_64→qemu 问题；
 - **如何阅读**：想快速了解结论看 §0 TL;DR；想动手落地按 §8 路线图；关心可行性看 §7 已验证；
   帮忙写 Android 的同学重点看 §3 架构、§4 代码结构、§5 关键流程。
 - **重要提醒**：文中所有涉及测试用的 DeepSeek API key 均未写入任何文件或代码；若你在对话中提供过 key，
-  请到 DeepSeek 控制台轮换/删除。生产里 key 只走 `DshCredentials`（Keystore 加密），不要硬编码。
-- **当前边界**：逻辑层与运行时链路已用真实数据/真实 dsh 验证；尚未做 Android 编译与 UI 拼装（见 §7.2）。
+  请到 DeepSeek 控制台轮换/删除。~~生产里 key 只走 `DshCredentials`（Keystore 加密），不要硬编码。~~
+  ⚠️ **已作废**：0.1.5 起 Key 由 dsh 自己管，启动器不存不注（见本文顶部更正 3）。
+- **当前边界**：逻辑层与运行时链路已用真实数据/真实 dsh 验证；⚠️ **本条已过时** ——
+  真机端到端已于 0.1.6 点亮（见 `ROADMAP.md` M1 与 `TASKS.md` T6）。

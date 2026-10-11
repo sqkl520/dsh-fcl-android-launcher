@@ -3,11 +3,13 @@
 > ⚠️ 这份文档是**事后补写**的：最初的 rootfs 是**用临时命令**构建的，没有留下脚本。
 > 下面把当时验证过的步骤固化下来，并把每一步踩过的坑写在同一处。
 
-产物：`rootfs.tar.xz`（约 **300MB**），内含 **Debian 12 bookworm arm64** +
+产物：`rootfs.tar.xz`（瘦身后 **142MB**；最初约 300MB，见 §9 体积对照表），内含 **Debian 12 bookworm arm64** +
 **官方 Node v22.23.3** + **预装的 `@deepseek-ai/dsh`**，供 App 首启解压到 `filesDir/dsh/rootfs`。
 
-- 当前版本号：`debian-bookworm-arm64-node22-dsh-0.1.6-alpha.2`（见 `rootfs-build-info/rootfs.version`）
-- 当前校验和：`5d762c30b9117830518571bc4eeadf593182cc56d1f472024ba4490aa90682a7`
+- 当前版本号：`debian-bookworm-arm64-node22-dsh0.1.6-alpha.2-slim1`（见 `rootfs/version`；注意 `dsh` 与
+  版本号之间**没有**连字符 —— 沿用旧串，改了会触发全量重解压）
+- 当前校验和：`216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8ccea3f6`
+  （旧版 `5d762c30…` 仍可从 0.1.2 的 Release 附件里取回）
 - 落点：`FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（相对**源码仓根**；gitignore，不进 Git）
   以及 `FCL/src/main/assets/dsh/rootfs/version`（文本，一串版本标记）
 
@@ -125,7 +127,7 @@ chroot /tmp/v /bin/bash -lc '
 
 ```sh
 cp rootfs.tar.xz FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz
-echo -n 'debian-bookworm-arm64-node22-dsh-0.1.6-alpha.2' \
+echo -n 'debian-bookworm-arm64-node22-dsh0.1.6-alpha.2-slim1' \
   > FCL/src/main/assets/dsh/rootfs/version
 ```
 
