@@ -72,9 +72,19 @@ class ProotProcessExecutor(
         // process 提到 try 外，便于 finally 里做\"登记表\"清理（见下）
         var process: Process? = null
         return try {
+            // ★ K01 pid 捕获：先拍子进程快照、再 start —— start 后"新出现的子进程"就是我们这条 proot
+            //   （复用 ProotRunner 做法）。拿到 pid 才能发 SIGQUIT；proot 对 SIGTERM 装死，唯 SIGQUIT
+            //   会触发它的 kill_all_tracees 把 npm/node 一起带走。
+            val preExisting = ProotRunner.snapshotChildPids()
             val p = spec.toProcessBuilder().start()
             process = p
-            synchronized(this) { actives += Active(tag, p) }
+            // BL-001：从不往子进程 stdin 写东西，start 后立即关掉写端 —— 否则 FD 泄漏到整个任务生命周期；
+            //   且子进程若读 stdin 会看到 EOF 而不是永久阻塞。
+            runCatching { p.outputStream.close() }
+            // pid 解析复用 ProotRunner.Handle（反射 → /proc 兜底，真机走 /proc）；拿不到返回 -1。
+            val pid = runCatching { ProotRunner.Handle(p, preExisting).pid() }.getOrDefault(-1L)
+            val active = Active(tag, p, pid)
+            synchronized(this) { actives += active }
             // 跨线程可见：看门狗线程写、当前线程读，必须用 Atomic/volatile，否则可能读到旧值把超时误判为正常退出。
             val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
             val watchdog = if (timeoutMs > 0) {
@@ -82,21 +92,28 @@ class ProotProcessExecutor(
                     try {
                         if (!p.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
                             timedOut.set(true)
-                            onLine("[proot] 超时 ${timeoutMs / 1000}s，终止任务")
-                            p.destroy()
-                            Thread.sleep(3000)
-                            if (p.isAlive) p.destroyForcibly()
+                            // R-LOG：英文诊断行（原为中文）。
+                            runCatching { onLine("[proot] timeout after ${timeoutMs / 1000}s, terminating task") }
+                            // K01：先 SIGQUIT（proot 忽略 SIGTERM）让 proot 收掉 npm/node，再强杀兜底，超时不留孤儿。
+                            terminate(active)
                         }
                     } catch (_: InterruptedException) {
                     }
                 }.apply { isDaemon = true; name = "dsh-proot-watchdog"; start() }
             } else null
 
+            var callbackFailed = false
             BufferedReader(InputStreamReader(p.inputStream)).use { reader ->
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    onLine(line!!)
+                    // BL-002：单行回调抛异常不能毁掉整个读循环（那会停止抽干管道、让进程卡住变孤儿）。
+                    //         吞掉单行异常、继续读，把进程读到自然退出。
+                    if (runCatching { onLine(line!!) }.isFailure) callbackFailed = true
                 }
+            }
+            if (callbackFailed) {
+                // best-effort、英文（R-LOG）；再套 runCatching，免得还在抛的回调把收尾也带崩。
+                runCatching { onLine("[proot] output callback threw; drained remaining output and continued") }
             }
             val code = p.waitFor()
             // 让看门狗线程结束（进程已退出时它自然返回）
@@ -111,8 +128,13 @@ class ProotProcessExecutor(
             // 这里在 finally 里补一次清理，但**只清已经退出的** —— 还活着的进程必须留在表里，
             // 否则\"取消安装\"就再也找不到它（那才是真正的孤儿 npm）。
             val p = process
-            if (p != null && !runCatching { p.isAlive }.getOrDefault(false)) {
-                synchronized(this) { actives.removeAll { it.process === p } }
+            if (p != null) {
+                // 只清已退出的（见 [ProotTermination.shouldReapOnFinally]）：还活着的要留在表里，
+                // 否则后续 destroyActive 再也找不到它去杀，那才是真正的孤儿 npm。
+                val alive = runCatching { p.isAlive }.getOrDefault(false)
+                if (ProotTermination.shouldReapOnFinally(alive)) {
+                    synchronized(this) { actives.removeAll { it.process === p } }
+                }
             }
         }
     }
@@ -129,17 +151,100 @@ class ProotProcessExecutor(
         runCatching {
             val snapshot = synchronized(this) { actives.toList() }
             snapshot.forEach { a ->
-                val mine = tag == null || a.tag == tag
-                if (mine) runCatching { a.process.destroy() }
+                // tag 过滤语义不变（见 [ProotTermination.tagMatches]）：传 null 杀全部，传 instanceId 只杀它。
+                if (ProotTermination.tagMatches(tag, a.tag)) terminate(a)
             }
         }
     }
 
-    /** 当前活跃子进程（含归属标记） */
-    private class Active(val tag: String?, val process: Process)
+    /**
+     * 真正终止一条 proot：**SIGQUIT → 等 → destroyForcibly 兜底**。
+     *
+     * ★ K01：原来只发 `destroy()`（=SIGTERM），而 proot 的事件循环把 SIGTERM 装成 SIG_IGN —— 根本
+     * 杀不动它，npm/node 变孤儿继续占端口（EADDRINUSE 根因之一）。有 pid 就先 SIGQUIT（proot 唯一会
+     * 响应、且会顺手 kill 掉所有 tracee 的信号），等一会儿还活着再 destroyForcibly；拿不到 pid 时退化
+     * 为 `destroy()` → 等 → forcibly（与改动前同量级，只是少了 SIGQUIT 的收尾）。
+     *
+     * 非阻塞：首个信号就地发；"等待 + 强杀"的升级放到短命守护线程，避免阻塞调用方（取消/超时可能在主线程）。
+     */
+    private fun terminate(active: Active) {
+        val p = active.process
+        when (ProotTermination.firstStopSignal(active.pid)) {
+            // SIGQUIT 让 proot 走 kill_all_tracees：先把 npm/node 全 SIGKILL，再自己退出。
+            ProotTermination.StopSignal.SIGQUIT ->
+                runCatching { android.os.Process.sendSignal(active.pid.toInt(), ProotTermination.SIGQUIT) }
+            // 拿不到 pid：只剩 Process.destroy() 这个把手（对 proot 无效，但没有别的办法了）。
+            ProotTermination.StopSignal.DESTROY -> runCatching { p.destroy() }
+        }
+        Thread {
+            try {
+                val exited = runCatching { p.waitFor(ProotTermination.TERMINATION_GRACE_MS, TimeUnit.MILLISECONDS) }
+                    .getOrDefault(false)
+                if (!exited && ProotTermination.shouldForceKill(runCatching { p.isAlive }.getOrDefault(false))) {
+                    // 最后手段 destroyForcibly()=SIGKILL。proot 被 SIGKILL 时来不及 kill_all_tracees，
+                    // rootfs 内的 node 可能存活 —— 那条按 pid 文件收 node 的兜底在 DshRuntime（本文件管不到）。
+                    runCatching { p.destroyForcibly() }
+                }
+            } catch (_: InterruptedException) {
+            }
+        }.apply { isDaemon = true; name = "dsh-proot-kill"; start() }
+    }
+
+    /** 当前活跃子进程（含归属标记与 pid；pid<=0 表示没解析到，[terminate] 会退化为 destroy()） */
+    private class Active(val tag: String?, val process: Process, val pid: Long)
 
     /** 所有在跑的子进程（CopyOnWriteArrayList：读多写少，且要能在并发下安全遍历） */
     private val actives = java.util.concurrent.CopyOnWriteArrayList<Active>()
+}
+
+/**
+ * 纯逻辑的终止决策（无副作用），单独抽出来是为了**能单测**：真机信号
+ * (`android.os.Process.sendSignal`) 与 `Process.destroy()` 在 JVM 单测里没有真进程、或只是 android.jar
+ * 的桩，没法直接验；但"有 pid 该不该 SIGQUIT""tag 该不该匹配""finally 该不该清表""还活着才强杀"
+ * 这些**判断**是纯函数，可以钉成断言。见 ProotTerminationTest。
+ */
+object ProotTermination {
+    /**
+     * SIGQUIT (3)。proot 的事件循环对除 SIGQUIT/SIGILL/SIGABRT/SIGFPE/SIGSEGV 以外的信号全部
+     * SIG_IGN，所以 `Process.destroy()`（SIGTERM）对它完全无效。SIGQUIT 会驱动 proot 的
+     * kill_all_tracees()：先把每个 tracee（npm/node 整棵树）SIGKILL，再退出 —— 唯一能"父进程死时
+     * 把子进程一起带走"的信号。
+     */
+    const val SIGQUIT = 3
+
+    /** 首个停止信号发出后、升级到 destroyForcibly() 之前，留给它生效的宽限时间（毫秒）。 */
+    const val TERMINATION_GRACE_MS = 3000L
+
+    /** 首次停止用的机制。 */
+    enum class StopSignal { SIGQUIT, DESTROY }
+
+    /**
+     * 首个停止机制：解析到 proot pid 就发 SIGQUIT（proot 唯一会响应的信号）；拿不到 pid
+     * （pid<=0：桌面反射不可用、且 /proc 兜底也失败）就退化为 `Process.destroy()` —— 对 proot 无效，
+     * 但那是仅剩的把手。
+     */
+    @JvmStatic
+    fun firstStopSignal(pid: Long): StopSignal =
+        if (pid > 0) StopSignal.SIGQUIT else StopSignal.DESTROY
+
+    /**
+     * 终止请求的归属（tag 过滤契约）：请求 tag 为 null 杀所有在跑的子进程；指定 tag 只匹配登记在同一
+     * instanceId 下的那条（"取消 A 绝不能杀 B"）。
+     */
+    @JvmStatic
+    fun tagMatches(requested: String?, activeTag: String?): Boolean =
+        requested == null || activeTag == requested
+
+    /**
+     * finally 清表规则：只有真正退出的进程才从登记表摘掉。还活着的必须留着，否则后续 destroyActive
+     * 再也找不到它去杀 —— 那正是 npm/node 孤儿逃逸的方式。
+     */
+    @JvmStatic
+    fun shouldReapOnFinally(stillAlive: Boolean): Boolean = !stillAlive
+
+    /** 首个信号 + 宽限后仍存活，才升级到 destroyForcibly()。 */
+    @JvmStatic
+    fun shouldForceKill(stillAlive: Boolean): Boolean = stillAlive
 }
 
 /**
@@ -230,6 +335,9 @@ object ProotRunner {
          *
          * 缓存成功值：pid 不会变，而 `/proc` 兜底要扫 task 目录，不该每次调用都扫。
          * **不缓存 -1**：进程刚 start 时 `/proc` 目录可能还没建好，缓存了 -1 就永远拿不到了。
+         *
+         * BL-027：返回 -1 表示两条路都失败 —— 此时打一条英文诊断行（见 [logPidFailureOnce]），
+         * 每个 Handle 只打一次；返回值与解析逻辑不变。
          */
         @Volatile
         private var cachedPid: Long = 0
@@ -239,6 +347,9 @@ object ProotRunner {
             if (c > 0) return c
             val resolved = pidViaReflection() ?: pidViaProc()
             if (resolved > 0) cachedPid = resolved
+            // ★ 只加诊断、不改逻辑：-1 意味着反射与 /proc 两条路都死了（真机两次启动全 -1，
+            //   光看返回值分不清是 tids 扫不到、children 读不到、还是差集为空）。
+            if (resolved <= 0) logPidFailureOnce()
             return resolved
         }
 
@@ -251,6 +362,82 @@ object ProotRunner {
         private fun pidViaProc(): Long = runCatching {
             findChildPidFromProc(excludePids = preExistingChildren)
         }.getOrDefault(-1L)
+
+        /**
+         * BL-027：pid 解析失败的诊断开关（每个 Handle 只打一次）。
+         *
+         * 为什么要"只一次"而不是"每次 -1 都打"：[pid] 不缓存 -1（见上），调用方（DshRuntime 的启动/
+         * 停止/巡检）在 pid 拿不到期间会反复调它；每次都打会把一次启动的失败刷成几十上百行。
+         * 直接子进程集合在两次失败之间也基本不变 —— 第一条诊断已足够定位，后面的全是噪音。
+         *
+         * 本次打点是拍"失败当时"的现场：tids 数、children 是否存在、可读几个、
+         * 差集结果。长驻路径的 `prootPid<=0 → 跳过 verify`（见 DshRuntime.verifyProotGone）
+         * 逻辑不变。
+         */
+        private val pidFailureLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /**
+         * 在 pid 解析失败时打一条英文诊断行（R-LOG），包在 runCatching 里：诊断本身不许抛异常，
+         * 否则"为失败加的诊断"反而把调用方（启动/停止路径）带崩。
+         */
+        private fun logPidFailureOnce() {
+            if (!pidFailureLogged.compareAndSet(false, true)) return
+            runCatching { DshLogBus.append("[proot] " + describePidFailure()) }
+        }
+
+        /**
+         * 拼出 pid 解析失败的现场：tids 数、`children` 文件是否存在、可读几个、读到什么、
+         * 当前子进程集合与启动前快照的差集结果 —— 正好对应"三个死因"（见 BL-027）。
+         *
+         * ★ 只读诊断，不参与解析：真正的解析仍是 [pidViaReflection]/[pidViaProc] 那两条路，
+         * 这里只是把"失败当时"的 /proc 现场拍下来。输出英文（R-LOG），写进全局流。
+         *
+         * 输出形状示例（成功时根本不会打）：
+         * `pid resolution failed (reflection + /proc both failed); tids=12,
+         *  childrenFilesPresent=12, readable=12; rawChildren=[1234 1235]; currentChildren=2,
+         *  preExisting=1, newAfterDiff=0`
+         *
+         * 怎么读它：
+         * - `cannot list …/self/task` → task 目录本身扫不到（SELinux 挡或内核无该节点）；
+         * - `childrenFilesPresent=0` → 内核无 CONFIG_PROC_CHILDREN（"Android 内核有"只是旧注释的假设）；
+         * - `readable=0` → 文件在但读不到（权限）；
+         * - `rawChildren=[]` → 读到了但全是空（刚 start 的 proot 还没成为我们的子进程，或已退出）；
+         * - `newAfterDiff=0` → 差集为空（快照拍晚了把 proot 自己含进去，或它已经死了）。
+         *
+         * @param procRoot `/proc` 根。默认真机路径；做成参数只是为了将来单测可喂假目录。
+         */
+        private fun describePidFailure(procRoot: String = "/proc"): String {
+            val selfTask = File(procRoot, "self/task")
+            val entries = runCatching { selfTask.listFiles() }.getOrNull()
+            if (entries == null) {
+                val exists = runCatching { selfTask.exists() }.getOrDefault(false)
+                return "pid resolution failed (reflection + /proc both failed); " +
+                    "cannot list $procRoot/self/task (exists=$exists); " +
+                    "preExistingSnapshotSize=${preExistingChildren.size}"
+            }
+            val tids = entries.mapNotNull { it.name.toLongOrNull() }
+            var childrenFiles = 0
+            var readable = 0
+            // 各 tid 的 children 内容通常相同（LinkedHashSet 去重），只留前几个样本，行长可控。
+            val raws = LinkedHashSet<String>()
+            val children = LinkedHashSet<Long>()
+            for (tid in tids) {
+                val f = File(selfTask, "$tid/children")
+                if (runCatching { f.exists() }.getOrDefault(false)) childrenFiles++
+                val text = runCatching { f.readText() }.getOrNull() ?: continue
+                readable++
+                val trimmed = text.trim()
+                if (trimmed.isNotEmpty() && raws.size < 4) raws.add(trimmed.take(48))
+                text.split(' ', '\n', '\t').mapNotNullTo(children) { it.trim().toLongOrNull() }
+            }
+            // 差集口径与 [findChildPidFromProc] 一致（>0 且不在启动前快照里），只计数、不返回 pid。
+            val fresh = children.count { it > 0 && it !in preExistingChildren }
+            return "pid resolution failed (reflection + /proc both failed); " +
+                "tids=${tids.size}, childrenFilesPresent=$childrenFiles, readable=$readable; " +
+                "rawChildren=[${raws.joinToString("|")}]; " +
+                "currentChildren=${children.size}, " +
+                "preExistingSnapshotSize=${preExistingChildren.size}, newAfterDiff=$fresh"
+        }
 
         fun isAlive(): Boolean = runCatching { process.isAlive }.getOrDefault(false)
 

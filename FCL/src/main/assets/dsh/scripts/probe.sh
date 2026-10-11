@@ -133,8 +133,11 @@ for (const p of candidates) {
     dlOk = true; dlWhich = p.split('/node_modules/')[1] || p;
     break;
   } catch (e) {
+    // Record this candidate's failure but keep trying the rest: the first candidate may be
+    // absent-but-listed or built for a different ABI, while a later one loads fine. Breaking
+    // here reported a false FAIL whenever the first candidate existed yet failed to dlopen (K35).
     dlWhich = (p.split('/node_modules/')[1] || p) + ' failed to load: ' + String(e.message).slice(0, 60);
-    break;
+    continue;
   }
 }
 reportCritical('native.dlopen', dlOk, dlWhich || 'no testable .node found');

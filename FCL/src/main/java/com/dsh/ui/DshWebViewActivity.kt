@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
+import android.view.ViewTreeObserver
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -14,10 +15,12 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ScrollView
 import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
 import com.dsh.core.DshRuntime
 import com.dsh.fcl.androidlauncher.R
@@ -25,6 +28,8 @@ import com.tungsten.fcllibrary.component.FCLActivity
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.view.FCLProgressBar
 import com.tungsten.fcllibrary.component.view.FCLTextView
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 
 /**
@@ -62,6 +67,42 @@ class DshWebViewActivity : FCLActivity() {
     private var loadedUrl: String? = null
     private var retriedWithToken = false
 
+    /**
+     * 日志覆盖层正在展示的实例 id（`null` = App 级全局流）。
+     *
+     * BL-025：FCL 原版（`LogWindow`）的运行期日志是**同页全屏覆盖层**，只切显隐、
+     * 不出 Activity、不碰返回栈；之前的做法是 `startActivity` 带 `CLEAR_TOP` 去外壳，
+     * 把返回栈上的 WebView 销毁成了"单程票"。这里照 FCL 做：覆盖层默认 gone，
+     * 日志按钮只打开本页内的覆盖层。
+     *
+     * 订阅源在 [openLogOverlay] 里打开时**固定一次**（理由同 `DshLogsUI`：两条流的
+     * revision 各自独立递增，中途换流会让去重错乱导致不刷新）。
+     */
+    private var logOverlayInstanceId: String? = null
+
+    /** 覆盖层打开期间的日志订阅。只在覆盖层可见时收集：关闭就取消，不浪费刷新。 */
+    private var logOverlayJob: Job? = null
+
+    /** 覆盖层上次渲染的快照 revision（去重：同 revision 不重建文本） */
+    private var logOverlayLastRevision = -1L
+
+    /**
+     * 覆盖层日志刷新节流：每 500ms 最多重建一次文本。
+     *
+     * 总线本身 200ms 一次 flush；覆盖层是只读扫一眼，不需要跟满速，
+     * 慢半拍换主线程开销减半 —— 重建+着色是 O(行数) 的工作。
+     */
+    private val LOG_OVERLAY_SAMPLE_MS = 500L
+
+    /**
+     * 覆盖层单次渲染的最大行数（超出只显示末尾）。
+     *
+     * 日志页（`DshLogsUI`）用 1500 行 + 级别着色，但那是常驻页面；
+     * 覆盖层只是"扫一眼出错原因"，500 行够从尾巴往回翻好几屏，
+     * 且纯文本拼接比重建 1500 个 span 便宜得多。
+     */
+    private val LOG_OVERLAY_MAX_LINES = 500
+
     /** 主 frame 当前页面是否处于\"加载失败\"状态（用 onPageStarted 与错误回调维护）。
      *  onPageFinished 无条件 showWeb() 会把 onReceivedError 刚显示的错误面板盖掉
      *  （WebView 对失败页面也会回调 onPageFinished），导致用户看到空白页而非错误信息。 */
@@ -80,7 +121,15 @@ class DshWebViewActivity : FCLActivity() {
             render(DshRuntime.state.value)
         }
         findViewById<View>(R.id.btn_logs).setOnClickListener {
-            // 跳到"这个实例的日志"。
+            // BL-025：默认行为**不离开本页** —— 打开同页全屏日志覆盖层
+            // （FCL 的 LogWindow 做法：只切显隐，不出 Activity、不碰返回栈）。
+            // 之前是 startActivity(CLEAR_TOP) 去外壳看日志，栈上的 WebView 被销毁，
+            // 点"日志"等于一张回不去 dsh 页的单程票。
+            openLogOverlay()
+        }
+        findViewById<View>(R.id.btn_log_overlay_close).setOnClickListener { closeLogOverlay() }
+        findViewById<View>(R.id.btn_log_overlay_full).setOnClickListener {
+            // "去外壳看完整日志"：保留的外壳跳转出口。
             //
             // ★ 为什么不再用 `intentForTab(TAB_LOGS)`：外壳**已经没有"日志"这个 tab** ——
             //   日志按实例归属收进了实例详情页（App 级那份在「设置」里）。
@@ -99,6 +148,10 @@ class DshWebViewActivity : FCLActivity() {
                     this, com.dsh.ui.shell.DshShellHost.TAB_SETTINGS
                 )
             }
+            // 先关覆盖层再跳：目标 Intent 带 CLEAR_TOP，WebView 会被销毁；
+            // 覆盖层的订阅在 onStop 里本来也会被取消，这里显式关掉只是为了
+            // "用户从最近任务切回来时"不残留一个开着的覆盖层（Activity 若被复用）。
+            closeLogOverlay()
             startActivity(intent)
         }
         findViewById<View>(R.id.btn_stop).setOnClickListener {
@@ -109,7 +162,15 @@ class DshWebViewActivity : FCLActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else finish()
+                // BL-025：覆盖层开着时返回键先关覆盖层，再走原返回逻辑。
+                // FCL 的 LogWindow 也是"先收日志层"（见 GameMenu 对 log_window 的显隐切换）。
+                if (findViewById<View>(R.id.log_overlay).visibility == View.VISIBLE) {
+                    closeLogOverlay()
+                } else if (webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    finish()
+                }
             }
         })
 
@@ -216,7 +277,7 @@ class DshWebViewActivity : FCLActivity() {
                             retriedWithToken = true
                             loadedUrl = tokenUrl
                             pageFailed = false
-                            webView.loadUrl(tokenUrl)
+                            loadUrlChecked(tokenUrl)
                         } else {
                             pageFailed = true
                             showError(getString(R.string.dsh_webview_auth_failed))
@@ -265,6 +326,111 @@ class DshWebViewActivity : FCLActivity() {
             .show()
     }
 
+    /**
+     * 打开同页日志覆盖层（BL-025 修复本体）。
+     *
+     * 内容为**当前运行实例**的日志（`DshLogBus.snapshotFor(id)` 只读订阅）；
+     * 拿不到实例 id 时（实例已停但 WebView 还在）回落到全局流 ——
+     * 此时"这个实例的日志"没有指向，但"看出什么事了"的意图还在，
+     * App 级时间线是唯一说得通的落点（与 [logWeb] 的回落同理）。
+     *
+     * 只读：覆盖层不提供清空/复制 —— 要改日志去外壳（"去外壳看完整日志"按钮）。
+     * "首开即订阅、关闭即取消"：覆盖层关着时不收流、不重建文本。
+     */
+    private fun openLogOverlay() {
+        val id = DshRuntime.runningInstanceId()
+        logOverlayInstanceId = id
+        logOverlayLastRevision = -1L
+        findViewById<FCLTextView>(R.id.log_overlay_scope).text = overlayScopeLabel(id)
+        findViewById<View>(R.id.log_overlay).visibility = View.VISIBLE
+
+        // 先画一帧当前快照，避免"打开后半秒内是空的"（sample 会吞掉首帧之前的发出）
+        renderLogOverlay(
+            if (id == null) DshLogBus.snapshot.value else DshLogBus.snapshotFor(id).value,
+            forceScroll = true
+        )
+
+        logOverlayJob?.cancel()
+        val source = if (id == null) DshLogBus.snapshot else DshLogBus.snapshotFor(id)
+        logOverlayJob = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // 节流：总线 200ms flush 一次，覆盖层 500ms 取最新一帧即可
+                source.sample(LOG_OVERLAY_SAMPLE_MS).collect { snap ->
+                    // 覆盖层已关（例如"去外壳看完整日志"先关层再跳）：
+                    // repeatOnLifecycle 在 STOPPED 前不会停，靠显隐再挡一次
+                    if (findViewById<View>(R.id.log_overlay).visibility != View.VISIBLE) return@collect
+                    if (snap.revision == logOverlayLastRevision) return@collect
+                    renderLogOverlay(snap)
+                }
+            }
+        }
+    }
+
+    /** 关闭覆盖层并取消订阅（幂等）。 */
+    private fun closeLogOverlay() {
+        findViewById<View>(R.id.log_overlay).visibility = View.GONE
+        logOverlayJob?.cancel()
+        logOverlayJob = null
+    }
+
+    private fun overlayScopeLabel(instanceId: String?): String = if (instanceId == null) {
+        getString(R.string.dsh_logs_scope_app)
+    } else {
+        val name = DshInstances.byId(instanceId)?.name ?: instanceId
+        getString(R.string.dsh_logs_scope_instance, name)
+    }
+
+    /**
+     * 覆盖层渲染：取末尾 [LOG_OVERLAY_MAX_LINES] 行拼成纯文本。
+     *
+     * 不做日志页那套级别着色（逐行正则 + span）：覆盖层只是"扫一眼出错原因"，
+     * 纯文本一次 `setText` 的开销与 2Hz 节流刷新也匹配得上。
+     *
+     * 滚动策略照抄 `DshLogsUI.render` 的简化版：**只在贴底时跟随**。
+     * `atBottom` 必须在 `setText` **之前**取 —— 内容从顶部裁掉后旧内容整体上移，
+     * 赋值之后再问会把"翻到旧内容底部"误判成"贴底"，于是每来一行都把用户往下拽。
+     * （完整论证见 `DshLogsUI.render` 的注释。）
+     */
+    private fun renderLogOverlay(
+        snap: DshLogBus.Snapshot,
+        forceScroll: Boolean = false
+    ) {
+        logOverlayLastRevision = snap.revision
+        val scroll = findViewById<ScrollView>(R.id.log_overlay_scroll)
+        val text = findViewById<FCLTextView>(R.id.log_overlay_text)
+        val atBottom = !scroll.canScrollVertically(1)
+
+        val lines = snap.lines
+        val shown = if (lines.size > LOG_OVERLAY_MAX_LINES) lines.takeLast(LOG_OVERLAY_MAX_LINES) else lines
+        text.text = shown.joinToString("\n")
+        findViewById<FCLTextView>(R.id.log_overlay_info).text =
+            getString(R.string.dsh_logs_info, shown.size, lines.size)
+
+        if (forceScroll || atBottom) pinLogOverlayToBottom(scroll, text)
+    }
+
+    /**
+     * 钉底：等这一帧测量/布局落定后再钉（照抄 `DshLogsUI.pinToBottomAfterLayout`）。
+     *
+     * 不能直接 `post { fullScroll }`：`post` 与"新文本测量完成"之间没有先后关系，
+     * 赶在测量之前执行会按旧高度算出 scrollY、随后被布局 clamp —— 先跳一下再落位。
+     * 挂在 `OnPreDrawListener` 上（测量→布局→预绘制→绘制），一次到位。
+     * 一次性：回调里先注销自己，否则用户拖拽的每一帧都会被拉回底部。
+     */
+    private fun pinLogOverlayToBottom(scroll: ScrollView, text: FCLTextView) {
+        val observer = scroll.viewTreeObserver
+        val listener = object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                runCatching { scroll.viewTreeObserver.removeOnPreDrawListener(this) }
+                // 直接 scrollTo 而非 fullScroll：后者可能启动 250ms 平滑滚动，
+                // "贴底跟随"要的是一次到位的静态位置；值给大了 ScrollView 内部会夹紧
+                scroll.scrollTo(0, text.bottom)
+                return true
+            }
+        }
+        observer.addOnPreDrawListener(listener)
+    }
+
     /** 根据运行时状态决定界面：加载 / 等待 / 失败 */
     private fun render(st: DshRuntime.State) {
         when (st) {
@@ -274,12 +440,12 @@ class DshWebViewActivity : FCLActivity() {
                     url != null && loadedUrl != url -> {
                         loadedUrl = url
                         showWeb()
-                        webView.loadUrl(url)
+                        loadUrlChecked(url)
                     }
                     url != null && webView.url == null -> {
                         // WebView 尚未加载（例如从后台恢复）
                         showWeb()
-                        webView.loadUrl(url)
+                        loadUrlChecked(url)
                     }
                     url == null -> loadBestUrl(st)
                     else -> showWeb()
@@ -310,7 +476,16 @@ class DshWebViewActivity : FCLActivity() {
             logWeb("[web] 未捕获到 token URL，尝试用已保存的 cookie 访问 $url")
         }
         showWeb()
-        webView.loadUrl(url)
+        loadUrlChecked(url)
+    }
+
+    /**
+     * 带 WebView 版本门禁的加载（R1b 接线，编排集成）。
+     * 版本过旧时弹对话框：用户选"仍要继续"才真正 load，选"外部浏览器"则跳系统浏览器。
+     * `loadedUrl` 标记照旧由调用方先置，对话框只是延迟实际 load。
+     */
+    private fun loadUrlChecked(url: String) {
+        DshWebViewCompat.ensureSupported(this, url) { webView.loadUrl(url) }
     }
 
     private fun isLoopback(url: String?): Boolean {

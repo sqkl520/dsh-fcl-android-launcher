@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -292,6 +293,8 @@ object DshInstances {
             // ★ 保持全局：同上，删除结果是"实例管理"这件事的结论，不是该实例运行期间的输出。
             //   实例页此刻正在被关掉，日志文件也已被删，写实例流没有任何接收方。
             DshLogBus.append("[instances] 删除实例 ${inst?.name ?: id} 目录: ${if (ok) "完成" else "有文件残留"}")
+            // 实例已删：回收它的日志流（T-A3 提供 removeStream，缝合点由编排在此接线）。
+            DshLogBus.removeStream(id)
             _deleting.update { it - id }
             // ★ 终态上报要在 `_deleting` 移除**之后**，但要注意它不能改写"删除是否成功"的判定 ——
             //   失败（有文件残留）在**任务语义**里算 DONE 还是 FAILED？这里选 DONE + 把残留写进 stage：
@@ -334,12 +337,33 @@ object DshInstances {
         val selectedId: String?
     )
 
-    private fun load() {
-        val f = manifestFile()
+    private fun load() = loadFrom(manifestFile())
+
+    /**
+     * Load the manifest from [f]. The production entry point is the no-arg [load] (which uses
+     * [manifestFile]); this file-parameterized form is the testable seam.
+     *
+     * K12: an **empty or whitespace-only** file is treated as an empty manifest, NOT corruption.
+     * The old code fed "" straight to Gson, got back null, dereferenced it (NPE), and that NPE was
+     * caught by the corrupt branch below — so a brand-new / half-written instances.json was
+     * mis-flagged "corrupt", renamed to .corrupt-*, and the whole list was wiped. A *missing* file
+     * was already treated as empty; an empty file must behave the same.
+     */
+    fun loadFrom(f: File) {
         if (!f.exists()) return
+        val text = f.readText()
+        if (text.isBlank()) {
+            // Empty / whitespace-only = empty manifest. Nothing to parse, nothing to back up.
+            _instances.value = emptyList()
+            _selectedId.value = null
+            return
+        }
         runCatching {
             val type = object : TypeToken<Manifest>() {}.type
-            val m: Manifest = gson.fromJson(f.readText(), type)
+            // Blank is handled above; a non-blank body that still parses to null (e.g. the literal
+            // "null") is genuinely malformed, so fail into the corrupt branch rather than NPE.
+            val m: Manifest = gson.fromJson(text, type)
+                ?: throw IllegalStateException("manifest parsed to null")
             val list = m.instances ?: emptyList()
             _instances.value = list
             _selectedId.value = m.selectedId?.takeIf { id -> list.any { it.id == id } }
@@ -348,7 +372,7 @@ object DshInstances {
             // 清单坏了不要静默丢：另存一份便于人工找回，并把清单重置为空
             // ★ 保持全局：清单（instances.json）是**所有实例**的索引，不是任何一个实例的日志。
             //   而且此刻 _instances 已被清空，"这条属于哪个实例"根本无从判断（也不该猜）。
-            DshLogBus.append("[instances] instances.json 解析失败，已另存备份：${e.message}")
+            DshLogBus.append("[instances] failed to parse instances.json, kept a backup: ${e.message}")
             runCatching { f.renameTo(File(f.parentFile, "${f.name}.corrupt-${System.currentTimeMillis()}")) }
             _instances.value = emptyList()
             _selectedId.value = null
@@ -364,7 +388,7 @@ object DshInstances {
                 runCatching { writeNow() }.onFailure {
                     // ★ 保持全局：写清单失败影响**所有**实例（下次启动整份清单可能读不出来），
                     //   不是某个实例的运行问题 —— 归到任一实例都会让别处看不到这个 App 级故障。
-                    DshLogBus.append("[instances] 写入 instances.json 失败：${it.message}")
+                    DshLogBus.append("[instances] failed to write instances.json: ${it.message}")
                 }
             }
         }
@@ -372,13 +396,29 @@ object DshInstances {
 
     /** 同步写（测试用；生产路径请用 [saveAsync]） */
     internal fun writeNow() {
-        val f = manifestFile()
+        writeManifest(manifestFile(), gson.toJson(Manifest(_instances.value, _selectedId.value)))
+    }
+
+    /**
+     * Atomically replace [f] with [json]: write a sibling `.tmp` first, then rename it over [f]
+     * (an atomic replace on the Android/Linux filesystem the app runs on). Testable seam.
+     *
+     * K12: if the rename fails we **must not** fall back to a direct in-place overwrite of [f] (the
+     * old behavior). A crash midway through a non-atomic overwrite leaves instances.json
+     * half-written and unreadable — losing every instance record — which is exactly what this
+     * tmp+rename dance exists to prevent, and it would strike precisely when the system is already
+     * under stress (why the rename failed). Instead we keep the `.tmp` file (it holds the complete,
+     * valid new manifest, recoverable by hand) and throw so the caller surfaces the failure
+     * ([saveAsync] logs it in English).
+     */
+    fun writeManifest(f: File, json: String) {
         val tmp = File(f.parentFile, "${f.name}.tmp")
-        tmp.writeText(gson.toJson(Manifest(_instances.value, _selectedId.value)))
+        tmp.writeText(json)
         if (!tmp.renameTo(f)) {
-            // rename 失败（少见）：退化为直接覆盖写
-            f.writeText(tmp.readText())
-            tmp.delete()
+            throw IOException(
+                "atomic rename failed: ${tmp.name} -> ${f.name}; kept ${tmp.name} for recovery " +
+                    "(refusing to overwrite ${f.name} non-atomically)"
+            )
         }
     }
 }
