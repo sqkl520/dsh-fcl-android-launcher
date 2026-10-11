@@ -149,7 +149,7 @@ Windows 上直接跑不了这些 `.sh`，用上面的 Gradle 命令即可。
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 编译被 SIGTERM 打断 | 编译要 3~9 分钟，超过调用时限 | **直接重跑**，Gradle 增量会跳过已完成任务 |
-| 打包阶段超时 | 300MB `rootfs.tar.xz` 若被 aapt 二次压缩会极慢 | `build.gradle.kts` 已 `noCompress += "xz"`；仍超时就重跑 |
+| 打包阶段超时 | 142MB `rootfs.tar.xz` 若被 aapt 二次压缩会极慢 | `build.gradle.kts` 已 `noCompress += "xz"`；仍超时就重跑 |
 | Android 资源文件报 `InvalidFileException` | 从不区分大小写的文件系统（Windows）拷来的资源文件名重复 | 检查冲突的资源名 |
 | `~/.ssh` 不跨会话持久 | 部分容器/沙箱环境的特性 | 密钥丢了要重新生成并把公钥加到 GitHub |
 

@@ -1,5 +1,7 @@
 # 任务清单（待办）
 
+> **本文档会公开发布** —— 只写"要做什么/验什么"；本机路径、内部工作流这类细节不写。
+
 > 放**已明确要做、但未做**的事项。做完从本清单移除。
 
 ## 已完成（保留索引，便于回溯）
@@ -30,49 +32,50 @@
 - 教训：`git grep bg_item` 会命中 `bg_item_rounded`（子串误匹配），查资源引用要加边界
 
 ### T5. 插件管理子页（等插件体系确定）
-- 设置页目前 2 个子页（启动器设置 | 关于）；FCL 是 4 个。插件体系定下来后补第三个子页，
-  并可考虑撤掉外壳菜单里的「管理」占位 tab
+- 设置页目前 3 个子页（启动器设置 | 日志 | 关于）；FCL 是 4 个。插件体系定下来后补一个子页
 
 ## P2 · 运行时与稳定性
 
-### T6. 真机端到端验收（关键）
+### T6. 真机端到端验收（关键）—— **0.1.6 已点亮；fix1 验证中**
 
-> **验哪个包**：`0.1.3-SNAPSHOT`（2026-10-06 出包，**瘦身 rootfs**）。
-> 0.1.2 那一份（旧 rootfs，sha256 `8abaa3ea…`）仍在
-> <https://github.com/sqkl520/dsh-fcl-android-launcher/releases/tag/v0.1.2-SNAPSHOT>，
-> **可以两个都装来对比**：0.1.2 验"底座能不能跑通"，0.1.3 额外验"瘦身有没有删坏东西"。
+> **当前验证包**：`0.1.6-SNAPSHOT-fix1`（`v0.1.6-SNAPSHOT-fix1`，code 107）。
+> 无后缀的 `v0.1.6-SNAPSHOT`（code 106）是修之前的对照基准，不要装它。
+> 历史对照：0.1.2（旧 rootfs，`8abaa3ea…`）与 0.1.3 起（瘦身 rootfs，
+> `216cd9ef…`）的包仍在 Releases 页，可用于"瘦身有没有删坏东西"的对比。
+>
+> **0.1.6 已验证**（第三轮反馈前的真机日志证实）：停止杀 node（code=137）、
+> PORT=0 真实端口回填（46501）、安装链（554M 依赖）均生效；**dsh 在真机成功打开**。
 
-- **DNS 修复是否真的生效**（`npm install` 能否成功装 0.2.x）
-- 首次解压 rootfs 的耗时与成功率（0.1.3 只需 **~1.5GB** 空闲，比 0.1.2 的 ≥2GB 宽松）
-- **（0.1.3 新增）瘦身有没有删坏东西**：`probe.sh` 的 `node` / `npm` / `dsh` 三项必须全过、
-  `dsh web` 能起服务、`npm install` 能跑（后者依赖 npm 内部的 node-gyp 链）
-- 前置页 / 首页任务区 / 实例详情页 / 右面板按钮的实际观感与行为
-- proot 内 `dsh web` 能否起来、WebView token/cookie、息屏保活、失败恢复
+- **DNS 修复是否真的生效**（`npm install` 能否成功装 0.2.x）—— 0.1.6 已验证
+- 首次解压 rootfs 的耗时与成功率（瘦身后约 862MB 解压 + 一实例约 523MB；装机前可用空间 ≥1.7GB）—— 0.1.6 已验证
+- **瘦身有没有删坏东西**：`probe.sh` 的 `node` / `npm` / `dsh` 三项必须全过、
+  `dsh web` 能起服务、`npm install` 能跑（后者依赖 npm 内部的 node-gyp 链）—— 0.1.6 已验证
+- 前置页 / 首页任务区 / 实例详情页 / 右面板按钮的实际观感与行为 —— **fix1 待验**（任务区配色/文案、按钮反馈有改动）
+- proot 内 `dsh web` 能否起来、WebView token/cookie、息屏保活、失败恢复 —— **fix1 待验**
+- **fix1 新增必验**（第三轮修复的 9 条用户可见项，见发布说明 `fix1` 段）：
+  日志覆盖层回得去 / WebView 过旧检测 + 外部浏览器逃生 / 刷新不消失且 ≤10s /
+  阶梯进度条 / 安装中按钮 / 任务块文案配色 / 按压反馈 / 版本副标题口径 / 日志页不被岛盖住
 
-#### 怎么连设备 / 怎么抓日志（T-A5 工具包 · 见 `tools/`）
+#### 怎么连设备 / 怎么抓日志
 
-> 工具包：`tools/ondevice.md`（装机/抓日志全手册）、`tools/t6-checklist.md`（批 A 真机门逐条打勾）、
-> `tools/bebug-template.md`（日志记录模板）、`tools/adb.sh` + `tools/adb.cmd`（adb 绝对路径包装）。
 > 装机**主路径免 adb**（手机浏览器下 Release 附件直接装）；adb 链路是「反复装 + 抓详细日志」的可选增强。
+> 下面命令里的 `adb` 指 Android SDK 的 `platform-tools/adb`（Windows 上是 `adb.exe`）。
 
 - **包名**（装后，fordebug 变体）：`com.dsh.fcl.androidlauncher.debug`
   （`applicationId` + `applicationIdSuffix=".debug"`）。
-- **adb 不在 PATH**：在 `D:\Android\Sdk\platform-tools\adb.exe`，一律走包装：
-  - Git Bash：`sh tools/adb.sh <参数>`（例 `sh tools/adb.sh devices`）
-  - cmd：`tools\adb.cmd <参数>`　（参数原样透传给真实 adb）
-- **连设备**：`sh tools/adb.sh devices` → 看到 `<序列号>\tdevice`；`unauthorized` 则在手机上允许 USB 调试。
-- **装机（adb 路）**：`sh tools/adb.sh install -r output/dsh-fcl-android-launcher-<ver>-arm64.apk` → `Success`；
-  签名/版本不兼容先 `uninstall com.dsh.fcl.androidlauncher.debug` 再装（会触发重解压）。
-- **抓日志**（证据主次：应用 DshLogBus 落盘为主，logcat 抓崩溃为辅）：
-  - 落盘运行日志：`sh tools/adb.sh shell run-as com.dsh.fcl.androidlauncher.debug cat files/dsh/logs/runtime.log`
+- **连设备**：`adb devices` → 看到 `<序列号>\tdevice`；`unauthorized` 则在手机上允许 USB 调试。
+- **装机（adb 路）**：`adb install -r dsh-fcl-android-launcher-<ver>-arm64.apk` → `Success`；
+  签名/版本不兼容先 `adb uninstall com.dsh.fcl.androidlauncher.debug` 再装（会触发重解压）。
+- **抓日志**（证据主次：应用落盘日志为主，logcat 抓崩溃为辅）：
+  - 落盘运行日志：`adb shell run-as com.dsh.fcl.androidlauncher.debug cat files/dsh/logs/runtime.log`
   - 实例日志：`... cat files/dsh/logs/instance-<id>.log`（路径见 `DshPaths.kt` / `DshLogBus.kt`）
-  - logcat：先 `sh tools/adb.sh logcat -c` 清缓冲，再 `sh tools/adb.sh logcat --pid=$(sh tools/adb.sh shell pidof -s com.dsh.fcl.androidlauncher.debug)`；
+  - logcat：先 `adb logcat -c` 清缓冲，再 `adb logcat --pid=$(adb shell pidof -s com.dsh.fcl.androidlauncher.debug)`；
     崩溃用 `logcat -d AndroidRuntime:E CrashReporter:E '*:S'`。
   - 应用内：设置 → 运行时自检（跑 `probe.sh`，末行 `dsh-probe-ok`）；设置/实例详情 → 日志。
-- **设备空间**：跑前 `sh tools/adb.sh shell df -h /data`，确保可用 **≥1.7GB**（解压 862MB + 临时 + 一实例约 523MB）。
-- **记录**：失败一律按 `tools/bebug-template.md`（时间戳 + 原始行，不加工）归档，丢回主编排。
+- **设备空间**：跑前 `adb shell df -h /data`，确保可用 **≥1.7GB**（解压 862MB + 临时 + 一实例约 523MB）。
+- **记录**：失败一律记下时间戳 + 原始日志行（不加工）。
 
-### T7. rootfs 瘦身与可下载化 —— **瘦身已完成（2026-10-06），待真机验证**
+### T7. rootfs 瘦身与可下载化 —— **瘦身已完成并已上真机跑通（0.1.6）**
 
 **已做**（用 GNU tar `--delete` 在原包条目上直接剔除，不重打包）：
 
@@ -96,8 +99,8 @@ sha256（新版）：`216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8c
 （旧版 `5d762c30…` 仍可从 0.1.2 的 Release 附件里取回）。
 
 > ⚠️ **新旧不可混用**：`rootfs/version` 已同步改版（`…-slim1`），否则 App 不会重新解压。
-> 换包后**必须**在真机跑一次 T6 —— `probe.sh` 的 `node/npm/dsh` 三项与 `dsh web` 起服务
-> 是对"删对了"的直接证据。
+> 瘦身包已随 0.1.3 起的版本发布，并在 0.1.6 真机端到端跑通（`node/npm/dsh` 自检 + `dsh web`
+> 起服务 + `npm install`）——"删对了"已有直接证据。
 
 **剩下没做的**：
 - `pkg-config` 保留与否可再评估（它在 native 编译链里，单独存在无意义 —— 但它要求 `--as-needed`
@@ -105,14 +108,15 @@ sha256（新版）：`216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8c
 - 更远期：改为**首次下载 + 校验**（APK 不含 rootfs，装完再下），APK 体积能再降一半以上。
 
 ### T8. 缓存与清理 UI
-- npm cache（`/opt/dsh/npm-cache`）与 rootfs 体积显示 + 一键清理，放进设置页
+- npm cache（`dsh/npm-cache`）与 rootfs 体积显示 + 一键清理，放进设置页
 
 ## P3 · 其他
 
-### T10. 文档同步 —— **主体已完成（2026-10-06）**
+### T10. 文档同步 —— **主体已完成（2026-10-06）；0.1.6 + fix1 增量同步中**
 - 已做：`PLAN.md` / `ROADMAP.md` 里"运行时底座要走 `:proot-engine`"的过时表述
   全部更正为「自研 proot 层 + 预打包 rootfs」；`proot-engine-integration.md` 顶部标注**未采用**；
   `PACKAGING.md` 的 "Ubuntu/Alpine"、"需你放入" 改为现状（Debian 12 + 已就位）。
+- 本轮（2026-10-11）：0.1.6 批 A + fix1 的用户向文档增量同步中（当前验证状态 / 待验清单 / 发布说明）。
 - 剩余（低优先）：`PLAN.md` 仍是早期方案原貌（有顶部过时声明指路），彻底重写收益不大。
 
 
@@ -120,11 +124,12 @@ sha256（新版）：`216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8c
 
 ---
 
-## 待真机验证（批次 0/1/2 的产物）
+## 待真机验证
 
 > 这些是**已实现但还没在真机上跑过**的东西。代码与单测都过了，但单测覆盖不到"系统行为"。
+> 状态标注：**0.1.6 已验证** = 第三轮反馈前的真机日志已证实；**fix1 待验** = 已修待本轮真机确认。
 
-### V1. 返回键链（批次 1）
+### V1. 返回键链
 
 - 首页按返回 → **交系统退出**（不是立刻退，也不是什么都不做）
 - 非首页按返回 → **回首页**
@@ -137,26 +142,26 @@ sha256（新版）：`216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8c
 > 依赖的前提是 manifest 没开预测式返回、targetSdk 34 —— 若将来把 targetSdk 提到 35，
 > 这条链必须改走 `onBackInvokedDispatcher`，否则手势返回会绕过它。
 
-### V2. 停止后进程是否真的没了（批次 0）
+### V2. 停止后进程是否真的没了 —— **0.1.6 已验证**
 
 - 启动实例 → 停止 → **再启动同一个实例**：不应报端口被占
 - 停止后等 10 秒，看应用日志里有没有
   `警告：停止后 proot 仍存活` 这一行（有就是没停干净，需要看现场）
 
-### V3. 实例详情页（批次 2）
+### V3. 实例详情页 —— **0.1.6 已验证**（dsh 在真机成功打开，详情/日志链路已走通）
 
 - 点实例行 → 进详情；三个标签（运行 / 日志 / 配置）都能切
 - 「日志」标签只显示**这个实例**的输出（不是全世界混在一起）
 - 切到别的标签再切回来：**临时页会回到列表**（这是既定行为 —— 临时页属于当前标签的上下文）
 - 详情页在亮色模式下不再是整页全白（这是旧版独立页面的问题）
 
-### V4. 日志分流（批次 2）
+### V4. 日志分流 —— **fix1 待验**（日志页底部留白、日志覆盖层有改动，随本轮确认）
 
 - 设置 → 日志：是**应用级**视角（解压/安装/凭据这些行）
 - 实例详情 → 日志：只有该实例的行
 - 落盘文件：`logs/runtime.log`（应用）与 `logs/instance-<实例>.log`（实例）各一份
 
-### V5. 任务区与终态（批次 4）
+### V5. 任务区与终态 —— **fix1 待验**（任务块文案/配色、阶梯进度条、安装中按钮有改动，随本轮确认）
 
 - 装一个版本 → **装完之后那一行不会消失**，而是落到任务区下半段、标着完成
 - 点「取消」→ 行不会瞬间消失，而是变成「已取消」（**不是**"安装失败"）
@@ -164,7 +169,7 @@ sha256（新版）：`216cd9ef915a3512b9fedadfed7d5be6119422d120005c86b54d9e3b8c
 - 任务区头部的「清空已完成」只在真有历史行时出现，点了能把下半段清空
 - **取消**与**停止**是两张不同的图标（以前长得一样）
 
-### V6. API Key 交给 dsh（批次 5）
+### V6. API Key 交给 dsh —— **fix1 待验**（对话链路已在 0.1.6 走通；WebView 检测 + 外部浏览器是 fix1 新增，随本轮确认）
 
 - **没配 Key 也能启动实例**（以前会被一个"尚未配置 API Key"的弹窗挡住）
 - 首次进 dsh 界面时提示一次"去哪填 Key"，**第二次进不再提示**

@@ -5,7 +5,9 @@
 > 样式全部用现有 FCL 件：FCLConstraintLayout / bg_container_white / bg_item_rounded /
 > FCLProgressBar / FCLButton / FCLTextView / FCLImageView。
 >
-> **状态：待确认，未实现。**
+> **状态：已实现**（首启前置页 = `DshSetupActivity`，首页任务区已落地）。下文是当初的 mockup
+> 草案，与成品细节（文案/配色/布局）可能有出入，保留作设计意图记录；版本号 `v0.1.0` 是示意占位，
+> 实际显示的是当前版本。
 
 ## 一、首启前置页（一次性）
 

@@ -1,5 +1,10 @@
 # 设计：可复现的 proot 启动链（dsh on Android via proot）
 
+> ⚠️ **本文是 2026-09 的 PoC 记录**，链路原理（proot 三层引导、token→cookie、127.0.0.1、
+> `--expose-internals`）仍然有效，但 §3 的 `credentials.env` 写 key 步骤与 §5 的 key 管理
+> **已作废**（0.1.5 起 Key 归 dsh 管，见 `../RELEASES.md` 0.1.5）。当前实现看
+> `../PACKAGING.md` 与 `../ROOTFS.md`。
+
 目标：在未 root 的安卓手机上，用 FCL 同款的 proot + rootfs 技术，把 DeepSeek Harness(`dsh`)
 一键跑起来。本目录是"能在手机 proot 里起 dsh"这条主链路的脚本化 + 选型说明。
 
@@ -68,7 +73,8 @@ PROOT=./proot ROOTFS=./ubuntu-arm64 \
 rootfs 内部直接测（本仓库脚本就是这么验证的）：
 ```sh
 INSTANCE_DIR=/opt/dsh/instances/default DSH_VERSION=latest ./scripts/setup-node-dsh.sh
-echo 'DEEPSEEK_API_KEY=sk-xxxx' > /opt/dsh/instances/default/credentials.env && chmod 600 $_
+~~echo 'DEEPSEEK_API_KEY=sk-xxxx' > /opt/dsh/instances/default/credentials.env && chmod 600 $_~~
+（⚠️ 这行已作废：0.1.5 起 Key 在 dsh 界面里填，不再写凭据文件）
 INSTANCE_DIR=/opt/dsh/instances/default PORT=3080 ./scripts/start-dsh.sh
 ```
 
@@ -93,8 +99,9 @@ INSTANCE_DIR=/opt/dsh/instances/default PORT=3080 ./scripts/start-dsh.sh
 
 ## 5. 安全
 
-- **API key**：只从实例目录的 `credentials.env`(权限 600) 读取，脚本不硬编码、不打印。
-  安卓端建议存 Android Keystore，启动时再写入 rootfs 内的临时凭据文件。
+- ~~**API key**：只从实例目录的 `credentials.env`(权限 600) 读取，脚本不硬编码、不打印。
+  安卓端建议存 Android Keystore，启动时再写入 rootfs 内的临时凭据文件。~~
+  ⚠️ **已作废**：0.1.5 起 Key 完全由 dsh 自己管（见本文顶部标注）。
 - **保活**：安卓会杀后台，需前台服务(Foreground Service)+常驻通知维持 `dsh web` 进程。
 
 ---
