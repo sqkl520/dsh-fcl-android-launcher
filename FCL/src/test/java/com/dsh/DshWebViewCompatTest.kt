@@ -1,0 +1,71 @@
+package com.dsh
+
+import com.dsh.ui.DshWebViewCompat
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * R1b（BL-026）：WebView 版本检测纯函数回归。
+ *
+ * 只钉纯逻辑 [DshWebViewCompat.webViewMajorBelow]，不碰 Android：
+ * `ensureSupported` 的弹框/跳转分支是 UI 行为，按项目惯例靠真机验证。
+ *
+ * 运行：./gradlew :FCL:testFordebugUnitTest --tests "com.dsh.DshWebViewCompatTest"
+ */
+class DshWebViewCompatTest {
+
+    /** 典型四段式：低于 116 → 拦截。 */
+    @Test
+    fun belowThresholdFourPart() {
+        assertTrue(DshWebViewCompat.webViewMajorBelow("95.0.4638.74"))
+        assertTrue(DshWebViewCompat.webViewMajorBelow("115.0.5790.138"))
+    }
+
+    /** 等于阈值与高于阈值 → 放行。 */
+    @Test
+    fun atOrAboveThresholdPasses() {
+        assertFalse(DshWebViewCompat.webViewMajorBelow("116.0.5845.163"))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("119.0.6045.66"))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("131.0.6778.81"))
+    }
+
+    /** 裸大版本（无小数点）也能判。 */
+    @Test
+    fun bareMajorWorks() {
+        assertTrue(DshWebViewCompat.webViewMajorBelow("95"))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("116"))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("125"))
+    }
+
+    /** 首尾空白不影响判定。 */
+    @Test
+    fun surroundingWhitespaceIgnored() {
+        assertTrue(DshWebViewCompat.webViewMajorBelow("  95.0.4638.74  "))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("\t119.0.6045.66\n"))
+    }
+
+    /** 自定义阈值：同一版本在新阈值下翻转。 */
+    @Test
+    fun customThresholdRespected() {
+        assertTrue(DshWebViewCompat.webViewMajorBelow("119.0.6045.66", threshold = 120))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("119.0.6045.66", threshold = 119))
+    }
+
+    /**
+     * 解析不出的一律放行（不拦截），宁可放过别误伤：
+     * null / 空 / 纯空白 / 非数字首段 / 空首段 / 负数。
+     */
+    @Test
+    fun unparseableNeverBlocks() {
+        assertFalse(DshWebViewCompat.webViewMajorBelow(null))
+        assertFalse(DshWebViewCompat.webViewMajorBelow(""))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("   "))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("beta"))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("beta.1.2.3"))
+        assertFalse(DshWebViewCompat.webViewMajorBelow(".0.1"))
+        assertFalse(DshWebViewCompat.webViewMajorBelow("-1.2.3.4"))
+        // 大到 Int 装不下也算解析不出 → 放行
+        assertFalse(DshWebViewCompat.webViewMajorBelow("99999999999999999999.0.0.0"))
+    }
+}

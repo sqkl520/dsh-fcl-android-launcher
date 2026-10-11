@@ -121,7 +121,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:textColor="#CC4444"
+        android:textColor="@color/dsh_log_error"
         android:textSize="11sp"
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
@@ -131,8 +131,18 @@
 
     <!-- 主操作（启动 / 停止 / 重试）：图标 + 文字 的组合容器，
          形态照外壳右面板的启动按钮（activity_dsh_main.xml 的 right_start）：
-         无边框 clickable 容器 + 按压缩放（anim_scale）+ 图标与文字居中成链，
-         图标用 FCLImageView + background + use_theme_color，文字 use_theme_color。
+         无边框 clickable 容器 + 按压缩放（anim_scale）+ 前景涟漪（BL-023 补的下压反馈）+
+         图标与文字居中成链，图标用 FCLImageView + background + use_theme_color，文字 use_theme_color。
+
+         ★ 下压反馈 = 两件套（FCLImageButton 同理，见其 refreshStyle 的 RippleDrawable + 本卡 btn_more
+           的 anim 反馈；T-C8 精致动效在底线之上再加，本行只做底线）：
+             · android:foreground="?android:attr/selectableItemBackgroundBorderless" —— 按下时的圆形
+               涟漪扩散（走前景是因为容器本身无 background，background 槽留给将来可能的底色）。
+               用 Borderless 而不用矩形 bounded：容器是 wrap_content 的异形组合（图标+文字），
+               bounded 涟漪会被裁成难看的方块，圆形的无界涟漪与旁边 btn_more（FCLImageButton 半径
+               20dp 的圆）观感一致。minSdk 26，foreground 在 View 上原生可用。
+             · android:stateListAnimator="@xml/anim_scale" —— 按压缩小到 0.9x（BL-028 已判定名实：
+               anim_scale 本来就是缩小方向，错的是 anim_scale_large 曾被写成 1.5x 放大，已改回）。
 
          ★ 为什么不用纯图标按钮（行内动作在 FCL 里的默认形态，如 item_profile.xml 的 delete）：
            这一行是实例的主操作，它的动作在三个状态间切换（启动 / 停止 / 重试），
@@ -171,6 +181,7 @@
         android:layout_height="wrap_content"
         android:clickable="true"
         android:focusable="true"
+        android:foreground="?android:attr/selectableItemBackgroundBorderless"
         android:paddingHorizontal="8dp"
         android:paddingVertical="8dp"
         android:stateListAnimator="@xml/anim_scale"

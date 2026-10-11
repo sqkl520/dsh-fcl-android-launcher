@@ -162,13 +162,16 @@
         <string name="dsh_state_stopping">%1$s 停止中…</string>
         <string name="dsh_verify_running">正在自检…</string>
         <string name="dsh_verify_title">自检结果</string>
-        <string name="dsh_version_size">%1$s</string>
+        <string name="dsh_version_size">包体 %1$s</string>
         <string name="dsh_webview_auth_failed">会话已失效：本地 cookie 不再有效，请重启实例以获取新 token。</string>
         <string name="dsh_webview_error">页面加载失败：%1$s</string>
         <string name="dsh_webview_http_error">服务端返回 HTTP %1$d</string>
         <string name="dsh_webview_starting">正在启动 dsh，首次启动会比较慢…</string>
         <string name="dsh_webview_stopped">dsh 未在运行。返回后启动实例。</string>
         <string name="dsh_webview_stopping">正在停止 dsh…</string>
+        <string name="dsh_webview_logoverlay_title">日志</string>
+        <string name="dsh_webview_logoverlay_close">关闭日志</string>
+        <string name="dsh_webview_logoverlay_full">去应用里看完整日志</string>
         <string name="dsh_tab_instances">实例</string>
     <string name="dsh_tab_versions">版本</string>
     <string name="dsh_tab_settings">设置</string>
@@ -248,7 +251,7 @@
     <string name="dsh_background_pick_failed">无法读取所选图片</string>
     <string name="dsh_background_applied">背景已更新</string>
     <string name="dsh_background_no_image">没有可取样色的自定义背景</string>
-    <string name="dsh_version_after_install">安装后约 500MB（含依赖）</string>
+    <string name="dsh_version_after_install">含依赖约 500 MB（估算）</string>
     <string name="dsh_version_bundled">运行时已内置，无需下载</string>
     <string name="dsh_installed_broken">安装失败</string>
     <string name="dsh_setup_brand">DeepSeek Harness</string>
@@ -279,6 +282,9 @@
     <string name="dsh_tasks_header_finished">已完成</string>
     <string name="dsh_tasks_clear_finished">清空已完成</string>
     <string name="dsh_task_cancelled_suffix">%1$s（已取消）</string>
+    <!-- 安装成功的终态行 stage（BL-021）：纯结论文案，不带版本号 —— 标题已是「dsh <版本>」
+         这类含版本的实例名，再拼 "dsh <版本>" 会得到 "dsh X · dsh X" -->
+    <string name="dsh_task_install_done">安装完成</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">将重新解压运行环境（不会影响实例与 API Key）。</string>
     <string name="dsh_setup_steps_header">准备项</string>
@@ -334,4 +340,9 @@
     <string name="dsh_preflight_missing_script">缺少脚本 %1$s（运行时底座未解压）</string>
     <!-- 与英文的 ", " 对应：中文列表用顿号 -->
     <string name="dsh_list_separator">、</string>
+    <!-- R1b（BL-026）：WebView 版本过旧提示 -->
+    <string name="dsh_webview_compat_title">系统 WebView 版本过旧</string>
+    <string name="dsh_webview_compat_message">当前 WebView 过旧，dsh 界面会显示异常（需要 %1$d 及以上版本）。您可以仍要继续，或改用外部浏览器打开本页。</string>
+    <string name="dsh_webview_compat_continue">仍要继续</string>
+    <string name="dsh_webview_compat_external">用外部浏览器打开</string>
 </resources>

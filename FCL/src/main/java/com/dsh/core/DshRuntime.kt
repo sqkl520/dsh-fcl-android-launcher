@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
@@ -89,6 +91,15 @@ object DshRuntime {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * 启动串行化锁（K02）。[start] 是 `suspend`，不能用 `@Synchronized`（会把宿主线程锁跨越挂起点）。
+     * 用协程 [Mutex] 把"停旧实例 → 等它退干净 → 清孤儿 → 起新 proot"整段串起来：
+     * 两次并发 [start] 不会交错，新旧 proot 也就不会同时抢同一个端口。它只保护 [start]，不碰
+     * `@Synchronized` 的那把对象锁（[startLocked]/[stop] 用的仍是对象监视器），所以不会与停止协程
+     * 里的 `synchronized(this)` 互相死锁。
+     */
+    private val startMutex = Mutex()
+
     /** 启动看门狗：新一次启动前先取消上一次，避免"重试"时两个看门狗同时计时（会让重试的实例提前被判超时） */
     private var watchdogJob: Job? = null
 
@@ -102,14 +113,7 @@ object DshRuntime {
     private val seccompFallbackUsed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** 状态当前归属于哪个实例（Idle 表示没有归属）。用于"迟到的回调不许改别人的状态" */
-    private fun ownerOf(st: State): String? = when (st) {
-        State.Idle -> null
-        is State.Starting -> st.instanceId
-        is State.Running -> st.instanceId
-        is State.Stopping -> st.instanceId
-        is State.Failed -> st.instanceId
-        is State.Exited -> st.instanceId
-    }
+    private fun ownerOf(st: State): String? = ownerOfState(st)
 
     /** 仅当"当前状态仍属于该实例"时才写入新状态，避免覆盖掉已经启动的另一个实例 */
     private fun setStateIfOwned(instanceId: String, next: () -> State) {
@@ -241,14 +245,45 @@ object DshRuntime {
     /**
      * 启动某实例的 dsh web。已有运行实例时先停掉（单实例策略：避免多个 300MB 进程压垮手机）。
      *
-     * ★ 整个方法是 `@Synchronized`：它内部是"先查状态、再 fork/exec proot"的复合操作，中间还夹着
-     * Keystore 解密、清孤儿进程等耗时步骤。不加锁时两处入口（列表页按钮 / 下载页安装完的引导）几乎
-     * 同时进来，两边都会看到"没有实例在跑"，于是**同时起两个 300MB 的 node**，而且后写的 pid 文件
-     * 覆盖前一个 —— 前一个进程谁也认领不了、也杀不掉。加锁后第二个调用会看到 Starting 并直接复用。
+     * ## K02 / BL-007：先停到位、再起；阻塞清理移出同步块
+     * 本方法是 `suspend`，用 [startMutex] 把整条启动路径串行化（两处入口几乎同时进来时，第二个会
+     * 排队，而不是两边都看到"没实例在跑"从而同时起两个 300MB 的 node）。关键改动：
+     * - **先停到位再起**：旧实现对"别的实例在跑"走的是**异步** `stop(...)`，不等旧进程真的退出就
+     *   去 fork 新 proot —— 新旧两个 proot 会短暂并存、抢同一个端口（EADDRINUSE）。现在改成在
+     *   进入 [startLocked] 之前先 [stopAndWait]，确保旧实例真正离开 Stopping 才继续。
+     * - **阻塞清理移出同步块**：清孤儿（[ProcessUtil.killStale]）与按 pid 收掉上一轮 node
+     *   （[terminateNodeProcess]，内部可能 sleep 到秒级）都放在这里（**不持对象监视器**）做，
+     *   不再卡住 `@Synchronized` 的 [startLocked]/[stopIf]/[stop]。真正需要原子的"查状态 → fork →
+     *   落 Starting/pid"仍在 [startLocked] 的监视器里。
+     *
+     * 为什么 stopAndWait 放在监视器**之外**：停止协程收尾时自己要 `synchronized(this)`，若在持锁时
+     * 阻塞等它，就会死锁。[startMutex] 是协程锁、不占对象监视器，二者不冲突。
      */
-    @Synchronized
-    fun start(context: Context, instance: DshInstance): StartOutcome =
+    suspend fun start(context: Context, instance: DshInstance): StartOutcome = startMutex.withLock {
+        val current = runningInstanceId()
+        // 同一实例已在跑：交给 startLocked 的"复用"快路径（此处绝不能 killStale，会杀掉活着的它）。
+        if (current == instance.id) {
+            return@withLock startLocked(context, instance, noSeccomp = false)
+        }
+        // K02：别的实例在跑——先停掉并**等它真的退出**（离开 Stopping），再起新 proot。
+        if (current != null) {
+            if (!stopAndWait(stopReasonDefault())) {
+                // 超时也继续（已给足宽限期）；留一行英文诊断（R-LOG）。
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[runtime] previous instance did not stop within grace; starting ${instance.name} anyway"
+                )
+            }
+        }
+        // BL-007：把阻塞的孤儿清理放在对象监视器**之外**（这里在 IO 线程、未持 @Synchronized 锁）。
+        // 先清干净再启动的语义不变：killStale 收上一轮残留 proot、terminateNodeProcess 按 pid 收上一轮
+        // node（proot 被 SIGKILL 时来不及带走它，会占着端口）。
+        withContext(Dispatchers.IO) {
+            ProcessUtil.killStale(instance.id)
+            terminateNodeProcess(instance.id, 0)
+        }
         startLocked(context, instance, noSeccomp = false)
+    }
 
     /**
      * [start] 的实现体。[noSeccomp] = true 时额外注入 `PROOT_NO_SECCOMP=1`
@@ -300,22 +335,15 @@ object DshRuntime {
             DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已在运行，复用现有进程")
             return StartOutcome.Started
         }
-        // 别的实例在跑：先停
-        if (runningInstanceId() != null) stop("启动新实例")
+        // K02 / BL-007：停掉别的实例并等它退出、以及清掉上一轮孤儿/残留 node 这些**阻塞步骤**，
+        // 已经在 [start] 里（对象监视器之外）做完了，这里不再做 —— 既不等旧进程、也不在持锁时 sleep。
+        // 走到这里时按单实例策略应当已无别的实例在跑；仍残留的极端情况（stopAndWait 超时）下面的
+        // `_state.value = Starting` 会把归属切到本实例，旧实例的迟到回调会被 ownerOf 校验挡住。
 
         DshPaths.instanceWorkspace(instance.id).mkdirs()
         DshPaths.instanceHome(instance.id).mkdirs()
         File(DshPaths.NPM_CACHE_DIR).mkdirs()
         File(DshPaths.TMP_DIR).mkdirs()
-
-        // 先清掉上次残留的孤儿（同实例）
-        ProcessUtil.killStale(instance.id)
-
-        // ★ 再清一次"上一轮的 node"（B10）：proot 被 SIGKILL 时来不及带走 rootfs 内的 node，
-        // 那个 node 会一直占着端口。这里在**同一个实例**即将启动前按 pid 精确收掉它。
-        // 只按 pid 文件认（传 hint=0）：内存里的 nodePid 可能属于另一个实例，
-        // 单实例策略下这个实例启动前刚把那个实例停掉，拿它的 pid 去杀是多余的、也可能误伤。
-        terminateNodeProcess(instance.id, 0)
 
         // ★ 端口预检（B10 的第二半："端口被占时不要直接失败"）：实例端口是上次成功后回写的
         // 固定值，一旦被占（旧 node 还没退干净 / 别的 App 占了），node 起来就报 EADDRINUSE 然后
@@ -378,12 +406,15 @@ object DshRuntime {
                 "profile=${instance.profile}，端口=${if (launchPort == 0) "自动" else launchPort.toString()}）"
         )
 
+        // onExit 需要知道"是哪一个 proot pid 退出的"（K03 compare-and-delete 用它判断能否删 pid 文件）。
+        // 用 AtomicLong 捕获：onExit 只会在进程退出时触发——那一定晚于下面的 launchedPid.set(...)。
+        val launchedPid = java.util.concurrent.atomic.AtomicLong(0L)
         val h = try {
             ProotRunner.start(
                 spec = spec,
                 scope = scope,
                 onLine = { line -> onProcessLine(instance, line) },
-                onExit = { code -> onProcessExit(instance, code) }
+                onExit = { code -> onProcessExit(instance, code, launchedPid.get()) }
             )
         } catch (e: Exception) {
             val reason = e.message ?: e.toString()
@@ -395,12 +426,15 @@ object DshRuntime {
         }
         handle = ProcessHandle(h)
         val pid = h.pid()
+        launchedPid.set(pid)
         // pid 文件只给"孤儿认领/清理"（冷启时按 cmdline 校验）用，所以这里记的是**proot 的 pid**；
         // node 的 pid 另有 dsh-node.pid（由脚本写，停止时用它精确终止，见 [terminateNodeProcess]）。
         if (pid > 0) {
             ProcessUtil.writePidFile(instance.id, pid, launchPort)
         } else {
-            // 拿不到 pid（Android 的 Process 实现没有 pid() 且反射失败）时，孤儿进程无法被认领/清理，
+            // 拿不到 pid 时（反射没有 pid() 且 /proc 兜底也失败 —— 真机两次启动全 -1 就是这条路，
+            // 最可能是内核无 CONFIG_PROC_CHILDREN 或 SELinux 挡，细节见失败当时那条
+            // "[proot] pid resolution failed …" 诊断行），孤儿进程无法被认领/清理，
             // 明确记一行，避免将来\"为什么后台有个 300MB 的 node 杀不掉\"无从查起。
             // 实例级：这条警告是"这个实例的后台残留将无法自动清理"，属于它的运行环境问题
             DshLogBus.appendFor(
@@ -481,7 +515,9 @@ object DshRuntime {
                 if (Probe.isPortOpen(port, 800)) continue
                 // ★ 保持全局：同属**认领巡检**（上一行的同一条线索），跨实例的存活判定
                 DshLogBus.append("[runtime] 认领的实例 ${instance.name} 已不再运行（pid=$pid 已退出，端口 $port 已关闭）")
-                ProcessUtil.removePidFile(instance.id)
+                // K03 compare-and-delete：只有当 pid 文件仍记着这个已退出的 pid 时才删，
+                // 别误删"停后秒启"时新进程刚写的 pid 文件。
+                ProcessUtil.removePidFile(instance.id, pid)
                 handle = null
                 _running.value = null
                 setStateIfOwned(instance.id) { State.Exited(instance.id, instance.name, -1) }
@@ -505,7 +541,13 @@ object DshRuntime {
      * @param reason 停止原因，用于**日志**与任务区那行的阶段文案。空串表示"调用方没给原因"，
      *   此时由 [stopReasonDefault] 填一句本地化的默认值（`"用户停止"` 这类词会显示给用户，
      *   所以不能写死在代码里）。
+     *
+     * ★ K02：加 `@Synchronized`——与 [startLocked]/[stopIf]/[setStateIfOwned] 以及停止协程里的
+     *   `synchronized(this)` 用同一把对象监视器。旧实现里 start 侧已声明"同一把锁"，stop 却没加锁，
+     *   注释与实现自相矛盾，并发时会留下窗口（句柄/状态读到一半被另一路改掉）。补齐同步后，
+     *   "读取句柄/node pid、置 Stopping、起收尾协程"这段复合操作对其它入口是原子的。
      */
+    @Synchronized
     fun stop(reason: String = "") {
         val instanceId = runningInstanceId()
         val resolvedReason = reason.ifBlank { stopReasonDefault() }
@@ -526,7 +568,9 @@ object DshRuntime {
         val np = nodePid
         nodePid = 0
         // proot 进程本身拿不到 pid 时，"孤儿认领/清理"这条路是断的（挂在 [ProotRunner.Handle.pid]：
-        // Android 的 java.lang.Process 没有 pid()，反射拿不到就返回 -1）。
+        // 反射没有 pid() 且 /proc 兜底（task/<tid>/children 快照差集）也失败才返回 -1 ——
+        // 真机两次全 -1，最可能是内核无 CONFIG_PROC_CHILDREN 或 SELinux 挡，
+        // 细节见失败当时那条 "[proot] pid resolution failed …" 诊断行）。
         // 记一行是为了区分"系统起不到 pid"（只影响后台残留清理与状态巡检）与
         // "node pid 也拿不到"（那才是真的无法保证停止干净）。
         DshLogBus.appendFor(
@@ -551,8 +595,10 @@ object DshRuntime {
             val prootPid = h?.pid ?: 0
             runCatching { h?.terminate(5000) }
             verifyProotGone(instanceId, prootPid)
-            ProcessUtil.removePidFile(instanceId)
-            deleteNodePidFile(instanceId)
+            // K03 compare-and-delete：只有当 pid 文件仍记着**我们正在停的这个** proot/node 时才删，
+            // 否则"停后秒启"里新进程刚写好的 pid 文件会被这里的收尾误删 → 新进程失联成孤儿。
+            ProcessUtil.removePidFile(instanceId, prootPid)
+            deleteNodePidFile(instanceId, np)
             // 关键：终止是异步的（最长 5s）。期间用户可能已经启动了新实例，
             // 只有当前状态仍停在这个实例上时才允许置 Idle / 收服务，否则会把新实例的
             // Starting/Running 覆盖掉，并且误杀它的前台通知。
@@ -673,7 +719,7 @@ object DshRuntime {
         val pid = readNodePidFile(instanceId) ?: nodePidHint
         if (pid <= 0) return
         if (!ProcessUtil.isAlive(pid)) {
-            deleteNodePidFile(instanceId)
+            deleteNodePidFile(instanceId, pid)
             return
         }
         val cmd = ProcessUtil.cmdline(pid)
@@ -682,13 +728,15 @@ object DshRuntime {
             // 实例级：终止的是**这个实例的** node，"跳过终止"这条线索属于它（否则实例页上只会
             // 看到"停止"却没有下文，看不出停止其实没停干净）
             DshLogBus.appendFor(instanceId, "[runtime] pid=$pid 已不属于 dsh node（cmdline 不匹配），跳过按 pid 终止")
-            deleteNodePidFile(instanceId)
+            deleteNodePidFile(instanceId, pid)
             return
         }
         DshLogBus.appendFor(instanceId, "[runtime] 终止实例 $instanceId 的 node（pid=$pid）")
         // 归属带上 instanceId：killBlocking 内部还有一次身份校验，那里"没杀成"的日志同样属于这个实例
         ProcessUtil.killBlocking(pid, NODE_KILL_GRACE_MS, expectNode = true, logInstanceId = instanceId)
-        deleteNodePidFile(instanceId)
+        // K03 compare-and-delete：删前再核一次文件里仍是刚处理的这个 pid（秒启场景下脚本可能已经
+        // 写入了新 node 的 pid 文件，别把它删了）。
+        deleteNodePidFile(instanceId, pid)
     }
 
     /**
@@ -712,8 +760,17 @@ object DshRuntime {
         f.readText().trim().substringBefore(' ').toLongOrNull()?.takeIf { it > 0 }
     }.getOrNull()
 
-    private fun deleteNodePidFile(instanceId: String) {
-        runCatching { nodePidFile(instanceId).delete() }
+    /**
+     * 删除 node pid 文件（K03 compare-and-delete）。
+     * 仅当文件里仍是 [expectedPid]（或文件已不存在/读不出）时才删，避免误删"停后秒启"时
+     * 脚本为新 node 刚写下的 pid 文件（见 [pidFileBelongsTo]）。
+     */
+    private fun deleteNodePidFile(instanceId: String, expectedPid: Long) {
+        runCatching {
+            if (pidFileBelongsTo(readNodePidFile(instanceId), expectedPid)) {
+                nodePidFile(instanceId).delete()
+            }
+        }
     }
 
     /**
@@ -822,23 +879,37 @@ object DshRuntime {
 
     /** 进程意外退出/启动失败后的收尾 */
     private fun failAndCleanup(instance: DshInstance, reason: String) {
-        val h = handle
-        handle = null
-        val np = nodePid
-        nodePid = 0
-        _running.value = null
-        scope.launch {
-            // 与 stop() 同源：先按 pid 收掉 rootfs 内的 node，再收 proot。
-            // 这条路径覆盖"启动超时"——超时的进程仍然是活的 node，不收掉就会占着端口，
-            // 下一次启动直接 EADDRINUSE（正是 B10 的现场）。
-            terminateNodeProcess(instance.id, np)
-            runCatching { h?.terminate(3000) }
-            ProcessUtil.removePidFile(instance.id)
+        // K05：归属校验。看门狗/超时触发这里的那一刻，用户可能已经启动了新实例（状态已是新实例的
+        // Starting/Running）。那样的话，这条**旧实例的** Failed 既不能覆盖新实例的状态，也不能去动
+        // 新实例的句柄/pid 文件。只有当前状态仍属于本实例时，才做"落 Failed + 收进程"这套收尾。
+        // （照 onProcessExit / onProcessLine 的 Running 分支"状态写回先校验 instanceId"的既有约定办。）
+        synchronized(this) {
+            if (!stateOwnedBy(_state.value, instance.id)) {
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[runtime] stale timeout/failure for ${instance.name} ignored (state now owned by another instance)"
+                )
+                return
+            }
+            val h = handle
+            handle = null
+            val np = nodePid
+            nodePid = 0
+            _running.value = null
+            _state.value = State.Failed(instance.id, instance.name, reason)
+            scope.launch {
+                // 与 stop() 同源：先按 pid 收掉 rootfs 内的 node，再收 proot。
+                // 这条路径覆盖"启动超时"——超时的进程仍然是活的 node，不收掉就会占着端口，
+                // 下一次启动直接 EADDRINUSE（正是 B10 的现场）。
+                terminateNodeProcess(instance.id, np)
+                runCatching { h?.terminate(3000) }
+                // K03 compare-and-delete：只删仍属于这个失败 proot 的 pid 文件（别误删秒启后新进程的）。
+                ProcessUtil.removePidFile(instance.id, h?.pid ?: 0)
+            }
+            stopServiceIfIdle()
+            // 终态上报：失败原因进任务区（否则任务行随着 Starting 一起消失，用户只看到"行没了"）
+            reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)
         }
-        _state.value = State.Failed(instance.id, instance.name, reason)
-        stopServiceIfIdle()
-        // 终态上报：失败原因进任务区（否则任务行随着 Starting 一起消失，用户只看到"行没了"）
-        reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)
     }
 
     /** 兜底重试内部失败时的收尾（不重复打日志到"失败原因"里，失败原因由调用方给出） */
@@ -933,8 +1004,10 @@ object DshRuntime {
         _state.value = State.Running(instance.id, instance.name, url, port)
         _running.value = Running(instance.id, port, url)
         handle?.pid?.takeIf { it > 0 }?.let { ProcessUtil.writePidFile(instance.id, it, port) }
-        // 端口是自动分配的：写回实例，便于界面显示与下次复用
-        if (instance.port != port) {
+        // K04：只有当实例本来就是"自动端口"（port<=0）时，才把实际端口回写进配置。
+        // 旧实现无条件回写，会把用户在设置里**手工固定**的端口在"端口被占→自动避让"后永久覆盖掉。
+        // 用户固定过端口（instance.port>0）就尊重它，不改他的配置（见 [shouldPersistPort]）。
+        if (shouldPersistPort(instance.port, port)) {
             DshInstances.updateConfig(instance.id, port = port)
         }
         // 实例级：就绪是本实例生命周期里最该被看见的一行（"什么时候开始能用"），
@@ -949,7 +1022,7 @@ object DshRuntime {
         )
     }
 
-    private fun onProcessExit(instance: DshInstance, code: Int) {
+    private fun onProcessExit(instance: DshInstance, code: Int, exitedProotPid: Long) {
         // ★ 归属校验（第五轮修复）：退出回调是异步的。用户"停 A 起 B"时，A 的退出回调完全可能
         // 在 B 已经 Starting/Running 之后才到；旧实现无条件 `handle = null` / `_running = null`，
         // 并把状态写成 Exited(A)，于是 B 的进程句柄被抹掉（[stop] 再也拿不到句柄，只能删 pid 文件，
@@ -964,17 +1037,21 @@ object DshRuntime {
                 "[runtime] ${instance.name} 的进程已退出（code=$code），" +
                     "但当前状态不属于它（现状：${cur::class.simpleName}），仅清理 pid 文件"
             )
-            ProcessUtil.removePidFile(instance.id)
+            // K03 compare-and-delete：只有当 pid 文件仍记着**这个已退出的** proot 时才删；
+            // 若 B 已经把自己的 pid 写进了（同名实例秒启）就别删。
+            ProcessUtil.removePidFile(instance.id, exitedProotPid)
             return
         }
 
         val wasStopRequested = stopRequestedFor == instance.id
+        val exitedNodePid = nodePid
         handle = null
         // 进程已经退出：内存里的 node pid 作废（避免它被系统复用后误杀，见 ProcessUtil.kill 的身份校验）
         nodePid = 0
         _running.value = null
-        ProcessUtil.removePidFile(instance.id)
-        deleteNodePidFile(instance.id)
+        // K03 compare-and-delete：删 pid / node pid 文件前核对仍是这个退出的进程写的，别误删秒启后新进程的。
+        ProcessUtil.removePidFile(instance.id, exitedProotPid)
+        deleteNodePidFile(instance.id, exitedNodePid)
 
         if (wasStopRequested) {
             // 主动停止导致的退出（SIGTERM→143 等）：这是预期内的，落到 Idle，不要报成崩溃。
@@ -1079,6 +1156,40 @@ object DshRuntime {
     }.getOrDefault(768)
 }
 
+// --- 纯逻辑助手（抽出来便于单测；无状态、无 Android 依赖） ----------------------
+
+/**
+ * K05：某个状态归属于哪个实例（Idle = 无归属）。
+ * 用于"迟到的回调/看门狗不许改别人的状态"的判定（见 [DshRuntime] 的 setStateIfOwned / failAndCleanup）。
+ */
+fun ownerOfState(state: DshRuntime.State): String? = when (state) {
+    DshRuntime.State.Idle -> null
+    is DshRuntime.State.Starting -> state.instanceId
+    is DshRuntime.State.Running -> state.instanceId
+    is DshRuntime.State.Stopping -> state.instanceId
+    is DshRuntime.State.Failed -> state.instanceId
+    is DshRuntime.State.Exited -> state.instanceId
+}
+
+/** K05：当前状态是否仍属于 [instanceId]（只有属于时才允许把它写成 Failed，避免覆盖已启动的新实例）。 */
+fun stateOwnedBy(state: DshRuntime.State, instanceId: String): Boolean =
+    ownerOfState(state) == instanceId
+
+/**
+ * K04：端口被自动避让后，是否应把实际端口回写进实例配置。
+ * 仅当实例本来就是"自动端口"（[configuredPort] <= 0）时才回写；用户固定过端口（>0）就别覆盖他的配置。
+ */
+fun shouldPersistPort(configuredPort: Int, actualPort: Int): Boolean =
+    configuredPort <= 0 && actualPort > 0 && actualPort != configuredPort
+
+/**
+ * K03：pid 文件是否可以删（compare-and-delete）。
+ * 只有当文件里的 pid 等于"我要清理的那个 pid"（或文件已不存在/读不出）时才允许删 ——
+ * 否则在"停后秒启"场景下会删掉**新进程刚写的** pid 文件，把新进程变成失联孤儿。
+ */
+fun pidFileBelongsTo(storedPid: Long?, expectedPid: Long): Boolean =
+    storedPid == null || storedPid == expectedPid
+
 /** 端口连通性探测（判断孤儿进程是否还活着、是否已就绪） */
 object Probe {
     fun isPortOpen(port: Int, timeoutMs: Int = 800): Boolean = runCatching {
@@ -1136,8 +1247,18 @@ object ProcessUtil {
         return runCatching { JsonUtils.fromNonNullJson(f.readText(), PidMeta::class.java) }.getOrNull()
     }
 
-    fun removePidFile(instanceId: String) {
-        runCatching { DshPaths.instancePidFile(instanceId).delete() }
+    /**
+     * 删除实例的 proot pid 文件（K03 compare-and-delete）。
+     * 仅当文件里仍是 [expectedPid]（或文件已不存在/读不出）时才删 —— "停后秒启"时新进程可能已经
+     * 把自己的 pid 写进了这个文件，无条件删会把**新进程**的 pid 文件抹掉，使它变成失联孤儿。
+     * [expectedPid] 传 0（拿不到自己的 pid）时等价于"文件里只要不是 0 就不删"，天然不会误删新进程。
+     */
+    fun removePidFile(instanceId: String, expectedPid: Long) {
+        runCatching {
+            if (pidFileBelongsTo(readPidFile(instanceId)?.pid, expectedPid)) {
+                DshPaths.instancePidFile(instanceId).delete()
+            }
+        }
     }
 
     fun isAlive(pid: Long): Boolean {
@@ -1161,9 +1282,11 @@ object ProcessUtil {
     /**
      * [kill] 的阻塞版。
      *
-     * **为什么要有阻塞版**：停止路径里有两处不在协程里 —— [DshRuntime.startLocked]（`@Synchronized`，
-     * 启动前要先把上一轮残留的 node 收掉，否则它占着端口）与认领巡检。它们都在 IO 线程上执行
-     * （见 DshLauncher 的 `withContext(Dispatchers.IO)`），阻塞等待 TERM→KILL 的宽限期是安全的。
+     * **为什么要有阻塞版**：[DshRuntime.terminateNodeProcess] 是普通（非 suspend）函数，用它按 pid
+     * 收掉 rootfs 内 node 时要阻塞等 TERM→KILL 的宽限期。它的调用点（启动前的孤儿清理、[DshRuntime.stop]
+     * 的收尾协程、认领巡检）都在 IO 线程上执行（见 [DshRuntime.start] 的 `withContext(Dispatchers.IO)`
+     * 与各 `scope.launch`），阻塞等待是安全的；但这段等待**不再持有对象监视器**（BL-007：已从
+     * `@Synchronized` 的 [DshRuntime.startLocked] 临界区移出），所以不会再拖住 stopIf / 二次 start。
      *
      * @param logInstanceId 这次终止是**为哪个实例**做的（用于日志归属）。给 id = 该实例的流；
      *                      null = 全局流（调用方也说不清是哪个实例时，宁可归全局也不要猜）。
@@ -1230,7 +1353,7 @@ object ProcessUtil {
     fun killStale(instanceId: String) {
         val meta = readPidFile(instanceId) ?: return
         if (!isAlive(meta.pid)) {
-            removePidFile(instanceId)
+            removePidFile(instanceId, meta.pid)
             return
         }
         val cmd = cmdline(meta.pid) ?: ""
@@ -1240,6 +1363,6 @@ object ProcessUtil {
         } else {
             DshLogBus.append("[runtime] pid=${meta.pid} 已不属于本实例，忽略")
         }
-        removePidFile(instanceId)
+        removePidFile(instanceId, meta.pid)
     }
 }

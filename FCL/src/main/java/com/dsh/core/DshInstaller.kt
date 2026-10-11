@@ -330,12 +330,16 @@ class DshInstaller(
         _statuses.update { it - instanceId }
     }
 
-    /** 安装成功的终态任务。三处上报（常规成功、取消时已装完）共用一份，免得文案/字段漂移。 */
+    /** 安装成功的终态任务。三处上报（常规成功、取消时已装完）共用一份，免得文案/字段漂移。
+     *  BL-021：stage 用纯结论文案（R.string，不带版本）—— 默认实例名已是「dsh <版本>」，
+     *  旧的 "dsh $version" 会与标题拼成「dsh X · dsh X」。 */
     private fun doneTask(instance: DshInstance, version: String): DshTask = DshTask(
         id = DshTasks.installTaskId(instance.id),
         kind = DshTask.Kind.INSTALL,
         title = instance.name,
-        stage = "dsh $version",
+        stage = DshUiText.getString(
+            com.dsh.fcl.androidlauncher.R.string.dsh_task_install_done, "Installed"
+        ),
         action = DshTask.Action.NONE,
         state = DshTask.State.DONE,
         instanceId = instance.id
@@ -524,13 +528,10 @@ class DshInstaller(
         errorSummaries.remove(instance.id)
         errorTails.remove(instance.id)
         val script = "${ProotCommand.GUEST_ROOT}/scripts/setup-node-dsh.sh"
-        val pre = ProotCommand.preflight(context, DshPaths.ROOTFS_DIR, script)
-        if (!pre.ok) {
-            errorSummaries[instance.id] = pre.reason ?: "预检失败（原因未知）"
-            // 实例级：预检是"这次安装"的第一步，失败原因是该实例的安装结论
-            DshLogBus.appendFor(instance.id, "[install] 预检失败：${pre.reason}")
-            return false
-        }
+        // ★ BL-032：外层预检已删（本函数原来在此调 ProotCommand.preflight）。
+        //   ProotProcessExecutor.run() 内部第 1 步就是同一预检（同参同判据），双调用只会让 DNS 同步
+        //   与磁盘检查跑两次（bebug 里 resolv.conf 成对行的来源）。外层无额外 UI 价值——错误摘要
+        //   与日志都已改读内部预检回传的结果（见下的 fallback 支线与 -1 收口）。
 
         updateStatus(
             InstallStatus(
@@ -576,15 +577,25 @@ class DshInstaller(
                 // 标记这个子进程属于哪个实例：取消/超时只杀自己那一个
                 tag = instance.id
             ) { line -> onInstallLine(instance, version, line) }
-                ?: proot.run(
-                    script = script,
-                    env = mapOf(
-                        "INSTANCE_DIR" to instancePathInRootfs,
-                        "DSH_VERSION" to version,
-                        "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache"
-                    ),
-                    onLine = { line -> onInstallLine(instance, version, line) }
-                )
+                ?: run {
+                    // ★ BL-032：只有"非 ProotProcessExecutor 的 ProotExecutor 实现"（单测替身）才走这里，
+                    //   真机实现自己在 run() 内部做预检。替身没有内部预检，这次补调是它唯一的预检。
+                    val pre = ProotCommand.preflight(context, DshPaths.ROOTFS_DIR, script)
+                    if (!pre.ok) {
+                        errorSummaries[instance.id] = pre.reason ?: "预检失败（原因未知）"
+                        DshLogBus.appendFor(instance.id, "[install] Preflight failed: ${pre.reason}")
+                        return false
+                    }
+                    proot.run(
+                        script = script,
+                        env = mapOf(
+                            "INSTANCE_DIR" to instancePathInRootfs,
+                            "DSH_VERSION" to version,
+                            "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache"
+                        ),
+                        onLine = { line -> onInstallLine(instance, version, line) }
+                    )
+                }
         } catch (t: Throwable) {
             errorSummaries[instance.id] = t.message ?: t.toString()
             return false
@@ -613,8 +624,11 @@ class DshInstaller(
                 //   翻译在 [stageText] 里做，这样切到英文界面时进度也是英文 —— 改造前脚本直接
                 //   输出中文句子（"下载并安装 @deepseek-ai/dsh@0.2.1-alpha.1"），而 rootfs 里的
                 //   脚本没有 i18n 机制，于是英文界面下这一段永远是中文。
-                val stage = stageText(trimmed.removePrefix("[setup] STAGE="))
-                updateStatus(InstallStatus(instance.id, version, stage, fraction = null))
+                val raw = trimmed.removePrefix("[setup] STAGE=")
+                // ★ BL-018：阶梯百分比（npm 以 CI=true 运行无百分比可采，按阶段给单调递增的阶梯）。
+                //   映射在 [stageFraction] 纯函数里（可单测），认不出 key 返回 null → 界面保持无限动画。
+                val stage = stageText(raw)
+                updateStatus(InstallStatus(instance.id, version, stage, fraction = stageFraction(raw)))
                 _progress.value = Progress.Stage(stage)
             }
             // npm 失败信息可能跨行，保留尾部若干行做摘要。
@@ -627,6 +641,9 @@ class DshInstaller(
             //   此时 errorTails 里一条 npm 输出都没有，errorSummary 又会落回
             //   "安装失败（详见日志）"—— 和本轮的 npm 前缀问题一模一样，只是换了个来源。
             trimmed.startsWith("[setup] FAILED") -> rememberFailureLine(instance.id, trimmed)
+            // ★ BL-032：run() 内部预检失败也走 onLine（"[proot] 预检失败: <原因>"），删掉外层预检后
+            //   这里收进尾部——失败摘要链经 errorSummary → 原样回放仍能带出可读原因，不回落泛化文案。
+            trimmed.startsWith(PREFLIGHT_FAIL_PREFIX) -> rememberFailureLine(instance.id, trimmed)
         }
     }
 
@@ -713,6 +730,13 @@ class DshInstaller(
 
         /** [errorTails] 保留的错误行数：够看清"哪一步、什么码"，又不会被前面的警告行顶掉 */
         private const val ERROR_TAIL_LINES = 12
+
+        /**
+         * run() 内部预检失败行的前缀（`ProotProcessExecutor.run:62` 发的 `[proot] 预检失败: …`）。
+         * ★ BL-032：删外层预检后靠它收原因进 errorTails（与 [onInstallLine] 的收口分支配套）。
+         *   字符串判据按原文写死——两边都是本仓库代码，真机无混用新旧版本的路径（预检行走同一进程）。
+         */
+        private const val PREFLIGHT_FAIL_PREFIX = "[proot] 预检失败:"
 
         /** 失败摘要送进界面/任务区的最大字符数（超出的截断，接口与实例卡片都放不下长文） */
         private const val SUMMARY_MAX_CHARS = 300
@@ -844,6 +868,32 @@ class DshInstaller(
                 val pkg = JsonUtils.fromNonNullJson(file.readText(), PackageJson::class.java)
                 pkg.version?.takeIf { it.isNotBlank() }
             }.getOrNull()
+        }
+
+        /**
+         * 安装 STAGE key → 阶梯百分比（BL-018 纯函数内核，可单测）。
+         *
+         * ★ 为什么是阶梯而不是真实百分比：npm 以 `CI=true` 运行（见 [runInstall] 的 argvEnv），
+         *   不输出百分比进度条，唯一可采的进度信号就是 setup 脚本的 STAGE 行。
+         * ★ 台阶值与脚本阶段顺序对应（`setup-node-dsh.sh` 的 stage 调用序）：
+         *   - installing-node / adding-npm：补装 Node/npm（只有底座缺东西时才出现，可选段 10%~15%）
+         *   - node-ready：Node 就绪 20%
+         *   - using-preinstalled-dsh：命中预装直接完成 100%
+         *   - installing：npm 下载安装（最长的一段）40%
+         *   - verifying-install：校验收尾 90%
+         * ★ key 认不出返回 null（界面保持无限动画），不猜 —— 与 [stageText] 未知 key 原样显示对应。
+         *
+         * @param raw `[setup] STAGE=` 后面的整段（`key[ args]`），key 是小写 ASCII kebab-case
+         * @return 0..1 的阶梯值；认不出返回 null
+         */
+        fun stageFraction(raw: String): Double? = when (raw.substringBefore(' ')) {
+            "installing-node" -> 0.10
+            "adding-npm" -> 0.15
+            "node-ready" -> 0.20
+            "using-preinstalled-dsh" -> 1.00
+            "installing" -> 0.40
+            "verifying-install" -> 0.90
+            else -> null
         }
     }
 }

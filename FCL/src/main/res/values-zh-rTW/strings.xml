@@ -146,13 +146,16 @@
         <string name="dsh_state_stopping">%1$s 停止中…</string>
         <string name="dsh_verify_running">正在檢測…</string>
         <string name="dsh_verify_title">檢測結果</string>
-        <string name="dsh_version_size">%1$s</string>
+        <string name="dsh_version_size">套件 %1$s</string>
         <string name="dsh_webview_auth_failed">工作階段已失效：本機 cookie 不再有效，請重新啟動實例以取得新 token。</string>
         <string name="dsh_webview_error">頁面載入失敗：%1$s</string>
         <string name="dsh_webview_http_error">伺服器端回傳 HTTP %1$d</string>
         <string name="dsh_webview_starting">正在啟動 dsh，首次啟動會比較慢…</string>
         <string name="dsh_webview_stopped">dsh 未在執行。返回後啟動實例。</string>
         <string name="dsh_webview_stopping">正在停止 dsh…</string>
+        <string name="dsh_webview_logoverlay_title">日誌</string>
+        <string name="dsh_webview_logoverlay_close">關閉日誌</string>
+        <string name="dsh_webview_logoverlay_full">去應用程式看完整日誌</string>
         <string name="dsh_tab_instances">實例</string>
     <string name="dsh_tab_versions">版本</string>
     <string name="dsh_tab_settings">設定</string>
@@ -230,7 +233,7 @@
     <string name="dsh_background_pick_failed">無法讀取所選圖片</string>
     <string name="dsh_background_applied">背景已更新</string>
     <string name="dsh_background_no_image">沒有可取樣色的自訂背景</string>
-    <string name="dsh_version_after_install">安裝後約 500MB（含相依套件）</string>
+    <string name="dsh_version_after_install">含相依套件約 500 MB（估計）</string>
     <string name="dsh_version_bundled">執行環境已內建，無需下載</string>
     <string name="dsh_installed_broken">安裝失敗</string>
     <string name="dsh_setup_brand">DeepSeek Harness</string>
@@ -261,6 +264,9 @@
     <string name="dsh_tasks_header_finished">已完成</string>
     <string name="dsh_tasks_clear_finished">清空已完成</string>
     <string name="dsh_task_cancelled_suffix">%1$s（已取消）</string>
+    <!-- 安裝成功的終態行 stage（BL-021）：純結論文案，不帶版本號 —— 標題已是「dsh <版本>」
+         這類含版本的實例名，再拼 "dsh <版本>" 會得到 "dsh X · dsh X" -->
+    <string name="dsh_task_install_done">安裝完成</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">將重新解壓縮執行環境（不會影響實例與 API Key）。</string>
     <string name="dsh_setup_steps_header">準備項目</string>
@@ -313,4 +319,9 @@
     <string name="dsh_preflight_rootfs_incomplete">rootfs 內容不完整（找不到 /bin/sh 或 /usr/bin/env）——常見原因：rootfs.tar.xz 裡帶了頂層目錄，解壓縮後多套了一層</string>
     <string name="dsh_preflight_missing_script">缺少指令碼 %1$s（執行環境底座未解壓縮）</string>
     <string name="dsh_list_separator">、</string>
+    <!-- R1b（BL-026）：WebView 版本過舊提示 -->
+    <string name="dsh_webview_compat_title">系統 WebView 版本過舊</string>
+    <string name="dsh_webview_compat_message">目前的 WebView 過舊，dsh 介面會顯示異常（需要 %1$d 以上版本）。您可以仍要繼續，或改用外部瀏覽器開啟本頁。</string>
+    <string name="dsh_webview_compat_continue">仍要繼續</string>
+    <string name="dsh_webview_compat_external">用外部瀏覽器開啟</string>
 </resources>

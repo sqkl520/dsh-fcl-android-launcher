@@ -116,7 +116,7 @@ class DshCoreLogicTest {
         )
         val item = DshVersionListItem.from(entry, emptySet())
         assertEquals("latest", item.tag)
-        assertEquals("2 KB", item.sizeText)
+        assertEquals("2.0 KB", item.sizeText) // BL-031③：KB 档一位小数
     }
 
     // --- 启动输出解析（决定 WebView 能否进入） -----------------------------

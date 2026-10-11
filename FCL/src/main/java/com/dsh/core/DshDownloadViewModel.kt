@@ -72,20 +72,36 @@ class DshDownloadViewModel(
         scope.launch { DshInstances.instances.collect { rebuild() } }
     }
 
-    /** 拉取版本列表（force=true 时绕过缓存） */
+    /**
+     * 拉取版本列表（force=true 时绕过缓存）。
+     *
+     * stale-while-revalidate（BL-017）：force 刷新只清 registry 缓存，不清界面手里的旧列表。
+     * - 有旧列表时不发 Loading（列表不消失；转圈由下载页自己的刷新态负责）；
+     * - 后台拿到新数据再替换；失败/超时则回退旧列表 + warning（Loaded 态），
+     *   只有"手里完全没数据"时才进 Error。
+     */
     fun refresh(force: Boolean = false) {
+        // 先记下界面手里有没有旧列表，再 invalidate：invalidate 后 DshRegistry.cached()
+        // 就没了，回退只能靠 allEntries（BL-017 的根因：原来失败时只看 registry 缓存，
+        // force 刷新失败必变空白 Error 页）。
+        val hadEntries = allEntries.isNotEmpty()
         if (force) DshRegistry.invalidate()
-        if (allEntries.isEmpty()) _uiState.value = UiState.Loading
+        if (!hadEntries) _uiState.value = UiState.Loading
         scope.launch {
             try {
                 val entries = withContext(Dispatchers.IO) {
                     val future = DshRegistry.fetchVersionsCached()
                     try {
-                        // 显式给 get 一个上限。原来的 `withTimeout { future.get() }` 挡不住真正的阻塞：
-                        // withTimeout 只取消协程，打断不了已经卡在 get() 里的线程，而 FCL 的 HttpRequest
-                        // 本身没设 connect/read 超时，弱网下这个线程会被**永久**占住（线程泄漏，越试越少）。
+                        // UI 侧等待上限（BL-017）：超过 FETCH_TIMEOUT_MS 就不再傻等，
+                        // 立刻回退旧列表。注意这只是"界面不等了"，后台线程该跑还跑：
+                        // HttpRequest 经 NetworkUtils 建连接，connect/read 各 10s 超时，
+                        // 加上 registry 侧 retry(3)，后台一次拉取最长约 60s 才真正结束。
                         future.get(FETCH_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
                     } catch (t: Throwable) {
+                        // 局限说明（BL-031②，本批只注释、不动机制）：future.cancel(true)
+                        // 中断不掉正卡在 socket 读里的线程（HttpURLConnection 的读不是
+                        // 可中断阻塞），cancel 只是让 future 不再向调用方交付结果，
+                        // 后台线程要等自己的 connect/read 超时或重试耗尽才退出。
                         future.cancel(true)
                         throw t
                     }
@@ -94,10 +110,11 @@ class DshDownloadViewModel(
                 lastWarning = null
                 rebuild()
             } catch (e: Exception) {
-                val stale = DshRegistry.cached()
-                if (!stale.isNullOrEmpty()) {
+                // 回退优先级：界面手里的旧列表（force 后唯一存活的）> registry 残留缓存。
+                val fallback = staleFallback(allEntries, DshRegistry.cached())
+                if (fallback != null) {
                     // 有旧数据：继续展示，只是提示一下
-                    allEntries = stale
+                    allEntries = fallback
                     lastWarning = e.message ?: e.toString()
                     rebuild()
                 } else {
@@ -168,7 +185,28 @@ class DshDownloadViewModel(
     }
 
     companion object {
-        const val FETCH_TIMEOUT_MS = 20_000L
+        /**
+         * UI 侧等待 registry 的上限（BL-017：从 20s 降到 10s，"界面不再傻等"的上限）。
+         * 不是网络超时本身：后台线程走自己的 connect/read 超时 + retry(3)，最长约 60s；
+         * 这里一到点就回退旧列表 + warning，不再阻塞界面。
+         */
+        const val FETCH_TIMEOUT_MS = 10_000L
+
+        /**
+         * stale-while-revalidate 的回退选择（纯函数，便于单测）。
+         * @param current 界面手里当前展示着的列表（force 刷新也不清，始终优先）
+         * @param registryCache registry 侧残留的缓存（非 force 失败时可能还有）
+         * @return 应回退展示的列表；两边都空返回 null（此时只能进 Error）
+         */
+        @JvmStatic
+        fun staleFallback(
+            current: List<DshRegistry.VersionEntry>,
+            registryCache: List<DshRegistry.VersionEntry>?
+        ): List<DshRegistry.VersionEntry>? = when {
+            current.isNotEmpty() -> current
+            !registryCache.isNullOrEmpty() -> registryCache
+            else -> null
+        }
 
         /**
          * 决定\"装某版本时该用哪个现有实例\"。抽出为纯函数便于单测。

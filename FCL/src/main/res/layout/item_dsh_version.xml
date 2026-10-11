@@ -70,7 +70,7 @@
             app:layout_constraintEnd_toStartOf="@id/btn_install"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/version"
-            tools:text="48 KB · 安装约 300MB" />
+            tools:text="包体 48.2 KB · 含依赖约 500 MB（估算）" />
 
         <!--
           安装：FCL 的列表行内动作一律是图标按钮，文案（"安装"）转为 contentDescription 保住

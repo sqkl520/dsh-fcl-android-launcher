@@ -74,8 +74,9 @@ class DshVersionAdapter(
             b.tag.visibility = View.GONE
         }
 
-        // 体积文本：tarball 大小。是否另注明"安装后占用"取决于**这个版本要不要下载**：
-        // 命中 rootfs 预装版本时点安装不下载任何东西，写"安装后约 500MB"会误导。
+        // 体积文本（BL-019 口径说明）：前半是 registry 包体解压体积（口径词"包体/package"
+        // 由 dsh_version_size 文案承载），后半是"含依赖"的安装后估算（dsh_version_after_install）。
+        // 命中 rootfs 预装版本时点安装不下载任何东西，后半改"已内置"分支（保留）。
         val sizeLine = if (item.preinstalled) {
             ctx.getString(
                 R.string.dsh_version_size, item.sizeText

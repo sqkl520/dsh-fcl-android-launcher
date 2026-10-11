@@ -164,10 +164,15 @@ class DshInstanceAdapter(
         }
 
         // 按钮可用性
-        val busy = isDeleting || (status?.running == true)
+        // BL-029：判据必须含 inst.state==INSTALLING —— 状态流空窗期 status 为 null，
+        // 那时仅看 status?.running 会误判"不忙"而短暂可点（见 isRowBusy）。
+        val busy = isRowBusy(isDeleting, status?.running, inst.state)
         // 安装失败的实例：主按钮变成「重试」（直接重装同版本），
         // 否则用户只能在「更多 → 重装」里找，或者再点一次下载——后者正是"堆一堆损坏实例"的来源之一
-        val canRetry = inst.state == DshInstance.State.BROKEN
+        val canRetry = !busy && inst.state == DshInstance.State.BROKEN
+        // BL-020：busy 时 btn_start 直接 GONE —— FCL 容器无 disabled 视觉，isEnabled=false
+        // 只剩"看着能点、点了没反应"；安装/删除中本来就没有可启动的东西，藏掉最诚实。
+        b.btnStart.visibility = if (busy) View.GONE else View.VISIBLE
         b.btnStart.isEnabled = !busy && (isRunning || inst.state == DshInstance.State.READY || canRetry)
 
         // ===== 主操作（图标 + 文字）=====
@@ -218,12 +223,13 @@ class DshInstanceAdapter(
         //   的 itemView）拿到的 context 就是那个 Activity，所以**不需要**给 Adapter 多要一个
         //   activity 参数。findActivity() 再沿 ContextWrapper 解包一层只是兜底：将来若有人
         //   给列表套一层 ContextThemeWrapper，弹窗仍能落到 Activity 上，而不是静默弹不出来。
-        b.btnMore.isEnabled = !busy
+        // BL-020：btn_more 永不禁用 —— busy 时菜单仅留「日志」那一项（见 moreActions），
+        // 安装中看日志是唯一入口；FCL 控件无 disabled 视觉，点不动还不如直接给能点的。
         b.btnMore.setOnClickListener {
             val dialogContext = findActivity(ctx) ?: return@setOnClickListener
             // 清单在**点击时**才算：它随实例状态而变（见 moreActions）；
             // 这一刻算出来的那一份，同时喂给对话框的条目和回调里的动作分发。
-            val actions = moreActions(inst)
+            val actions = moreActions(inst, busy)
             ItemSelectionDialog(
                 dialogContext,
                 // 标题用实例名：这是"这组选项作用在谁身上"的唯一上下文 ——
@@ -287,6 +293,9 @@ class DshInstanceAdapter(
     /**
      * 这一帧「更多」实际有哪几项（顺序：主操作在上、破坏性动作在下，照 FCL 的行内动作排法）。
      *
+     * BL-020：busy（安装中/删除中）时仅留「日志」—— 其它项（设置/重装/删除）在安装中
+     * 点下去全是空操作或危险操作，而看日志是安装中唯一有意义的入口。
+     *
      * ★ 为什么要单独建这张表，而不是在回调里 `when (index)`：
      *   清单是**动态**的 —— 实例是 READY 时没有「重新安装」那一项（见下），
      *   于是同一张菜单里的索引含义随实例状态而变：
@@ -296,7 +305,12 @@ class DshInstanceAdapter(
      *   点的是「删除」。所以这里先把清单算出来，回调再按**同一个列表**取项：
      *   对话框里画出来的条目和这里取到的动作出自同一次调用，索引天然对齐。
      */
-    private fun moreActions(inst: DshInstance): List<MoreAction> = buildList {
+    private fun moreActions(inst: DshInstance, busy: Boolean = false): List<MoreAction> = buildList {
+        // busy（安装中/删除中）时只留「日志」：安装中唯一有意义的入口
+        if (busy) {
+            add(MoreAction(R.string.dsh_action_logs) { onOpenLogs(inst) })
+            return@buildList
+        }
         add(MoreAction(R.string.dsh_action_settings) { onOpenSettings(inst) })
         add(MoreAction(R.string.dsh_action_logs) { onOpenLogs(inst) })
         // 出现条件沿用改造前的 PopupMenu：READY 的实例不提供「重新安装」——
@@ -330,3 +344,21 @@ class DshInstanceAdapter(
         private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     }
 }
+
+/**
+ * 实例行是否 busy（安装中/删除中）。
+ *
+ * BL-029：判据必须含 `state==INSTALLING` —— 安装状态流的空窗期 `status` 为 null，
+ * 那时仅看 `status?.running` 会误判"不忙"而短暂可点。
+ *
+ * 写成顶层函数：Adapter 自己的 companion 建 `Handler`，JVM 单测里类加载就崩；
+ * 顶层函数无类初始化负担，单测可直接调。
+ * `statusRunning` 只看 `InstallStatus.running`（`null` = 无安装状态条目），
+ * `state` 是实例自己的状态字段 —— 两侧互相兜底，任何一侧说"在装"都算忙。
+ */
+fun isRowBusy(
+    isDeleting: Boolean,
+    statusRunning: Boolean?,
+    state: DshInstance.State
+): Boolean = isDeleting || statusRunning == true ||
+    state == DshInstance.State.INSTALLING

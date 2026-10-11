@@ -162,13 +162,16 @@
         <string name="dsh_state_stopping">%1$s stopping…</string>
         <string name="dsh_verify_running">Running self-check…</string>
         <string name="dsh_verify_title">Self-check result</string>
-        <string name="dsh_version_size">%1$s</string>
+        <string name="dsh_version_size">package %1$s</string>
         <string name="dsh_webview_auth_failed">Session expired: the local cookie is no longer valid. Restart the instance to get a new token.</string>
         <string name="dsh_webview_error">Page failed to load: %1$s</string>
         <string name="dsh_webview_http_error">Server returned HTTP %1$d</string>
         <string name="dsh_webview_starting">Starting dsh, this can take a while on first run…</string>
         <string name="dsh_webview_stopped">dsh is not running. Go back and start the instance.</string>
         <string name="dsh_webview_stopping">Stopping dsh…</string>
+        <string name="dsh_webview_logoverlay_title">Logs</string>
+        <string name="dsh_webview_logoverlay_close">Close logs</string>
+        <string name="dsh_webview_logoverlay_full">Full logs in app</string>
         <string name="dsh_tab_instances">Instances</string>
     <string name="dsh_tab_versions">Versions</string>
     <string name="dsh_tab_settings">Settings</string>
@@ -252,7 +255,7 @@ Version %1$s</string>
     <string name="dsh_background_pick_failed">Could not read the selected image</string>
     <string name="dsh_background_applied">Background updated</string>
     <string name="dsh_background_no_image">No custom background to sample</string>
-    <string name="dsh_version_after_install">about 500MB after install (dependencies)</string>
+    <string name="dsh_version_after_install">with dependencies ≈ 500 MB (estimate)</string>
     <string name="dsh_version_bundled">bundled in runtime, no download needed</string>
     <string name="dsh_installed_broken">Failed</string>
     <string name="dsh_setup_brand">DeepSeek Harness</string>
@@ -283,6 +286,9 @@ Version %1$s</string>
     <string name="dsh_tasks_header_finished">Finished</string>
     <string name="dsh_tasks_clear_finished">Clear finished</string>
     <string name="dsh_task_cancelled_suffix">%1$s (cancelled)</string>
+    <!-- 安装成功的终态行 stage（BL-021）：纯结论文案，不带版本号 —— 标题已是「dsh <版本>」
+         这类含版本的实例名，再拼 "dsh <版本>" 会得到 "dsh X · dsh X" -->
+    <string name="dsh_task_install_done">Installed</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">This will re-extract the runtime on next start. Instances and API keys are not affected.</string>
     <string name="dsh_setup_steps_header">Preparation steps</string>
@@ -347,4 +353,9 @@ Version %1$s</string>
     <!-- 列表分隔符：中文用顿号、英文用逗号。走在资源里而不是写死在代码里 —— 顿号是中文的
          排版习惯，英文标点混进中文句子一样是"没做完的本地化"。 -->
     <string name="dsh_list_separator">", "</string>
+    <!-- R1b（BL-026）：WebView 版本过旧提示 -->
+    <string name="dsh_webview_compat_title">System WebView is too old</string>
+    <string name="dsh_webview_compat_message">The current WebView is too old, and the dsh UI may display incorrectly (version %1$d or newer is required). You can continue anyway, or open this page in an external browser instead.</string>
+    <string name="dsh_webview_compat_continue">Continue anyway</string>
+    <string name="dsh_webview_compat_external">Open in external browser</string>
 </resources>

@@ -655,20 +655,24 @@ private class TaskAdapter : RecyclerView.Adapter<TaskAdapter.VH>() {
         //   · 失败用它自己的语义色：@color/dsh_log_error —— 它本来就是"错误"这个语义的色，
         //     已在 values/ 与 values-night/ 各配了一套（亮色深红压在浅底、暗色提亮降饱和），
         //     跟着亮暗模式自动换，不需要再复制一份；
-        //   · 取消/完成走主题：取消的**标题**用 autoHintTint（半透明的自动对比色，由主色亮度
-        //     算出黑/白），天然"弱化但不消失"；完成的标题与其余一切照旧（getColor2()，次要主题色）。
+        //   · 取消的**标题**用 autoHintTint（半透明的自动对比色，由主色亮度
+        //     算出黑/白），天然"弱化但不消失"；
+        //   · 进行中/完成的标题用 autoTint —— 与布局里 app:auto_text_tint 是同一个色
+        //     （BL-022：原来这里写 getColor2()，亮色默认纯黑，把布局的自动对比色盖掉了）。
         // 用一个 when 一次定完标题色、明细行、进度条、后缀与动作，避免五处各判一遍 state 而漂移。
         var detailText = task.detail
-        var titleColor = theme.getColor2()
-        // 明细行的默认色 = autoTint，也就是布局里 app:auto_text_tint 本来会给的那个色 ——
-        // 行里另外那条 android:alpha="0.7" 仍在管"次要"这件事，两者叠加即改造前的观感。
+        // ★ 显式赋值而不是"不设"：RecyclerView 行复用 —— 一个被"失败行"用过的坑位，
+        //   下一帧拿去画"进行中/完成行"时，必须把上一帧的错误红主动清掉。
+        var titleColor = theme.autoTint
+        // 明细行的默认色同样是 autoTint —— 行里另外那条 android:alpha="0.7" 仍在管"次要"
+        // 这件事，两者叠加即"次要正文"的观感。
         var detailColor = theme.autoTint
         var showProgress = true
         when (task.state) {
-            DshTask.State.RUNNING -> Unit // 进行中：维持原样（进度条在位、颜色为主题次要色）
+            DshTask.State.RUNNING -> Unit // 进行中：维持原样（进度条在位、标题色与布局一致）
 
             DshTask.State.DONE -> {
-                // 装完了 / 跑完了：结果已经在 stage 里说清楚了（"dsh 0.1.5-rc.2"、"已删除"），
+                // 装完了 / 跑完了：结果已经在 stage 里说清楚了（"安装完成"、"已删除"），
                 // 不需要额外解释。进度条收起 —— 一根停在半截的进度条挂在"完成"下面，看起来像还没跑完。
                 showProgress = false
             }
@@ -798,6 +802,19 @@ private class TaskAdapter : RecyclerView.Adapter<TaskAdapter.VH>() {
 }
 
 /**
+ * 任务标题里「标题 · 阶段」的拼接（[DshTask.titleText] 的纯逻辑部分）。
+ *
+ * BL-021 回归锚点：空段过滤 + 「 · 」连接。单测只验这条（不验 Context 取资源那层）：
+ * - 正常两段拼成「实例名 · 阶段」；
+ * - 空标题/空阶段（BOOTSTRAP 类任务、空 stage 的终态）不留悬空分隔符；
+ * - 两段都空 → 空串。
+ *
+ * 写成顶层函数：单测直接调；[DshTask.titleText] 是它的唯一生产调用方。
+ */
+fun joinTaskTitle(title: String, stage: String): String =
+    listOf(title, stage).filter { it.isNotBlank() }.joinToString(" · ")
+
+/**
  * 任务标题：「运行环境」那条用固定文案（它的 title 是空的，只有阶段），其余用「实例名 · 阶段」。
  *
  * 写成 [DshTask] 的扩展而不是页面里的私有方法：这是"任务怎么显示"的规则，
@@ -809,13 +826,13 @@ private class TaskAdapter : RecyclerView.Adapter<TaskAdapter.VH>() {
  * 而"这件事已经结束了"是**界面的**补充信息，加在末尾既保留了原话，又一眼能分出
  * "还在装"和"已经停了"。所以取消态是「实例名 · 阶段（已取消）」。
  *
- * 完成态**不加**后缀：那一行的 stage 本身就是结论（安装的是 `dsh <版本>`、删除的是"已删除"），
+ * 完成态**不加**后缀：那一行的 stage 本身就是结论（安装的是"安装完成"、删除的是"已删除"），
  * 再挂一个"已完成"是同一句话说两遍。
  */
 private fun DshTask.titleText(context: Context): String {
     val base = when (kind) {
         DshTask.Kind.BOOTSTRAP -> context.getString(R.string.dsh_task_bootstrap)
-        else -> listOf(title, stage).filter { it.isNotBlank() }.joinToString(" · ")
+        else -> joinTaskTitle(title, stage)
     }
     return if (state == DshTask.State.CANCELLED) {
         context.getString(R.string.dsh_task_cancelled_suffix, base)

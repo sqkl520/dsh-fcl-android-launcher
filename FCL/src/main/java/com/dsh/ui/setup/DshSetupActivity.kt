@@ -289,23 +289,36 @@ class DshSetupActivity : FCLActivity() {
         }
     }
 
-    /** 刷新准备项状态（查磁盘事实，不依赖进度回调） */
+    /**
+     * 刷新准备项状态（查磁盘事实，不依赖进度回调）。
+     *
+     * ★ 磁盘 stat（resolveProotBin/resolveProotLoader/rootfsLooksUsable 都是 File.isFile/exists）下沉到 IO 线程：
+     *   本函数在 onCreate(buildStepRows) 与每个进度回调(render) 里都会被调用，原来直接在主线程
+     *   stat —— 解压期间 5Hz 的 Detail 回调会把主线程一点点拖住。查完回到主线程（scope 为
+     *   Main.immediate）再更新图标/文案。
+     */
     private fun refreshStepStates() {
-        val prootOk = DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR).isFile &&
-            DshPaths.resolveProotLoader(FCLPath.NATIVE_LIB_DIR).isFile
-        val scriptsOk = File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile
-        val rootfsOk = DshPaths.rootfsLooksUsable()
+        scope.launch {
+            val (prootOk, scriptsOk, rootfsOk) = withContext(Dispatchers.IO) {
+                Triple(
+                    DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR).isFile &&
+                        DshPaths.resolveProotLoader(FCLPath.NATIVE_LIB_DIR).isFile,
+                    File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile,
+                    DshPaths.rootfsLooksUsable()
+                )
+            }
 
-        applyStep(0, prootOk)
-        applyStep(1, scriptsOk)
-        applyStep(2, rootfsOk)
-        // 自检行由 afterPrepareReady 负责置位；未开始前显示"等待中"
-        val check = stepBindings[3] ?: return
-        if (check.stepState.text != getString(R.string.dsh_setup_state_running) &&
-            check.stepState.text != getString(R.string.dsh_setup_state_ready)
-        ) {
-            setStepIcon(check, R.drawable.ic_baseline_download_24)
-            check.stepState.setText(R.string.dsh_setup_state_waiting)
+            applyStep(0, prootOk)
+            applyStep(1, scriptsOk)
+            applyStep(2, rootfsOk)
+            // 自检行由 afterPrepareReady 负责置位；未开始前显示"等待中"
+            val check = stepBindings[3] ?: return@launch
+            if (check.stepState.text != getString(R.string.dsh_setup_state_running) &&
+                check.stepState.text != getString(R.string.dsh_setup_state_ready)
+            ) {
+                setStepIcon(check, R.drawable.ic_baseline_download_24)
+                check.stepState.setText(R.string.dsh_setup_state_waiting)
+            }
         }
     }
 
@@ -325,7 +338,10 @@ class DshSetupActivity : FCLActivity() {
         item.stepIcon.background?.setTint(ThemeEngine.getInstance().getTheme().getColor2())
     }
 
-    /** 「重新开始」：删掉版本标记让下次解压重跑（比重装 App 轻，且能救"半成品"） */
+    /**
+     * 「重新开始」：删掉版本标记让下次解压重跑（比重装 App 轻，且能救"半成品"）。
+     * 顺带清掉上次解压遗留的 `rootfs.tmp`/`rootfs.old`，避免半成品目录干扰重跑或白占空间。
+     */
     private fun restartFromScratch() {
         FCLAlertDialog.Builder(this)
             .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
@@ -336,6 +352,11 @@ class DshSetupActivity : FCLActivity() {
                     withContext(Dispatchers.IO) {
                         runCatching { File(DshPaths.ROOTFS_DIR, "version").delete() }
                         runCatching { File(DshPaths.SCRIPTS_DIR, "version").delete() }
+                        // 清掉上次解压留下的半成品/备份目录，让"重新开始"从干净状态重跑。
+                        // （.tmp/.old 的可回滚 rename 替换语义与 .old 删除时序仍归 extractRootfs/T-B2，
+                        //  这里只扫"遗留目录"，不介入那条替换逻辑。）
+                        runCatching { File("${DshPaths.ROOTFS_DIR}.tmp").deleteRecursively() }
+                        runCatching { File("${DshPaths.ROOTFS_DIR}.old").deleteRecursively() }
                     }
                     beginPrepare()
                 }
