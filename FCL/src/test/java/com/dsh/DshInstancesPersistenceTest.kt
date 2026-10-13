@@ -1,5 +1,6 @@
 package com.dsh
 
+import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,7 +10,7 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * instances.json 持久化的 JVM 单元测试（不需要真机/Android），对应 T-A3 的 **K12**。
+ * instances.json 持久化的 JVM 单元测试（不需要真机/Android），对应 T-A3 的 **K12** 与 fix2 的 **BL-098**。
  *
  * 覆盖的都是"会静默丢数据"的两处：
  * - **原子写**：rename 失败时**绝不**降级为直接覆盖写（那会在最危险时亲手打破原子性，
@@ -17,9 +18,18 @@ import java.nio.file.Files
  * - **空文件 ≠ 损坏**：空/全空白的 instances.json（全新安装 / 首次写被打断）必须当成**空清单**，
  *   而不是被误判损坏 → 另存 .corrupt → 清空列表。
  *
- * ★ 这些测试走 [DshInstances.loadFrom] / [DshInstances.writeManifest] 这两个"接受 File 参数"的
- *   可测种子（生产路径 [DshInstances.saveAsync]/`load` 用的是 `DshPaths.INSTANCES_MANIFEST`，
- *   在没有 Android Context 的单测里取不到）。每个用例用自己的临时目录，互不影响。
+ * BL-098 追加覆盖"字段级容错"（parseManifest 纯函数 + loadFrom 集成）：
+ * - 未知 state 枚举名的元素**降级保留为 NOT_INSTALLED**（R14-V2A F2 策略修正；初版曾丢弃，
+ *   会让用户在不知情下永久丢实例），其余保留、**不**产生 .corrupt（此前整份清单被清空）；
+ * - 缺 id/name 必填字段、非对象元素同样元素级丢弃；
+ * - state 缺失 / 显式 null / 未知枚举名在 Gson 下都是 null（2.10.1 实测，真类验证）——
+ *   三者一律回填 NOT_INSTALLED（repair 会按磁盘 package.json 自愈）；
+ * - 整体损坏（非 JSON / 根不是对象 / instances 不是数组）仍走 .corrupt 备份路径。
+ *
+ * ★ 这些测试走 [DshInstances.loadFrom] / [DshInstances.writeManifest] / [DshInstances.parseManifest]
+ *   这三个"接受参数"的可测种子（生产路径 [DshInstances.saveAsync]/`load` 用的是
+ *   `DshPaths.INSTANCES_MANIFEST`，在没有 Android Context 的单测里取不到）。
+ *   每个用例用自己的临时目录，互不影响。
  *
  * 运行：./gradlew :FCL:testFordebugUnitTest --tests "com.dsh.DshInstancesPersistenceTest"
  */
@@ -165,6 +175,164 @@ class DshInstancesPersistenceTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    // --- BL-098：字段级容错（parseManifest 纯函数 + loadFrom 集成）----------
+
+    /** 一个字段齐全的合法元素（可改 state / id 拼场景），复用同一份 JSON 模板。 */
+    private fun entry(
+        id: String,
+        name: String = id,
+        state: String? = "\"READY\""
+    ): String {
+        val statePart = if (state == null) "" else ""","state":$state"""
+        return """{"id":"$id","name":"$name","dshVersion":"0.1.6","profile":"web",""" +
+            """"port":0,"model":"deepseek-flash","createdAt":1,"updatedAt":2,"lastError":null$statePart}"""
+    }
+
+    /**
+     * 未知 state 枚举名的元素：**降级保留为 NOT_INSTALLED**（R14-V2A F2 策略修正），
+     * 其余元素原样保留、**不**产生 .corrupt（BL-098 核心）。
+     * 旧实现整份清单解析抛异常 → 清空 + .corrupt，用户看到"实例全没了"；
+     * W1D 初版曾"丢弃坏元素"—— 那会让用户在不知情下**永久丢失实例**（此后任何一次落盘固化）。
+     * 回填是自愈的：repair/启动校验以磁盘 package.json 为准，会把它纠正回真实状态。
+     */
+    @Test
+    fun loadKeepsEntryWithUnknownStateAsNotInstalled() {
+        val dir = Files.createTempDirectory("dsh-load").toFile()
+        try {
+            val f = File(dir, "instances.json")
+            f.writeText(
+                """{"instances":[${
+                    entry("inst-ok1")
+                },${entry("inst-bad", state = "\"UNKNOWN_STATE_NAME\"")},${entry("inst-ok2")}],
+                    "selectedId":"inst-ok2"}"""
+            )
+
+            DshInstances.loadFrom(f)
+
+            val list = DshInstances.instances.value
+            assertEquals("未知 state 元素应降级保留，三个都在", 3, list.size)
+            assertEquals(listOf("inst-ok1", "inst-bad", "inst-ok2"), list.map { it.id })
+            // 保留的元素 state 正常解析（不是被整体丢弃后重建的默认值）
+            assertEquals(DshInstance.State.READY, list[0].state)
+            assertEquals("未知 state 应回填 NOT_INSTALLED（而非 null / 丢弃）", DshInstance.State.NOT_INSTALLED, list[1].state)
+            assertEquals("存活元素的 selectedId 应生效", "inst-ok2", DshInstances.selectedId.value)
+            assertEquals("元素级容错不应产生 .corrupt 备份", 0, corruptBackups(dir).size)
+            assertTrue("原文件应保持原位（不迁移成备份）", f.exists())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * 缺 state 字段：元素保留、回填 NOT_INSTALLED（Gson unsafe 会给 null，不能让 null 漏进列表）。
+     * 显式 null 同路径。
+     */
+    @Test
+    fun loadBackfillsMissingStateToNotInstalled() {
+        val dir = Files.createTempDirectory("dsh-load").toFile()
+        try {
+            val f = File(dir, "instances.json")
+            f.writeText(
+                """{"instances":[${entry("inst-no-state", state = null)},${
+                    entry("inst-null-state", state = "null")
+                }],"selectedId":null}"""
+            )
+
+            DshInstances.loadFrom(f)
+
+            val list = DshInstances.instances.value
+            assertEquals("缺 state 与显式 null 都应保留元素", 2, list.size)
+            assertEquals(
+                "缺 state 应回填 NOT_INSTALLED",
+                DshInstance.State.NOT_INSTALLED, list[0].state
+            )
+            assertEquals(
+                "显式 null 应回填 NOT_INSTALLED",
+                DshInstance.State.NOT_INSTALLED, list[1].state
+            )
+            assertEquals("回填路径不应产生 .corrupt 备份", 0, corruptBackups(dir).size)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** 缺必填 id / name、以及非对象元素：元素级丢弃，其余保留。 */
+    @Test
+    fun loadDropsInvalidEntriesWithoutWipingManifest() {
+        val dir = Files.createTempDirectory("dsh-load").toFile()
+        try {
+            val f = File(dir, "instances.json")
+            f.writeText(
+                """{"instances":[${entry("inst-ok")},
+                    {"name":"no-id"},
+                    {"id":"inst-no-name"},
+                    "just a string",
+                    {"id":"inst-wrong-port","name":"n","port":"not-a-number","state":"READY"}],
+                    "selectedId":"inst-ok"}"""
+            )
+
+            DshInstances.loadFrom(f)
+
+            val list = DshInstances.instances.value
+            assertEquals("只有合法元素应存活", 1, list.size)
+            assertEquals("inst-ok", list[0].id)
+            assertEquals("不应产生 .corrupt 备份", 0, corruptBackups(dir).size)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * parseManifest 纯函数边界：
+     * - 非 JSON / 根不是对象 / instances 不是数组 → Corrupt（整体损坏，保留 .corrupt 语义）；
+     * - instances 缺失/null → Parsed 空清单，dropped=0；
+     * - state 为数字/对象原语（非字符串）：不当作"未知枚举名"，走回填/元素级失败，不整份清空。
+     */
+    @Test
+    fun parseManifestDistinguishesCorruptFromElementLevelProblems() {
+        // 整体损坏三连
+        assertTrue(
+            "非 JSON 文本应判 Corrupt",
+            DshInstances.parseManifest("{ not json :::") is DshInstances.ParsedManifest.Corrupt
+        )
+        assertTrue(
+            "根为数组应判 Corrupt",
+            DshInstances.parseManifest("""[1,2,3]""") is DshInstances.ParsedManifest.Corrupt
+        )
+        assertTrue(
+            "instances 非数组应判 Corrupt",
+            DshInstances.parseManifest("""{"instances":{}}""") is DshInstances.ParsedManifest.Corrupt
+        )
+        assertTrue(
+            "字面量 null 应判 Corrupt（旧的 parsed to null 语义保留）",
+            DshInstances.parseManifest("null") is DshInstances.ParsedManifest.Corrupt
+        )
+
+        // instances 缺失 / null = 空清单（与旧语义一致 m.instances ?: emptyList()）
+        val none = DshInstances.parseManifest("""{}""")
+        assertTrue("缺失 instances 应是 Parsed", none is DshInstances.ParsedManifest.Parsed)
+        assertEquals(0, (none as DshInstances.ParsedManifest.Parsed).instances.size)
+        assertEquals(0, none.dropped)
+
+        // state 是数字原语：不按"未知枚举名"丢（它压根不是字符串），走 Gson（实测得 null）→ 回填
+        val numeric = DshInstances.parseManifest(
+            """{"instances":[{"id":"x","name":"n","state":3}]}"""
+        ) as DshInstances.ParsedManifest.Parsed
+        assertEquals("数字 state 应回填而非丢弃", 1, numeric.instances.size)
+        assertEquals(DshInstance.State.NOT_INSTALLED, numeric.instances[0].state)
+    }
+
+    /** 整体损坏时 parseManifest 给出可读原因（进全局日志的 reason），且 loadFrom 仍走 .corrupt。 */
+    @Test
+    fun parseManifestReportsReasonForCorrupt() {
+        val c = DshInstances.parseManifest("""{"instances":"nope"}""")
+        assertTrue(c is DshInstances.ParsedManifest.Corrupt)
+        assertTrue(
+            "Corrupt 应带出可读原因",
+            (c as DshInstances.ParsedManifest.Corrupt).reason.contains("not a JSON array")
+        )
     }
 
     /** 该目录下所有 `instances.json.corrupt-*` 备份文件。 */

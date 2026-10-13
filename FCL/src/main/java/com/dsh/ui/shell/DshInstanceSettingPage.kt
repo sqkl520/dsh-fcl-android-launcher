@@ -14,7 +14,6 @@ import com.dsh.core.DshServices
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.UiDshInstanceDetailBinding
 import com.dsh.ui.DshInstanceSettingAdapter
-import com.mio.dialog.ItemSelectionDialog
 import com.mio.ui.adapter.SpacingItemDecoration
 import com.tungsten.fcllibrary.component.dialog.EditDialog
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
@@ -35,7 +34,7 @@ import kotlinx.coroutines.withContext
  * ## 结构（照 FCL 的版本设置页）
  * `RecyclerView` + [DshInstanceSettingAdapter]（分组 / 当前值行 / 按钮行）+
  * [SpacingItemDecoration]（组内 1dp 细缝并绘制分割线、组间 8dp）+ 位置感知圆角。
- * 文本输入用 FCL 的 [EditDialog]，单选用 FCL 的 [ItemSelectionDialog]。
+ * 文本输入用 FCL 的 [EditDialog]（fix2 / BL-089 删掉 Profile 行后，本页已不用单选框）。
  *
  * ## 相对改造前那页的差异（逐条都是有意为之）
  * - **API Key 整段已移除**：Key 改由 dsh 自己的页面录入（那边功能更全：能测连通、能换模型）。
@@ -166,8 +165,19 @@ class DshInstanceSettingPage(
     private fun runRows(): List<DshInstanceSettingAdapter.Row> {
         val running = isRunning()
         // 启动/停止是同一行：按钮文案随状态翻转，行的标题也跟着翻，
-        // 免得出现"标题写启动、按钮写停止"这种自相矛盾的行（FCL 的动作行标题与按钮同文案）
-        val actionText = if (running) R.string.dsh_action_stop else R.string.dsh_action_start
+        // 免得出现"标题写启动、按钮写停止"这种自相矛盾的行（FCL 的动作行标题与按钮同文案）。
+        // ★ fix2 / BL-127（F2-15c 同族）：文案判据统一用 DshRuntime.activeInstanceId() ——
+        //   "在跑" = Starting / Running / Stopping 且归属本实例，与 onAction 的点击判据同一表达。
+        //   旧判据只看 Running：Starting 期文案显示「启动」，点击被 isBusy 静默吞掉 ——
+        //   "显示能启动、实际什么都不会发生"，正是 V8-3 的名实两张皮。
+        val active = DshRuntime.activeInstanceId() == instanceId
+        val actionText = when {
+            active -> R.string.dsh_action_stop
+            // 安装中：没有可启动的东西（与实例列表页的 busy 语义一致）。按钮切成状态词
+            // 「安装中」，点击静默不做（见 onAction）—— 不出现"写着启动、点不动"的形态。
+            inst?.state == DshInstance.State.INSTALLING -> R.string.dsh_state_installing
+            else -> R.string.dsh_action_start
+        }
         return listOf(
             // 组头用 `dsh_settings_section_*` 这一族（它们就是为分组标题准备的），
             // 而不是拿 tab 文案 `dsh_instance_detail_tab_run` 顶替 —— 后者是 tab 标签，
@@ -180,11 +190,17 @@ class DshInstanceSettingPage(
             DshInstanceSettingAdapter.Row.Action(
                 actionText, 0, actionText, DshInstanceSettingAdapter.Tag.START_STOP
             ),
-            // 打开界面：**仅运行中可点**。用 `editable` 表达可点性 —— 值行布局只有这一个
-            // 可点提示（右侧图标），不可点时整行不响应、图标也不显示，语义正好。
+            // 打开界面：**运行中或启动/停止中可点**。用 `editable` 表达可点性 —— 值行布局只有
+            // 这一个可点提示（右侧图标），不可点时整行不响应、图标也不显示，语义正好。
+            // ★ fix2 / BL-125 半（#11 的详情页侧）：旧判据只有 running，Starting 期用户一旦离开
+            //   WebView 页就再也进不去（唯一入口是 onStarted 的一次性跳转，V8-1）；而 WebView 页
+            //   自身对 Starting 渲染完好（显示「启动中」面板，含停止/日志按钮）—— 门禁拦在入口
+            //   是疏漏、不是设计。Stopping 一并放开：点进去看到「停止中」面板，无害。
+            //   安装中不放开：没有界面可开。
             DshInstanceSettingAdapter.Row.Value(
                 R.string.dsh_action_open_web, 0,
-                { webUiText() }, DshInstanceSettingAdapter.Tag.OPEN_WEB, editable = running
+                { webUiText() }, DshInstanceSettingAdapter.Tag.OPEN_WEB,
+                editable = running || isBusy()
             ),
 
             DshInstanceSettingAdapter.Row.Group(R.string.dsh_settings_section_env),
@@ -222,10 +238,14 @@ class DshInstanceSettingPage(
         // 改完看不出任何效果，用户还会以为自己已经换过模型了。
         // 模型现在只由 dsh 自己的「设置 → 模型」决定，两处都能设不如只留一处。
         // `DshInstance.model` 字段本身保留（删字段要写数据迁移，不值得），它现在只是遗留字段。
-        DshInstanceSettingAdapter.Row.Value(
-            R.string.dsh_settings_profile, R.string.dsh_settings_desc_profile,
-            { inst?.profile ?: "" }, DshInstanceSettingAdapter.Tag.PROFILE
-        ),
+        //
+        // ★ 同样地，这里没有 Profile 行（fix2 / BL-089 删除 —— 这是本文件 set* 行里最后
+        //   一个死开关）：启动脚本对 $PROFILE **零引用**（start-dsh.sh 里只有注释提到它，
+        //   实际启动命令硬编码 `dsh web`），改 Profile 不产生任何效果。等哪天脚本真的按
+        //   $PROFILE 分派（web / headless），再从 dsh 自己的设置面或这里重新接。
+        //   `DshInstance.profile` 字段**保留不动**：instances.json 里已有数据不能丢，
+        //   且 DshRuntime 仍把它注进启动环境（见 DshRuntime 的 env 组装）—— 是"列而不注"
+        //   的反面例子之后再接线时可以复用这条通路。
         DshInstanceSettingAdapter.Row.Value(
             R.string.dsh_settings_row_port, R.string.dsh_settings_desc_port,
             {
@@ -251,7 +271,14 @@ class DshInstanceSettingPage(
     private fun isRunning(): Boolean =
         runtimeState.let { it is DshRuntime.State.Running && it.instanceId == instanceId }
 
-    /** 启动/停止进行中的实例：此时按钮不该再响应（页面没有"禁用行"的能力，所以按下去直接忽略） */
+    /**
+     * 本实例是否处于**启动中 / 停止中**。
+     *
+     * fix2 起这只剩一个用途：决定「打开界面」行可不可点（Starting 期也要能点进去看
+     * 「启动中」面板，修 V8-1；Stopping 顺带放开，无害）。行动按钮的判据已改走
+     * `DshRuntime.activeInstanceId()` —— 那里的口径是"在跑"（Starting/Running/Stopping），
+     * 与这里"过渡态"（Starting/Stopping）不是同一件事，别混用。
+     */
     private fun isBusy(): Boolean = when (val st = runtimeState) {
         is DshRuntime.State.Starting -> st.instanceId == instanceId
         is DshRuntime.State.Stopping -> st.instanceId == instanceId
@@ -334,19 +361,15 @@ class DshInstanceSettingPage(
                 }
             }
 
-            DshInstanceSettingAdapter.Tag.PROFILE -> pick(
-                context.getString(R.string.dsh_settings_profile), DshInstance.PROFILES, i.profile
-            ) { value ->
-                DshInstances.updateConfig(i.id, profile = value)
-                reload()
-            }
-
             DshInstanceSettingAdapter.Tag.PORT -> editText(
                 context.getString(R.string.dsh_settings_row_port),
-                if (i.port > 0) i.port.toString() else ""
+                if (i.port > 0) i.port.toString() else "",
+                allowEmpty = true
             ) { text ->
-                val port = if (text.isBlank()) 0 else text.trim().toIntOrNull()
-                if (port == null || port < 0 || port > 65535) {
+                // 空串是对这把输入框**合法**的输入（= 自动分配端口），所以这里必须
+                // 走 allowEmpty 通路收下它，再按 blank→0 解释（parsePortInput，fix2 / BL-090）。
+                val port = parsePortInput(text)
+                if (port == null) {
                     toast(context.getString(R.string.dsh_port_invalid))
                 } else {
                     DshInstances.updateConfig(i.id, port = port)
@@ -361,7 +384,7 @@ class DshInstanceSettingPage(
                 toast(context.getString(R.string.dsh_settings_desc_path))
             }
 
-            // 打开界面：只有运行中才会走到这里（`editable` 已按运行态设置）
+            // 打开界面：运行中/启动中/停止中才会走到这里（`editable` 按 running || isBusy() 设置）
             DshInstanceSettingAdapter.Tag.OPEN_WEB -> host.openWebView()
 
             else -> Unit
@@ -374,10 +397,24 @@ class DshInstanceSettingPage(
         val i = inst ?: return
         when (row.tag) {
             DshInstanceSettingAdapter.Tag.START_STOP -> {
-                // 启动中/停止中不接受第二次点击：状态行已经把这件事说清楚了，重复下发只会
-                // 让运行时收到自相矛盾的指令
-                if (isBusy()) return
-                if (isRunning()) DshRuntime.stop() else startInstance(i)
+                // fix2 / BL-127：判据与文案、点击行为**同源**（DshRuntime.activeInstanceId()）。
+                // 旧实现"文案看 Running、点击看 isBusy + Running"两张皮：Starting 期写着「启动」，
+                // 点下去被 busy 静默吞掉（V8-3）。现在 Starting/Stopping 也计入"在跑"（文案「停止」），
+                // 点击落到同一个停止动作上。
+                if (DshRuntime.activeInstanceId() == i.id) {
+                    // 在跑（含 Starting）：停。★ 用 stopIf 而不是 stop()：stop() 停的是"当前在跑的
+                    // 那个"，从行渲染到用户点击之间状态可能已换实例（TOCTOU），stopIf 在运行时
+                    // 同一把锁里重新判定"跑的是不是它"，不会误停别的实例。
+                    // Stopping 期点击会在 stopIf 内部判 false（已在停、无物可停）——此刻文案也是
+                    // 「停止」，重复下发只会让运行时收到自相矛盾的指令，静默忽略是对的。
+                    DshRuntime.stopIf(i.id)
+                } else if (i.state == DshInstance.State.INSTALLING) {
+                    // 安装中：与列表页 busy 语义一致（安装中本来就没有可启动的东西），点击静默不做。
+                    // 文案已切成「安装中」（runRows），不存在"写着启动、点击无效"的干扰。
+                    return
+                } else {
+                    startInstance(i)
+                }
             }
             DshInstanceSettingAdapter.Tag.VERIFY -> verifyRuntime()
             DshInstanceSettingAdapter.Tag.REINSTALL -> reinstall(i)
@@ -405,16 +442,22 @@ class DshInstanceSettingPage(
 
     // ===== 各动作的具体实现（与改造前一致）=====
 
-    /** 文本输入：用 FCL 的 EditDialog（与 FCL 设置页的编辑行同款） */
-    private fun editText(title: String, initial: String, onOk: (String) -> Unit) {
-        EditDialog(context, initial) { text -> onOk(text) }.apply { setTitle(title) }.show()
-    }
-
-    /** 单选：用 FCL 的 ItemSelectionDialog */
-    private fun pick(title: String, options: List<String>, current: String, onPick: (String) -> Unit) {
-        ItemSelectionDialog(context, title, options, true, options.indexOf(current)) { _, value ->
-            onPick(value)
-        }.show()
+    /**
+     * 文本输入：用 FCL 的 EditDialog（与 FCL 设置页的编辑行同款）。
+     *
+     * @param allowEmpty 空白确认是否有效（fix2 / BL-090）：端口行传 true（空串 = 自动分配，
+     *   由 onOk 收到 "" 后走 [parsePortInput] 的 blank→0 分支）；其余行保持默认 false
+     *   （空白确认时 EditDialog 弹提示、不关闭，见 [EditDialog] 的 allowEmpty 参数）。
+     */
+    private fun editText(
+        title: String,
+        initial: String,
+        allowEmpty: Boolean = false,
+        onOk: (String) -> Unit
+    ) {
+        EditDialog(context, initial, allowEmpty) { text -> onOk(text) }
+            .apply { setTitle(title) }
+            .show()
     }
 
     private fun verifyRuntime() {
@@ -499,4 +542,24 @@ class DshInstanceSettingPage(
     }
 
     private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+}
+
+/**
+ * 端口输入框的解析口径（fix2 / BL-090 从端口行点击处理里抽出的纯逻辑，唯一调用方便是它）。
+ *
+ * - **空串/纯空白 = 自动分配**（约定值 0）。这是端口行 `allowEmpty = true` 通路的意义：
+ *   用户清空输入框再点确认 → EditDialog 回传 "" → 这里给出 0 → `updateConfig(port = 0)` →
+ *   显示回「自动」。BL-090 修的就是这条路径此前不可达（空白确认被 EditDialog 静默吞掉）。
+ * - 非空白：必须解析成 0..65535 的整数，否则 `null`（调用方弹 [R.string.dsh_port_invalid]）。
+ *   `"0"` 本身也合法 —— 显式写 0 与留空同义（dsh 侧 `--port 0` 由系统挑端口）。
+ *
+ * 写成**顶层函数**：与 `isRowBusy`（DshInstanceAdapter.kt）/ `trimDeltaFor`（DshWebViewActivity.kt）
+ * 同一处理 —— 单测 harness 无 androidx，经页面类访问会被 AppCompat 父类链加载拖崩；
+ * 顶层函数无类初始化负担，`W2CTest` 可直接调。
+ */
+fun parsePortInput(text: String): Int? {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return 0
+    val port = trimmed.toIntOrNull() ?: return null
+    return if (port in 0..65535) port else null
 }

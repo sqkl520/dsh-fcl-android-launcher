@@ -103,7 +103,10 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/task_area" />
 
-    <!-- 空态提示：无实例时显示 -->
+    <!-- 空态提示：无实例时显示。
+         ★ BL-087：文案 key dsh_instances_empty 的**值**是错的（三语言都写着"点击『下载』…"，
+           而外壳里没有叫"下载"的入口，左侧 tab 名是「版本」）—— 值在 strings.xml（编排统一
+           改），新值见 fix2/W3B1 报告 String 需求表；本布局只引用 key，不改。 -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/empty_hint"
         android:layout_width="0dp"

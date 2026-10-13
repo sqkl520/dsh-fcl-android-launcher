@@ -86,12 +86,15 @@
         app:auto_text_tint="true"
         tools:text="312.4 MB" />
 
-    <!-- 安装阶段文案（仅安装中可见） -->
+    <!-- 安装阶段文案（仅安装中可见）。
+         BL-088：singleLine 必须配 ellipsize=end —— 只写 singleLine 是"硬截断"，
+         长阶段文案（含版本号/额外参数时可能很长）会从中间切断且无省略号。 -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/install_stage"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
+        android:ellipsize="end"
         android:singleLine="true"
         android:textSize="11sp"
         android:visibility="gone"
@@ -115,12 +118,19 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/install_stage" />
 
-    <!-- 失败原因（BROKEN 时可见） -->
+    <!-- 失败原因（BROKEN 时可见）。
+         BL-088：失败摘要最长可到 300 字符（DshInstaller 的 SUMMARY_MAX_CHARS），不设上限
+         能把卡片撑高十余行 —— maxLines=4 + ellipsize=end 封顶，超出以省略号收尾。
+         ★ textColor 的 @color/dsh_log_error 只是"第一帧"的取值；亮暗切换后按当下资源重设
+           在代码侧完成（BL-085，见 DshInstanceAdapter.onBindViewHolder 里挂的 errorText
+           主题回调）。 -->
     <com.tungsten.fcllibrary.component.view.FCLTextView
         android:id="@+id/error_text"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:maxLines="4"
         android:textColor="@color/dsh_log_error"
         android:textSize="11sp"
         android:visibility="gone"

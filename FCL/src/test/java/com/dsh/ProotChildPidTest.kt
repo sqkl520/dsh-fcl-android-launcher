@@ -2,6 +2,7 @@ package com.dsh
 
 import com.dsh.core.ProotRunner
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -15,9 +16,16 @@ import java.io.File
  * `android.jar` 里能编过只是编译期假象，**真机上 `getMethod("pid")` 抛 NoSuchMethodException**，
  * 那条反射路径一次都不会成功。真机上唯一能拿到 pid 的是 `/proc` 兜底，所以它必须有自己的测试。
  *
+ * ## fix2 追加（BL-027 方案 A）
+ * R13 真机确诊该设备内核无 `CONFIG_PROC_CHILDREN`（`childrenFilesPresent=0`，children 差集恒空），
+ * 于是新增第三路径：`/proc` 全表扫描（ppid==本 App pid + cmdline 含 proot 与 INSTANCE_DIR 标记）。
+ * 本文件下半部分钉它的纯函数（`parsePpidFromStat` / `selectProotPid` / `prootMatchCount` /
+ * `identityMarkerFromArgv` / `scanProcChildren`）与 `snapshotChildPids` 的全扫回退。
+ *
  * ## 怎么测：假 `/proc` 根目录
- * `/proc` 没法在测试进程里伪造（内核文件系统），所以两个函数都把 `procRoot` 做成了参数。
- * 测试里造一棵 `tmp/proc/self/task/<tid>/children` 目录树，直接喂进去。
+ * `/proc` 没法在测试进程里伪造（内核文件系统），所以这些函数都把 `procRoot` 做成了参数。
+ * 测试里造一棵 `tmp/proc/self/task/<tid>/children` 目录树（或 `tmp/proc/<pid>/stat|cmdline`
+ * 全扫形状），直接喂进去。
  *
  * 跑法：`sh run-tests.sh`
  */
@@ -161,6 +169,175 @@ class ProotChildPidTest {
 
         fakeProc(root, mapOf("100" to "1111 9999\n"))  // 启动后：proot(9999) 出现
         assertEquals(9999L, ProotRunner.findChildPidFromProc(root.absolutePath, before))
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // fix2 / BL-027 方案 A：/proc 全表扫描（children 文件缺失机型 = 真机确诊形状的第三条路）
+    //
+    // 真机确诊（R13-V7）：该设备内核 `CONFIG_PROC_CHILDREN` 未开（`childrenFilesPresent=0`），
+    // 上面的 children 差集恒空；而反射路径在任意 Android 上结构必死（java.lang.Process 无 pid()）。
+    // 全扫 = ppid==本 App pid 的候选 + cmdline 身份匹配（含 proot + INSTANCE_DIR 标记）。
+    // 这一段钉住它的纯函数与假目录集成。
+    // ---------------------------------------------------------------------------------------------
+
+    /** 造一条内核格式的假 `stat` 行：`pid (comm) state ppid …` */
+    private fun statLine(pid: Long, comm: String, ppid: Int): String =
+        "$pid ($comm) S $ppid 4242 4242 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 123 456 789 0 0 0 0 0 0 0"
+
+    /** 造一条假进程目录：`<root>/<pid>/stat` + `<root>/<pid>/cmdline`（argv 用 NUL 分隔，同内核）。 */
+    private fun fakeProcEntry(root: File, pid: Long, ppid: Int, comm: String, argv: List<String>) {
+        val dir = File(root, pid.toString())
+        dir.mkdirs()
+        File(dir, "stat").writeText(statLine(pid, comm, ppid))
+        // 内核的 cmdline 是 argv 逐项 NUL 分隔（末尾通常还有一个 NUL）——测试按同一形状写。
+        // NUL 用运行时构造（0.toChar()），不写转义字面量 —— 与主代码 scanProcChildren 的写法对称。
+        val nul = 0.toChar().toString()
+        File(dir, "cmdline").writeText(argv.joinToString(nul) + nul)
+    }
+
+    /** 正常行：`)` 后第 2 个字段就是 ppid */
+    @Test
+    fun parsesPpidFromNormalStatLine() {
+        assertEquals(5000, ProotRunner.parsePpidFromStat("1234 (proot) S 5000 1234 1234 0 -1"))
+    }
+
+    /** comm 含空格：不能按第一个空格切分，必须找**最后一个** `)` */
+    @Test
+    fun parsesPpidWhenCommContainsSpaces() {
+        assertEquals(777, ProotRunner.parsePpidFromStat("1234 (my proot task) R 777 1 2 3"))
+    }
+
+    /** comm 含 `)`：最后一个 `)` 才是收尾括号（内核原样输出、不转义） */
+    @Test
+    fun parsesPpidWhenCommContainsParen() {
+        assertEquals(42, ProotRunner.parsePpidFromStat("1234 (a)b) S 42 0 0"))
+    }
+
+    /** 垃圾行 → null（绝不抛异常：扫描循环里一行垃圾不该中断整轮扫描） */
+    @Test
+    fun rejectsGarbageStatLines() {
+        assertNull(ProotRunner.parsePpidFromStat(""))
+        assertNull(ProotRunner.parsePpidFromStat("no parens at all"))
+        assertNull(ProotRunner.parsePpidFromStat("1234 (comm) S"))          // `)` 后不足 2 个字段
+        assertNull(ProotRunner.parsePpidFromStat("1234 (comm) S notanumber"))
+    }
+
+    /** 全扫集成：假 /proc 下只有 ppid==myPid 的目录被收为候选；CMDline 的 NUL 转成空格。 */
+    @Test
+    fun scanFindsOnlyDirectChildren() {
+        val root = tempRoot()
+        fakeProcEntry(root, 4242, 5000, "proot", listOf("/data/app/libproot.so", "-r", "/rootfs"))
+        fakeProcEntry(root, 4343, 5000, "proot", listOf("/data/app/libproot.so"))
+        fakeProcEntry(root, 4444, 1, "init", listOf("/system/bin/init"))     // 别人的子进程
+        File(root, "self").mkdirs()                                          // 非数字目录名
+        val got = ProotRunner.scanProcChildren(root.absolutePath, 5000)
+        assertEquals(setOf(4242L, 4343L), got.map { it.pid }.toSet())
+        val c = got.first { it.pid == 4242L }
+        assertTrue("cmdline 的 NUL 应转成空格", c.cmdline.contains("/data/app/libproot.so -r /rootfs"))
+    }
+
+    /** 端到端：全扫 + 身份匹配从假 /proc 里挑出带本实例标记的那条 proot，跳过兄弟（别的实例）与无关进程 */
+    @Test
+    fun fullScanPicksMarkedProotAmongSiblings() {
+        val root = tempRoot()
+        val marker = "INSTANCE_DIR=/opt/dsh/instances/abc"
+        fakeProcEntry(root, 4242, 9000, "proot",
+            listOf("/data/libproot.so", "INSTANCE_DIR=/opt/dsh/instances/other", "/bin/sh", "start-dsh.sh"))
+        fakeProcEntry(root, 4343, 9000, "proot",
+            listOf("/data/libproot.so", marker, "/bin/sh", "start-dsh.sh"))
+        fakeProcEntry(root, 4444, 9000, "sh", listOf("/system/bin/sh", "ls"))
+        val candidates = ProotRunner.scanProcChildren(root.absolutePath, 9000)
+        assertEquals(4343L, ProotRunner.selectProotPid(candidates, 9000, marker, emptySet()))
+    }
+
+    /**
+     * 多候选（同标记重复）→ 取 **pid 最大者**（= 最新 start 的那条）。
+     * 设计决策见 `selectProotPid` 的注释：同标记重复只发生在秒启竞态，pid 单调递增。
+     */
+    @Test
+    fun selectTakesHighestPidOnDuplicates() {
+        val marker = "INSTANCE_DIR=/opt/dsh/instances/abc"
+        val cands = listOf(
+            ProotRunner.Candidate(1000L, "/x/libproot.so $marker"),
+            ProotRunner.Candidate(2000L, "/x/libproot.so $marker")
+        )
+        assertEquals(2000L, ProotRunner.selectProotPid(cands, 9000, marker, emptySet()))
+    }
+
+    /** 无匹配 / 被排除 / 候选即自己（防自杀）/ 空列表 → null */
+    @Test
+    fun selectReturnsNullWithoutMatch() {
+        val marker = "INSTANCE_DIR=/opt/dsh/instances/abc"
+        assertNull(ProotRunner.selectProotPid(
+            listOf(ProotRunner.Candidate(1000L, "/x/libproot.so INSTANCE_DIR=/opt/dsh/instances/other")),
+            9000, marker, emptySet()))
+        assertNull(ProotRunner.selectProotPid(
+            listOf(ProotRunner.Candidate(1000L, "/x/libproot.so $marker")),
+            9000, marker, setOf(1000L)))
+        assertNull(ProotRunner.selectProotPid(
+            listOf(ProotRunner.Candidate(9000L, "/x/libproot.so $marker")),
+            9000, marker, emptySet()))
+        assertNull(ProotRunner.selectProotPid(emptyList(), 9000, marker, emptySet()))
+    }
+
+    /** marker 为空串（自检 probe.sh 的 argv 没有 INSTANCE_DIR）→ 退化为只按 proot 名匹配 */
+    @Test
+    fun blankMarkerFallsBackToProotNameOnly() {
+        val cands = listOf(ProotRunner.Candidate(1000L, "/x/libproot.so /bin/sh probe.sh"))
+        assertEquals(1000L, ProotRunner.selectProotPid(cands, 9000, "", emptySet()))
+    }
+
+    /** cmdline 读不到（权限）→ 空串候选，永远不匹配；扫描不炸、该项直接出局 */
+    @Test
+    fun candidateWithoutCmdlineNeverMatches() {
+        val cands = listOf(ProotRunner.Candidate(1000L, ""))
+        assertNull(ProotRunner.selectProotPid(cands, 9000, "m", emptySet()))
+        assertEquals(0, ProotRunner.prootMatchCount(cands, 9000, "m", emptySet()))
+    }
+
+    /** 诊断计数与选择器同判据（prootMatchCount 必须和 selectProotPid 的过滤结果一致） */
+    @Test
+    fun prootMatchCountSharesPredicate() {
+        val marker = "INSTANCE_DIR=/opt/dsh/instances/abc"
+        val cands = listOf(
+            ProotRunner.Candidate(1000L, "/x/libproot.so $marker"),
+            ProotRunner.Candidate(2000L, "/x/libsh.so nothing")
+        )
+        assertEquals(1, ProotRunner.prootMatchCount(cands, 9000, marker, emptySet()))
+    }
+
+    /** identityMarkerFromArgv：取 argv 里现成的 INSTANCE_DIR **整项**；没有 → 空串 */
+    @Test
+    fun extractsIdentityMarkerFromArgv() {
+        val argv = listOf("/x/libproot.so", "-r", "/rootfs", "PATH=/bin",
+            "INSTANCE_DIR=/opt/dsh/instances/abc", "/bin/sh", "start-dsh.sh")
+        assertEquals("INSTANCE_DIR=/opt/dsh/instances/abc", ProotRunner.identityMarkerFromArgv(argv))
+        assertEquals("", ProotRunner.identityMarkerFromArgv(listOf("/x/libproot.so", "/bin/sh", "probe.sh")))
+    }
+
+    /**
+     * `snapshotChildPids` 回退（fix2 / BL-027 第 2 条）：children 文件全缺失（真机确诊形状：
+     * tid 目录在、children 文件不在）时，用全扫按 ppid 收快照 —— 不能再返回空集
+     * （空排除集会让差集把启动前就在的老子进程也当"新出现的"）。
+     */
+    @Test
+    fun snapshotFallsBackToFullScanWhenChildrenMissing() {
+        val root = tempRoot()
+        val task = File(root, "self/task")
+        File(task, "100").mkdirs()
+        File(task, "101").mkdirs()
+        fakeProcEntry(root, 5555, 5000, "proot", listOf("/x/libproot.so"))
+        fakeProcEntry(root, 6666, 1, "init", listOf("/init"))
+        assertEquals(setOf(5555L), ProotRunner.snapshotChildPids(root.absolutePath, 5000))
+    }
+
+    /** children 文件能读时**不**回退全扫：children 是权威口径（两条口径混用会把排除集算错） */
+    @Test
+    fun snapshotPrefersChildrenWhenPresent() {
+        val root = tempRoot()
+        fakeProc(root, mapOf("100" to "1111\n"))
+        fakeProcEntry(root, 5555, 5000, "proot", listOf("/x/libproot.so"))
+        assertEquals(setOf(1111L), ProotRunner.snapshotChildPids(root.absolutePath, 5000))
     }
 
     /**

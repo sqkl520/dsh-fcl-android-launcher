@@ -188,7 +188,7 @@ object DshBootstrap {
     /**
      * 首启解压（幂等）。在 IO 线程调用。逐项检查 version，只解压过期的子项。
      */
-    fun install(context: Context, owner: String? = null, onProgress: (Progress) -> Unit = {}) {
+    fun install(context: Context, owner: String? = null, forceExtract: Boolean = false, onProgress: (Progress) -> Unit = {}) {
         // 原子占位：避免两个界面（列表页横幅 + 下载页）同时解压同一个 rootfs 互相踩坏
         if (!busyGuard.compareAndSet(false, true)) {
             val cur = busyOwner.get()
@@ -268,7 +268,11 @@ object DshBootstrap {
             emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_proot_ready), 0.1))
 
             // 3) rootfs（tar.xz，最耗时）
-            if (!RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") ||
+            // ★ forceExtract（「重新开始」用，BL-069）：isLatest 在 Android 上恒 true（K20）且
+            //   rootfsLooksUsable 只查布局 —— "布局完好但内容坏"的底座（如 /opt 被清）两个判据
+            //   都不命中，重解压被永久跳过。强制参数给这条恢复路径兜底。
+            if (forceExtract ||
+                !RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") ||
                 !DshPaths.rootfsLooksUsable()
             ) {
                 // 解压前才做空间检查，按"首装 / 升级分别需要多少可用空间"算
@@ -295,8 +299,13 @@ object DshBootstrap {
                 }
                 emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_extract_rootfs), 0.2))
                 // 决策 5：解压 rootfs 是数分钟 CPU 密集活，灭屏 Doze 会挂起它。整段持 PARTIAL_WAKE_LOCK。
-                withExtractionWakeLock(context) {
-                    extractRootfs(context, emit)
+                // install() 是阻塞函数（调用方在 DshAppScope 的 IO 线程上跑），而帮助函数是 suspend 签名：
+                // 用 runBlocking 就地桥接。block 内是纯同步解压、无挂起点，等价于原来的直接调用；
+                // 占用的是本就已被 install() 同步阻塞的那个线程，不引入额外阻塞面。
+                kotlinx.coroutines.runBlocking {
+                    withRuntimeBusyWakeLock(context, EXTRACT_WAKE_LOCK_TIMEOUT_MS) {
+                        extractRootfs(context, emit)
+                    }
                 }
             }
 
@@ -396,27 +405,41 @@ object DshBootstrap {
     }
 
     /**
-     * 解压期间持 `PARTIAL_WAKE_LOCK`（决策 5）：解压 rootfs 是数分钟 CPU 密集活，灭屏进入 Doze
-     * 会挂起它。开始前 acquire（带 20 分钟超时兜底，永不无限持锁），结束/异常时 release。
+     * 长时运行任务（解压/安装）期间持 `PARTIAL_WAKE_LOCK`（决策 5）：这类任务是数分钟到数十分钟的
+     * CPU/网络密集活，灭屏进入 Doze 会把它挂起或掐断。开始前 acquire，任务结束（正常或异常）即 release。
+     *
+     * [timeoutMs] 是系统级兜底上限（`WakeLock.acquire(timeoutMs)`），只防"忘记释放"，**不代表任务时长**：
+     * 即便 release 漏调用，系统也会自动放锁，绝不会无限持有。各调用侧的时长依据：
+     * - **解压侧**传 [EXTRACT_WAKE_LOCK_TIMEOUT_MS]（20 分钟）：实测出自 bebug 真机日志 ——
+     *   `20:53:31 [bootstrap] wake lock held for rootfs extraction`（旧版日志原文）→
+     *   `20:56:41 [bootstrap] 运行时底座就绪`（约 3 分钟），20 分钟足够覆盖且留足余量；
+     * - **安装链**会传 [INSTALL_WAKE_LOCK_TIMEOUT_MS]（40 分钟）：npm 安装由 [DshInstaller.INSTALL_TIMEOUT_MS]
+     *   （30 分钟）看门狗兜底，bebug「装 29 分钟失败」疑似锁屏 Doze 掐网络所致（BL-051，登记为推断），
+     *   40 分钟 = 30 分钟看门狗 + 10 分钟余量，保证锁一定活到看门狗收口之后。
      *
      * WAKE_LOCK 权限已在 AndroidManifest 声明（本任务不改 manifest）。拿不到 PowerManager（或
-     * acquire 抛异常）时直接跳过 —— 保活是优化项，绝不能成为新的崩溃点，故全程 runCatching 兜住。
+     * acquire 抛异常）时降级为直接执行 block —— 保活是优化项，绝不能成为新的崩溃点，故全程
+     * runCatching 兜住。
      */
-    private fun <T> withExtractionWakeLock(context: Context, body: () -> T): T {
+    suspend fun <T> withRuntimeBusyWakeLock(context: Context, timeoutMs: Long, block: suspend () -> T): T {
         val wl = runCatching {
             val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
             pm?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG)?.apply {
                 setReferenceCounted(false)
-                acquire(WAKELOCK_TIMEOUT_MS)
+                // ★ 必须用单参 acquire(timeout)：双参 acquire(String, long) 是 @hide 系统 API，
+                //   对着 public SDK（android-35 android.jar，已 javap 核实只有 acquire/acquire(long)）
+                //   编译不过。tag 已在 newWakeLock 时传给系统。
+                acquire(timeoutMs)
             }
         }.getOrNull()
         if (wl != null) {
-            DshLogBus.append("[bootstrap] wake lock held for rootfs extraction")
+            // 解压与安装共用此函数，日志带上 timeout 值以便区分调用侧（20min=解压 / 40min=安装）
+            DshLogBus.append("[bootstrap] wake lock held for long-running task (timeoutMs=$timeoutMs)")
         } else {
-            DshLogBus.append("[bootstrap] no wake lock (PowerManager unavailable); extraction continues")
+            DshLogBus.append("[bootstrap] no wake lock (PowerManager unavailable); task continues")
         }
         try {
-            return body()
+            return block()
         } finally {
             runCatching { wl?.let { if (it.isHeld) it.release() } }
         }
@@ -530,9 +553,19 @@ object DshBootstrap {
     /** 解压进度明细的最小刷新间隔（毫秒） */
     private const val DETAIL_THROTTLE_MS = 200L
 
-    /** 解压保活用的 WakeLock 标签（决策 5） */
+    /** 任务保活用的 WakeLock 标签（决策 5）：解压与安装共用，tag 只做日志/排障标识 */
     private const val WAKELOCK_TAG = "dsh:bootstrap-extract"
 
-    /** WakeLock 超时兜底：20 分钟。即便 release 漏调用，系统也会自动放锁，绝不会无限持有。 */
-    private const val WAKELOCK_TIMEOUT_MS = 20L * 60 * 1000
+    /**
+     * 解压 rootfs 的 WakeLock 兜底超时：20 分钟（保持原 `WAKELOCK_TIMEOUT_MS` 值，不降不改）。
+     * 实测依据出自 bebug：解压全程约 3 分钟（`20:53:31` 持锁 → `20:56:41` 底座就绪），20 分钟是
+     * "忘记释放"的兜底上限而非任务时长。public：供安装链与测试/文档引用同一口径。
+     */
+    const val EXTRACT_WAKE_LOCK_TIMEOUT_MS = 20 * 60_000L
+
+    /**
+     * npm 安装期的 WakeLock 兜底超时：40 分钟 = [DshInstaller.INSTALL_TIMEOUT_MS]（30 分钟看门狗）
+     * + 10 分钟余量。约定由安装链在调用 [withRuntimeBusyWakeLock] 时传入（本文件只定义常量）。
+     */
+    const val INSTALL_WAKE_LOCK_TIMEOUT_MS = 40 * 60_000L
 }

@@ -3,13 +3,60 @@ package com.dsh.core
 import com.dsh.fcl.androidlauncher.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * 刷新完成的独立信号（BL-116）：与数据状态 [DshDownloadViewModel.UiState] **解耦** ——
+ * 界面"结束转圈"只认它，不再依赖 StateFlow 是否发射（成功但数据未变时 Loaded 结构相等
+ * 会被 StateFlow 抑制，那正是转圈永置的根因）。
+ *
+ * [seq] 每次请求递增、每条 tick 互不相同 → 即使 ok/warning 完全一致也不会被"结构相等"吞掉。
+ * [done] 当前恒为 true（UI 只处理 done=true；字段留给将来可能的前置信号）。
+ */
+data class RefreshTick(
+    val seq: Long,
+    val done: Boolean,
+    val ok: Boolean,
+    val warning: String? = null
+)
+
+/**
+ * 刷新请求的纪元守卫（BL-052/BL-116 的纯逻辑部分，public 便于单测）。
+ *
+ * 每次 [DshDownloadViewModel.refresh] 入口取一个递增序号（[next]）：
+ * - **数据写入**：只有最新序号的响应可以写（[isCurrent]）——慢的旧响应到此为止；
+ * - **完成信号**：每个未被顶掉的请求在终局都**无条件**产出一条 done tick（[doneTick]），
+ *   不比较任何数据值；被顶掉的旧纪元返回 null（旧信号不许结束界面转圈）。
+ */
+class RefreshSeqGuard {
+    private var latestSeq = 0L
+
+    /** 当前最新纪元的序号（0 = 还没发起过任何刷新） */
+    val latest: Long get() = latestSeq
+
+    /** 取下一个纪元号：每次 refresh() 入口调用一次。线程约定：与 VM 相同，只在主线程访问。 */
+    fun next(): Long = ++latestSeq
+
+    /** 该纪元的响应是否仍是最新的（false = 已被顶掉，不许写数据、不许发完成信号） */
+    fun isCurrent(seq: Long): Boolean = seq > 0L && seq == latestSeq
+
+    /**
+     * 把「一个纪元的终局结果」裁定为一条完成信号。
+     * - 最新纪元：**无条件**返回 done tick（不依赖值是否变化——BL-116）；
+     * - 已被更新的纪元：返回 null。
+     */
+    fun doneTick(seq: Long, ok: Boolean, warning: String? = null): RefreshTick? =
+        if (isCurrent(seq)) RefreshTick(seq, done = true, ok = ok, warning = warning) else null
+}
 
 /**
  * 下载页的粘合层：拉 registry 版本列表 → 结合已安装版本 → 输出可渲染的列表项。
@@ -21,6 +68,11 @@ import kotlinx.coroutines.withContext
  * 4. **不泄漏 collector**：原来每点一次"安装"就 `scope.launch { progress.collect { ... } }` 且永不结束，
  *    装 N 次就多 N 个收集器（还各自触发一次 rebuild）。现在只在 init 里挂一个。
  * 5. **"已安装"角标实时**：改成订阅 [DshInstances.instances]，安装完成后角标自动更新。
+ *
+ * ## fix2（BL-116）新增：刷新状态机与数据状态解耦
+ * 6. **转圈结束不再依赖数据发射**：每个请求终局**无条件**发一条 [RefreshTick]（seq 递增，
+ *    不会被 StateFlow 的结构相等抑制）——这是"刷新成功但数据未变 → 转圈永置"的根治；
+ *    数据写入另配 [RefreshSeqGuard] 纪元守卫（BL-052：旧响应不许覆盖新数据）。
  */
 class DshDownloadViewModel(
     private val scope: CoroutineScope,
@@ -39,6 +91,17 @@ class DshDownloadViewModel(
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    /**
+     * 刷新完成信号流（BL-116）：UI 的"转圈结束"只认它。
+     * 不是 StateFlow —— tick 带单调递增的 seq，天然不会被相等抑制；replay=0：迟到订阅不
+     * 倒灌旧 tick（本页的 UI 在发起任何请求**之前**订阅，不会漏）。
+     */
+    private val _refreshTicks = MutableSharedFlow<RefreshTick>(replay = 0, extraBufferCapacity = 8)
+    val refreshTicks: SharedFlow<RefreshTick> = _refreshTicks.asSharedFlow()
+
+    /** 请求纪元守卫（BL-052 + BL-116）：见类注释 [RefreshSeqGuard] */
+    private val refreshGuard = RefreshSeqGuard()
 
     /** 正在安装的版本号集合（按钮据此禁用，避免重复创建实例） */
     private val _installingVersions = MutableStateFlow<Set<String>>(emptySet())
@@ -79,8 +142,15 @@ class DshDownloadViewModel(
      * - 有旧列表时不发 Loading（列表不消失；转圈由下载页自己的刷新态负责）；
      * - 后台拿到新数据再替换；失败/超时则回退旧列表 + warning（Loaded 态），
      *   只有"手里完全没数据"时才进 Error。
+     *
+     * ## fix2 状态机（BL-116/BL-052/BL-119）
+     * - 入口取纪元号 [RefreshSeqGuard.next]，老响应（`!isCurrent`）一律**不写数据、不发信号**；
+     * - 数据路径照旧写 [_uiState]（可能被 StateFlow 相等抑制，无妨——它只是数据）；
+     * - 终局（成功/失败/超时）**无条件**回 [_refreshTicks] 发 done tick——这才是 UI 结束转圈的
+     *   唯一依据；成功但数据未变也必发（这是 BL-116 的根治点）。
      */
     fun refresh(force: Boolean = false) {
+        val mySeq = refreshGuard.next()
         // 先记下界面手里有没有旧列表，再 invalidate：invalidate 后 DshRegistry.cached()
         // 就没了，回退只能靠 allEntries（BL-017 的根因：原来失败时只看 registry 缓存，
         // force 刷新失败必变空白 Error 页）。
@@ -88,6 +158,7 @@ class DshDownloadViewModel(
         if (force) DshRegistry.invalidate()
         if (!hadEntries) _uiState.value = UiState.Loading
         scope.launch {
+            var tickSent = false
             try {
                 val entries = withContext(Dispatchers.IO) {
                     val future = DshRegistry.fetchVersionsCached()
@@ -106,30 +177,83 @@ class DshDownloadViewModel(
                         throw t
                     }
                 }
+                // 纪元守卫（BL-052）：慢的旧响应到此为止，不许覆盖更新的数据/信号
+                if (!refreshGuard.isCurrent(mySeq)) {
+                    DshLogBus.append("[download] dropping stale fetch result (seq=$mySeq)")
+                    return@launch
+                }
                 allEntries = entries
                 lastWarning = null
-                rebuild()
+                if (entries.isEmpty()) {
+                    // 成功但 registry 给了空列表（BL-116 家族第三路径 + BL-117）：
+                    // rebuild() 对空 allEntries 早退（"没数据别动现有状态"的守卫，保留），
+                    // 若这里也早退，uiState 会永远停在 Loading、列表区空白无提示。
+                    // 显式落一个空 Loaded：装载完成、零条目——空态文案由 UI 按 emptyHintRes 显示。
+                    _uiState.value = UiState.Loaded(emptyList(), showPrerelease, null)
+                } else {
+                    rebuild()
+                }
+                emitDoneTick(mySeq, ok = true)
+                tickSent = true
             } catch (e: Exception) {
+                // 纪元守卫（BL-052）：失败回退同样不许把旧代快照当"新数据"写回
+                if (!refreshGuard.isCurrent(mySeq)) {
+                    DshLogBus.append("[download] dropping stale fetch failure (seq=$mySeq)")
+                    return@launch
+                }
                 // 回退优先级：界面手里的旧列表（force 后唯一存活的）> registry 残留缓存。
                 val fallback = staleFallback(allEntries, DshRegistry.cached())
                 if (fallback != null) {
-                    // 有旧数据：继续展示，只是提示一下
+                    // 有旧数据：继续展示，只提示一下。BL-092：warning 是本地化短句，
+                    // 异常细节截断进日志（不再把 TimeoutException 类名抬到界面上）。
                     allEntries = fallback
-                    lastWarning = e.message ?: e.toString()
+                    lastWarning = refreshedWarning()
+                    DshLogBus.append("[download] refresh failed (seq=$mySeq): ${describeFailure(e)}")
                     rebuild()
+                    emitDoneTick(mySeq, ok = false, warning = lastWarning)
                 } else {
                     _uiState.value = UiState.Error(
                         e.message ?: DshAppContextHolder.context?.getString(R.string.dsh_download_fetch_failed)
                             ?: "Failed to load the version list"
                     )
+                    emitDoneTick(mySeq, ok = false)
                 }
+                tickSent = true
+            } finally {
+                // 无条件兜底（BL-116 不变量：当前纪元的请求终局必须结束界面转圈）：
+                // 上面两条路径都已发过 tick 时 no-op；若 rebuild()/日志等意外抛出导致没发成，
+                // 这里补一条。被顶掉的旧纪元经守卫为 null，不会误发。
+                if (!tickSent) emitDoneTick(mySeq, ok = false)
             }
         }
+    }
+
+    /** 终局发射：把 (seq, 结果) 经纪元守卫裁定后写入 tick 流（守卫拒收被顶掉的旧纪元） */
+    private fun emitDoneTick(seq: Long, ok: Boolean, warning: String? = null) {
+        refreshGuard.doneTick(seq, ok, warning)?.let { _refreshTicks.tryEmit(it) }
+    }
+
+    /** BL-092：warning 的短句（用户可见文案走资源；拼装照 [DshUiText]，不缓存 Context） */
+    private fun refreshedWarning(): String =
+        DshUiText.getString(R.string.dsh_download_warning_stale, "Refresh failed; showing cached data")
+
+    /** 异常 → 一行日志文本（BL-092：细节截断进日志，不上屏） */
+    private fun describeFailure(e: Exception): String {
+        val text = e.message ?: e.toString()
+        return if (text.length > 200) text.take(200) + "…" else text
     }
 
     fun togglePrerelease(show: Boolean) {
         showPrerelease = show
         rebuild()
+        // 目录为空时 rebuild 早退（守卫"没数据别动状态"，保留）；但如果界面已装载为 Loaded(空)，
+        // 仍要把开关态同步进去 —— 空态文案（BL-117）按开关区分，否则此时拨开关毫无反馈。
+        if (allEntries.isEmpty()) {
+            val current = _uiState.value
+            if (current is UiState.Loaded && current.showPrerelease != show) {
+                _uiState.value = current.copy(showPrerelease = show)
+            }
+        }
     }
 
     /** 结合已安装版本重建列表项 */
@@ -191,6 +315,19 @@ class DshDownloadViewModel(
          * 这里一到点就回退旧列表 + warning，不再阻塞界面。
          */
         const val FETCH_TIMEOUT_MS = 10_000L
+
+        /**
+         * 空态判定（BL-117，纯函数，便于单测）：Loaded 且列表为空时显示哪个空态文案。
+         * - 开关 OFF 且过滤后为空 → "仅显示稳定版"下的空态（提示去开预览开关）；
+         * - 其余空列表 → 列表本来就是空的。
+         * @return 文案资源 id；非空列表返回 null（不显示空态）
+         */
+        @JvmStatic
+        fun emptyHintRes(itemsEmpty: Boolean, showPrerelease: Boolean): Int? = when {
+            !itemsEmpty -> null
+            !showPrerelease -> R.string.dsh_download_empty_prerelease
+            else -> R.string.dsh_download_empty_all
+        }
 
         /**
          * stale-while-revalidate 的回退选择（纯函数，便于单测）。
