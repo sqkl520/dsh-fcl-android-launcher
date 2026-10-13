@@ -125,7 +125,6 @@ class DshLauncherSettingAdapter(
 
     /** 重新构建列表（设置项集中在这里，便于与 FCL 的设置页逐项对照） */
     fun rebuild() {
-        val theme = ThemeEngine.getInstance().getTheme()
         rows = listOf(
             Row.Group(R.string.dsh_setting_group_common),
             Row.Action(
@@ -183,9 +182,11 @@ class DshLauncherSettingAdapter(
                 ActionType.THEME_COLOR2_DARK
             ),
             // FCL 的「颜色透明度」：0~255 滑条
+            // 值必须**实时读取**（与下面 fullscreen 行同款写法）：rebuild() 的快照会让
+            // refreshRows() 触发的重绑把滑条显示回跳到 rebuild 时刻的旧值（BL-123）。
             Row.SeekBar(
                 R.string.dsh_setting_color_alpha, R.string.dsh_setting_color_alpha_desc,
-                255, { theme.colorAlpha }, "", ActionType.COLOR_ALPHA
+                255, { ThemeEngine.getInstance().getTheme().colorAlpha }, "", ActionType.COLOR_ALPHA
             ),
             Row.Icons(
                 R.string.dsh_setting_background_lt, R.string.dsh_setting_background_lt_desc,
@@ -206,9 +207,11 @@ class DshLauncherSettingAdapter(
                 ActionType.BACKGROUND_DK
             ),
             // FCL 用 0~10 档 SeekBar；这里保持同一字段与范围
+            // 值必须**实时读取**（同 fullscreen 行）：快照捕获会在任何 refreshRows
+            // （切主题/改背景/改名…）后把滑条显示回跳旧值，观感"设置自己变回去"（BL-123）。
             Row.SeekBar(
                 R.string.dsh_setting_animation_speed, R.string.dsh_setting_animation_speed_desc,
-                10, { theme.animationSpeed }, "", ActionType.ANIMATION_SPEED
+                10, { ThemeEngine.getInstance().getTheme().animationSpeed }, "", ActionType.ANIMATION_SPEED
             ),
             Row.Switch(
                 R.string.dsh_setting_fullscreen, R.string.dsh_setting_fullscreen_desc,

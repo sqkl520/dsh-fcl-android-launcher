@@ -4,10 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
+import android.widget.Toast
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
+import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
 import com.mio.util.ImageUtil
@@ -99,8 +102,9 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         //   于是"系统返回键"和"点左菜单返回"走的是两条不同的入口，等于返回链有两套入口。
         //   两边一旦漂移（比如只在一处加了临时页弹栈），表现就是"按返回键能退、点按钮退不了"
         //   这类极难定位的问题。这里统一成：按钮 → handleBack()，与按键走完全相同的 ②③④⑤ 级。
-        //   handleBack() 返回 false = 第 ⑤ 级判定"已在首页、没有可退的" → 这才 finish。
-        binding.back.setOnClickListener { if (!handleBack()) finish() }
+        //   handleBack() 返回 false = 第 ⑤ 级判定"已在首页、没有可退的" → 交给 [onBackNoHistory]
+        //   （与按键链同款收尾：任务里还有存活 WebView 就 moveTaskToBack，否则 finish）。
+        binding.back.setOnClickListener { if (!handleBack()) onBackNoHistory() }
 
         uiManager.pageSelectedListener = { pos ->
             // 标题走 uiManager.titleOf：页面自己声明优先（pageTitle()），否则回落到 tab 标题。
@@ -178,7 +182,14 @@ class DshMainActivity : FCLActivity(), DshShellHost {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        setIntent(intent)
+        setIntent(intent)        // 诊断行（英文，R-LOG）：REORDER_TO_FRONT 复用路径是否把 Intent 送到了**既有**外壳实例、
+        // extras 是否完整 —— round13 V6 §8 唯一未能静态验证的点（REORDER 的 onNewIntent 投递，
+        // 推断·中置信），真机看这一行即可确认。纯观测，不影响下面的判定。
+        DshLogBus.append(
+            "[shell] onNewIntent: instance=${intent.getStringExtra(EXTRA_OPEN_INSTANCE_ID) ?: "-"}" +
+                ", tab=${intent.getIntExtra(EXTRA_OPEN_INSTANCE_TAB, -1)}" +
+                ", openTab=${intent.getIntExtra(EXTRA_OPEN_TAB, -1)}"
+        )
         // 与 onCreate 同一套判定：实例优先于 tab（理由见那边）
         val pendingInstance = intent.getStringExtra(EXTRA_OPEN_INSTANCE_ID)
         if (!pendingInstance.isNullOrEmpty()) {
@@ -199,6 +210,8 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         binding.rightWebui.setOnClickListener { openWebView() }
         binding.rightStart.setOnClickListener {
             val inst = panelInstance ?: return@setOnClickListener
+            // ★ 本判据与 renderRightPanel 的 `running` 一字不差（BL-126）：文案/图标显示「停止」
+            //   时点击就必须是停止 —— 两边同取 runningInstanceId()（含 Starting），不许漂移。
             val running = DshRuntime.runningInstanceId() == inst.id
             if (running) {
                 DshRuntime.stop()
@@ -241,14 +254,20 @@ class DshMainActivity : FCLActivity(), DshShellHost {
             binding.rightWebui.isEnabled = false
             return
         }
-        val running = state is DshRuntime.State.Running && state.instanceId == inst.id
+        // ★ 与点击处理（setupRightPanel）的 `running` 一字不差（BL-126）：runningInstanceId()
+        //   在 Starting/Running 都返回实例 id —— Starting 期按钮显示「停止」、点击确实停止，
+        //   名实一致。别改回 `state is Running` 的旧写法（那正是"显示启动、点击实为停止"的根源）。
+        val running = DshRuntime.runningInstanceId() == inst.id
         binding.rightInstanceName.text = inst.name
         binding.rightInstanceHint.text = describeState(inst, state)
         binding.rightStart.isEnabled = inst.state == DshInstance.State.READY || running
         // 图标 + 文字都随状态切换（FCL 的按钮就是"图标 + 文字"的组合形态）
         binding.rightStartText.setText(if (running) R.string.dsh_action_stop else R.string.dsh_action_start)
         setStartIcon(if (running) R.drawable.ic_baseline_close_24 else R.drawable.ic_start)
-        binding.rightWebui.isEnabled = running
+        // 「打开界面」放宽到 Starting（F2-15a / BL-125 一半）：启动中也能进 WebView 看进度面板
+        // （页面 render(Starting) 本就有「启动中」）。state 快照与实时读数在切换瞬间可能差一拍，取或兜底。
+        binding.rightWebui.isEnabled =
+            running || (state is DshRuntime.State.Starting && state.instanceId == inst.id)
     }
 
     /**
@@ -323,8 +342,24 @@ class DshMainActivity : FCLActivity(), DshShellHost {
             ?.showInstanceDetailAt(instanceId, tab)
     }
 
+    /**
+     * 打开 dsh WebUI。
+     *
+     * F2-14 / BL-124 打开侧：Intent 带 [Intent.FLAG_ACTIVITY_REORDER_TO_FRONT] ——
+     * 任务里已有 WebView 页（页面复用方案 A：离开侧不再销毁它，见 [handleBack]）时，
+     * 这个 flag 把它**拉回栈顶复用同一实例**（onNewIntent），而不是再压一个新实例冷载 SPA；
+     * 实例不在任务里时退化为普通启动（新建）。
+     * 这是全 App 打开界面的唯一 choke point（右面板/详情页/启动成功自动跳都走 [DshShellHost.openWebView]），
+     * 改一处即全入口生效。重页面保活自身哲学参照 FCL（重页面从不"出页即弃"）。
+     * 打开侧只带这一个 flag：它与 companion 里给外壳用的 `SINGLE_TOP | CLEAR_TOP` 是两套不同的
+     * 复用语义（REORDER 拉前、不销毁任何页面；CLEAR_TOP 会销毁中间页），别把两套 flag 混用 ——
+     * REORDER 与 CLEAR_TOP 同带时前者会被忽略。
+     */
     override fun openWebView() {
-        startActivity(Intent(this, DshWebViewActivity::class.java))
+        startActivity(
+            Intent(this, DshWebViewActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        )
     }
 
     override fun pickImage(onPicked: (android.net.Uri?) -> Unit) {
@@ -342,8 +377,10 @@ class DshMainActivity : FCLActivity(), DshShellHost {
      * ★ 为什么是 `onKeyDown` 而不是覆写 `onBackPressed`：
      * `onBackPressed` 在 API 33+ 由 `onBackPressedDispatcher` 接管（`ComponentActivity` 的实现就是
      * 直接转发给它），覆写它会让"系统返回"和"我们自己调的返回"落到两条不同的路径上。
-     * FCL 用的是 `onKeyDown`，我们照搬：**按键先到 `onKeyDown`**，只有我们没消费时才落到
-     * `super` → 框架的 `onBackPressed()` → dispatcher，链路始终只有一条。
+     * FCL 用的是 `onKeyDown`，我们照搬：**按键先到 `onKeyDown`**，首次按下（`repeatCount == 0`）
+     * 一律在本方法内处理（返回链消费，或 ⑤b 由 [onBackNoHistory] 收尾）并消费，不再落到 `super`；
+     * 落到 `super` 的只剩长按的重复事件（见下面第 2 条：它不会补上跟踪登记），
+     * 所以框架的 `onBackPressed()` / dispatcher 路径对本 Activity 不发生，**链路始终只有一条**。
      *
      * 能这么做的前提（已核对，不是想当然）：本 App 的 manifest **没有**开
      * `android:enableOnBackInvokedCallback`，而 targetSdk 是 34（该属性到 targetSdk 35 才默认 true），
@@ -371,6 +408,12 @@ class DshMainActivity : FCLActivity(), DshShellHost {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && event?.repeatCount == 0) {
             if (handleBack()) return true
+            // ⑤ 走到头（已在首页、没有可退的）—— 不再借 `super` 落到框架的默认 finish：
+            // 收尾方式按"任务里还有没有存活 WebView"决定（见 [onBackNoHistory]），
+            // 这里直接消费并 return true。与上面两条实现约束一致：消费了就不调 `super`，
+            // 键不被登记跟踪，抬起时不会再多出一次 onBackPressed()。
+            onBackNoHistory()
+            return true
         }
         return super.onKeyDown(keyCode, event)
     }
@@ -380,7 +423,7 @@ class DshMainActivity : FCLActivity(), DshShellHost {
      * 所以左菜单的返回按钮也走这里 —— 一个入口，不会漂移）。
      *
      * @return true = 已消费，调用方不要继续；false = 没得退了（已在首页），
-     *         由调用方决定退出方式（按键 → `super.onKeyDown` 交给系统；按钮 → `finish()`）
+     *         由调用方走 [onBackNoHistory]（按键链与左菜单按钮链同款收尾，不会漂移）
      */
     private fun handleBack(): Boolean {
         // ②③④：交给当前页 —— 页内临时页栈 → 子类自定义回退。
@@ -395,6 +438,51 @@ class DshMainActivity : FCLActivity(), DshShellHost {
 
         // ⑤b：已在首页，没有可退的 —— 不消费，交给调用方
         return false
+    }
+
+    /**
+     * 返回链走到尽头（已在首页、没有可退的）时的收尾 —— 按键链（[onKeyDown] 里
+     * `if (handleBack()) return true` 不成立）与左菜单返回按钮两处共用。
+     *
+     * F2-14 边界 7（BL-124）：页面复用方案 A 落地后，任务栈形态可能是
+     * `[外壳][WebView]` 或 `[WebView][外壳]`（两页互换保活）。此时在首页按返回直接
+     * finish 外壳会**露出下面还活着的 WebView 页** —— 用户看到的是"退 App 却回到了
+     * 一个旧页面"。所以：任务里还有存活的 [DshWebViewActivity]（[DshWebViewActivity.isAnyAlive]）
+     * 就 moveTaskToBack(true)（等同按 HOME，任务整体进入后台），而不是 finish。
+     * 与"首页返回=离开 App"不冲突：用户就是回到了桌面，任务保留在最近任务里。
+     * 先例：DshSetupActivity.onBackPressed 同款处理（首启门禁页是任务根时的返回）。
+     *
+     * 无存活 WebView 时保持原行为 finish()：任务里只剩外壳（或 WebView 已销毁），
+     * 退掉它不会露出任何东西，也就没有留栈的必要。
+     */
+    /**
+     * R14-V2B 新问题-2：「再按一次返回退出」窗口戳（uptimeMillis）。
+     * 见 [onBackNoHistory]：保活 WebView 存在时首次返回=回桌面，窗口期内第二次=显式退出。
+     */
+    private var lastRootBackAt: Long = 0L
+
+    private fun onBackNoHistory() {
+        if (DshWebViewActivity.isAnyAlive) {
+            // ★ R14-V2B 新问题-2：页面复用（REORDER 保活）让 WebView 页在任务里长期存活，
+            //   `isAnyAlive` 永真 → 外壳返回永远 moveTaskToBack，**用户从此没有任何退出 App
+            //   的路径**（只能划最近任务），与"首页返回=离开 App"的既有语义永久偏移。
+            //   修法：保留 moveTaskToBack（保护"不露出下层 WebView 页"），但第二个窗口期内
+            //   再按一次 → 视作显式退出：销毁保活的 WebView 页 + finish 本壳。
+            //   标准「再按一次返回退出」模式，用户有明确出口；第一次按仍满足"离开 App 去桌面"。
+            val now = SystemClock.uptimeMillis()
+            if (now - lastRootBackAt <= ROOT_BACK_EXIT_WINDOW_MS) {
+                DshLogBus.append("[shell] second root back within window: exiting app (destroying kept webview pages)")
+                DshWebViewActivity.destroyKeptPages()
+                finish()
+                return
+            }
+            lastRootBackAt = now
+            Toast.makeText(this, R.string.dsh_back_again_to_exit, Toast.LENGTH_SHORT).show()
+            DshLogBus.append("[shell] root back with live webview pages, moveTaskToBack (press back again to exit)")
+            moveTaskToBack(true)
+        } else {
+            finish()
+        }
     }
 
     /** 动态壁纸跟随界面暂停/恢复（FCL 同款） */
@@ -428,6 +516,9 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         /** 详情页用它请求外壳打开指定 tab（见 [DshShellHost] 的 TAB_* 常量） */
         const val EXTRA_OPEN_TAB = "dsh_open_tab"
 
+        /** R14-V2B 新问题-2：首页「再按一次返回退出」的窗口（毫秒） */
+        private const val ROOT_BACK_EXIT_WINDOW_MS = 2000L
+
         /**
          * 请求外壳**直接压出某个实例的详情页**（实例详情的日志/配置都在这一个入口下）。
          * 与 [EXTRA_OPEN_TAB] 同时给出时以本项为准 —— 理由见 `onCreate`。
@@ -456,6 +547,37 @@ class DshMainActivity : FCLActivity(), DshShellHost {
                 putExtra(EXTRA_OPEN_INSTANCE_ID, instanceId)
                 if (tab >= 0) putExtra(EXTRA_OPEN_INSTANCE_TAB, tab)
             }
+
+        /**
+         * 构造"把外壳拉回任务栈顶"的 Intent —— **非破坏性**变体（F2-14 / BL-124 离开侧）。
+         *
+         * ★ 为什么需要它（而不是复用 [intentForTab]/[intentForInstance]）：那两个都带
+         *   `SINGLE_TOP | CLEAR_TOP`，CLEAR_TOP 会把外壳**之上**的 Activity 全部 finish ——
+         *   从 WebView「去外壳看日志」跳过去时，栈上的 WebView 页（重页面，SPA 冷载成本高）
+         *   会被销毁成"单程票"（页面复用方案 A 要消的就是这个）。本变体只带
+         *   [Intent.FLAG_ACTIVITY_REORDER_TO_FRONT]：外壳已在任务里就拉到栈顶、两页都活着
+         *   （返回时互换位置即可切回 WebView，不重建）；不在任务里则退化为普通启动（新建）。
+         *   ⚠ REORDER 与 CLEAR_TOP 同带时 REORDER 被忽略，两个语义不能混进同一个 Intent。
+         *   [intentForTab]/[intentForInstance] **一字不动**：DshSetupActivity 还依赖 CLEAR_TOP 防双壳。
+         *
+         * 投递说明：外壳 instance 已在任务时是否向既有实例投递 `onNewIntent` 属行为推断
+         * （round13 V6 §8，中置信）——`onNewIntent` 里留了诊断行，真机日志可直接确认；
+         * 即便不投递，状态刷新也由状态流兜底，只是"落在哪一段"可能退化为默认段。
+         */
+        fun intentForShell(context: Context): Intent =
+            Intent(context, DshMainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+
+        /**
+         * [intentForShell] 的带参变体：拉回外壳并**直接压出某实例详情、落在指定段落**
+         * （供 DshWebViewActivity 的「去外壳看完整日志」替代原 [intentForInstance] 使用）。
+         * extras 的语义与 [intentForInstance] 完全相同（`tab < 0` 时退化为默认段，
+         * 见 `onNewIntent` → [openInstanceDetailAt] 的判定）。
+         */
+        fun intentForInstanceReorder(context: Context, instanceId: String, tab: Int): Intent =
+            intentForShell(context)
+                .putExtra(EXTRA_OPEN_INSTANCE_ID, instanceId)
+                .putExtra(EXTRA_OPEN_INSTANCE_TAB, tab)
 
         /** 与 [EXTRA_OPEN_INSTANCE_ID] 搭配：详情页内落在哪一段 */
         const val EXTRA_OPEN_INSTANCE_TAB = "dsh_open_instance_tab"

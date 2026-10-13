@@ -24,6 +24,7 @@
     <string name="close">Close</string>
     <string name="dsh_action_clear">Clear</string>
         <string name="dsh_action_close">Close</string>
+        <string name="dsh_back_again_to_exit">Press back again to exit</string>
         <string name="dsh_action_configure">Configure</string>
         <string name="dsh_action_copy">Copy</string>
         <string name="dsh_action_delete">Delete</string>
@@ -89,12 +90,13 @@
         <string name="dsh_instance_status_row">Status</string>
         <!-- 详情页是在实例已消失（在别处被删）时也可能被打开的页面，需要一句兜底文案 -->
         <string name="dsh_instance_detail_empty">This instance no longer exists</string>
-        <string name="dsh_instances_empty">No instances yet.\nTap "Download" to install a dsh version.</string>
+        <string name="dsh_instances_empty">No instances yet.\nTap "Versions" on the left to install a dsh version.</string>
         <string name="dsh_instances_title">DeepSeek Harness</string>
         <string name="dsh_key_first_run_title">Add an API key</string>
         <string name="dsh_key_first_run_message">dsh needs a DeepSeek API key before it can chat. Tap the settings icon at the bottom left of the sidebar and enter the key under "Models". The key is stored and managed by dsh itself — the launcher never holds it.</string>
         <string name="dsh_logs_auto_scroll">Auto scroll</string>
         <string name="dsh_logs_cleared">Logs cleared</string>
+        <string name="dsh_logs_clear_confirm">Clear all logs in this view? This cannot be undone.</string>
         <string name="dsh_logs_copied">Logs copied to clipboard</string>
         <string name="dsh_logs_empty">No logs yet</string>
         <string name="dsh_logs_path">File: %1$s</string>
@@ -291,6 +293,7 @@ Version %1$s</string>
     <string name="dsh_task_install_done">Installed</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">This will re-extract the runtime on next start. Instances and API keys are not affected.</string>
+    <string name="dsh_setup_restart_busy">The runtime is being prepared, please wait</string>
     <string name="dsh_setup_steps_header">Preparation steps</string>
     <string name="dsh_settings_row_name">Instance name</string>
     <string name="dsh_settings_row_port">Port</string>
@@ -358,4 +361,10 @@ Version %1$s</string>
     <string name="dsh_webview_compat_message">The current WebView is too old, and the dsh UI may display incorrectly (version %1$d or newer is required). You can continue anyway, or open this page in an external browser instead.</string>
     <string name="dsh_webview_compat_continue">Continue anyway</string>
     <string name="dsh_webview_compat_external">Open in external browser</string>
+    <string name="dsh_webview_compat_upgrade_hint">How to upgrade: update "Android System WebView" (sometimes "Chrome") to the latest version in your app store, then reopen this page.</string>
+    <string name="dsh_webview_render_gone_repeat">The page crashed repeatedly and could not be recovered. Tap Retry to load it again.</string>
+    <string name="dsh_edit_blank_hint">Can\'t be empty</string>
+    <string name="dsh_download_warning_stale">Refresh failed; showing cached data</string>
+    <string name="dsh_download_empty_prerelease">No stable versions to show. Turn on "Show previews" to see all versions.</string>
+    <string name="dsh_download_empty_all">No versions available. Tap refresh to reload.</string>
 </resources>

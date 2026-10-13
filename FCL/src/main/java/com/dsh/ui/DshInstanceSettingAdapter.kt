@@ -56,12 +56,18 @@ class DshInstanceSettingAdapter(
      * 是个导出常量，不是被读取的环境变量）。那是个死开关，所以行与 tag 一起删掉；
      * 模型只由 dsh 自己的「设置 → 模型」决定。
      *
+     * ## 为什么没有 `PROFILE`（fix2 / BL-089）
+     * 与 `MODEL` 同理，而且更彻底：启动脚本对 `$PROFILE` **零引用** —— start-dsh.sh 里只有
+     * 环境变量注释提到它，实际启动命令硬编码 `dsh web`（无 headless 分派）。行选完 web/headless
+     * 什么都不会发生，是死开关。行与 tag 一起删掉；`DshInstance.profile` 字段保留
+     * （instances.json 兼容 + DshRuntime 仍在注这个 env），将来脚本真按 $PROFILE 分派时再接线。
+     *
      * ## 新增的三个
      * [STATUS] / [START_STOP] / [OPEN_WEB] 是"运行"段的主操作：详情页原来是个独立 Activity，
      * 进了详情反而启停不了实例（那两件事只存在于实例列表行和外壳右面板），现在补齐。
      */
     enum class Tag {
-        NAME, PROFILE, PORT,
+        NAME, PORT,
         STATUS, START_STOP, OPEN_WEB,
         VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE
     }

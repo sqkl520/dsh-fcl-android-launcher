@@ -1,11 +1,13 @@
 package com.dsh.ui
 
+import android.animation.ObjectAnimator
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ProgressBar
 import androidx.annotation.StringRes
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
@@ -37,6 +39,18 @@ import com.dsh.fcl.androidlauncher.databinding.ItemDshInstanceBinding
  *   弹出来的东西和整个界面不是一套（真机反馈："风格割裂非常严重"）。选项对话框
  *   （`com.mio.dialog.ItemSelectionDialog`）是设置页「语言 / 主题模式」用的同一个，
  *   风格天然一致：条目高亮主题色、条目多时窗口自己滚动。
+ *
+ * ## fix2 改造（BL-120/081/082/085/122，V4b 设计方案）
+ * - **入场动画去重（BL-120 A1）**：滑入只对"这一帧新出现的实例 id"播一次（[pendingAnimIds]，
+ *   消费制，照任务区 freshIds 先例）。安装进度/体积/运行态引起的重绑不再"重开一个块"。
+ * - **安装进度 payload 局部刷新 + 补间（BL-120 A2 / BL-122）**：`submitInstallStatus` 带
+ *   [PAYLOAD_INSTALL_STATUS] 通知，三参 onBind 只刷阶段文案 + 进度条；进度值由
+ *   [playProgress] 从当前值平滑补到目标（不再硬赋值跳变）。
+ * - **BL-081**：NOT_INSTALLED（取消/降级后）的主按钮改「去安装」→ 切「版本」页（[onOpenVersions]）。
+ * - **BL-082**：整卡可点挂上真实动作 —— 打开该实例详情（[onOpenDetail]）。
+ * - **BL-085**：失败原因色在绑定期间挂 `registerEvent(errorText)` 主题回调（注册即执行、
+ *   行回收注销）—— 亮暗切换时按当下 uiMode 重取 `@color/dsh_log_error`，不再依赖
+ *   inflate 期那一次解析（与版本页 installed_badge、任务区 themeRebind 同一做法）。
  */
 class DshInstanceAdapter(
     private val onStart: (DshInstance) -> Unit,
@@ -44,13 +58,35 @@ class DshInstanceAdapter(
     private val onOpenSettings: (DshInstance) -> Unit,
     private val onOpenLogs: (DshInstance) -> Unit,
     private val onReinstall: (DshInstance) -> Unit,
-    private val onDelete: (DshInstance) -> Unit
+    private val onDelete: (DshInstance) -> Unit,
+    /** 切到「版本」tab（去装一个 dsh 版本）。BL-081：NOT_INSTALLED 态主按钮的动作。
+     *  调用方（DshInstancesUI）给 `{ host.switchTab(DshShellHost.TAB_VERSIONS) }`——
+     *  同文件重装确认框的「下载」按钮就是这个调用模式（见其 :574 附近）。 */
+    private val onOpenVersions: () -> Unit,
+    /** 打开某实例的详情页（BL-082：整卡可点）。调用方给 `{ id -> onOpenDetail(id, TAB_RUN) }`
+     *  （即 `showInstanceDetailAt` 的既有能力）。 */
+    private val onOpenDetail: (String) -> Unit
 ) : RecyclerView.Adapter<DshInstanceAdapter.VH>() {
 
     private var items: List<DshInstance> = emptyList()
     private var runningId: String? = null
     private var deleting: Set<String> = emptySet()
     private var installStatus: Map<String, DshInstaller.InstallStatus> = emptyMap()
+
+    /**
+     * 还欠一次入场动画的实例 id（消费制，BL-120 / V4b 方案 A1）。
+     *
+     * DiffUtil 的 `notifyItemChanged`（安装进度、体积回调、运行/删除态变化）也会触发 onBind，
+     * 但那些都是**同一行原地更新**，不该再播一次 -100f→0f 的滑入（用户原话"进度条每次一跳，
+     * 块就重开一次"）。所以入场动画只在"这一帧新出现的 id"上播：`submit` 时把
+     * 「新出现 − 已见」并入本集合，onBind 里命中即播并**消费掉**（remove），
+     * 之后同行的任何重绑都不再命中 → 不重播。
+     *
+     * 与任务区 freshIds 先例（DshInstancesUI.kt `animatedTaskIds`）同构，差别只在
+     * 那边每帧整体替换集合、这边是消费制：实例 id 在实例被删掉前一直"已见"，
+     * 不需要每帧重算。
+     */
+    private val pendingAnimIds = mutableSetOf<String>()
 
     /** 每行的体积缓存（key = id:版本:状态）。做成实例字段：Adapter 随界面销毁时一起被回收，
      *  不再像原来那样存在 companion 里当作全局静态缓存（删掉的实例会永久占着条目）。 */
@@ -70,6 +106,16 @@ class DshInstanceAdapter(
             override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
                 items[oldPos] == newItems[newPos]
         })
+        // ★ BL-120：把"这一帧新出现、且从没欠过动画"的 id 并入待播集合（消费制，见 [pendingAnimIds]）。
+        //   "已见" = 提交前的旧 items ∪ 尚未消费掉的 pendingAnimIds（并集是保守写法：
+        //   待播项在当前流程里恒同时出现在旧 items 里，并上它不改变结果，但判定因此不依赖
+        //   这个隐含不变式 —— 将来若有人给 items 做过滤/重建，行为依然成立）。
+        //   必须在 dispatchUpdatesTo **之前**算：dispatch 返回后 RecyclerView 随时会驱动绑定
+        //   （下一次布局趟），届时 onBind 就要读到就位的集合。
+        pendingAnimIds += computeNewIds(newItems.map { it.id }, pendingAnimIds + items.map { it.id })
+        // 已经被删掉的实例不用再欠动画（它在离场前没被绑定消费的话，条目留在集合里只会白占）。
+        pendingAnimIds.retainAll(newItems.map { it.id }.toSet())
+
         items = newItems
         runningId = runningInstanceId
         deleting = deletingIds
@@ -96,17 +142,119 @@ class DshInstanceAdapter(
         if (idx >= 0) out += idx
     }
 
-    /** 安装状态变化：只刷新受影响的行 */
+    /** 安装状态变化：只刷新受影响的行。
+     *
+     *  ★ BL-120 / V4b 方案 A2：带 **payload** 通知。无 payload 的 change 在 DefaultItemAnimator
+     *  下走"双视图交叉淡化"（`canReuseUpdatedViewHolder=false`），进度条 ViewHolder 被整个换掉、
+     *  与入场动画叠加就是"重开一个块"；payload 非空则同 VH 复用（`canReuseUpdatedViewHolder=true`，
+     *  recyclerview-1.3.1 字节码已证），走三参 `onBindViewHolder` 的局部刷新 —— 进度条对象连续，
+     *  也才谈得上"从当前值补间"（BL-122）。
+     *
+     *  命中条件 = 新集合含 id ∪ **旧集合含 id**（状态刚被清掉的行：payload 分支自带
+     *  "status 为 null → 收起进度条"的收敛，见 [applyInstallStatusText]）∪ INSTALLING 态
+     *  （BL-029 空窗期兜底）。单看"新集合含 id"缺"旧集合含 id"一项，安装收尾那一帧若没有
+     *  别的重绑来兜底，进度条会留在屏上。 */
     fun submitInstallStatus(statuses: Map<String, DshInstaller.InstallStatus>) {
+        val prev = installStatus
         installStatus = statuses
         items.forEachIndexed { index, inst ->
-            if (statuses.containsKey(inst.id) || inst.state == DshInstance.State.INSTALLING) {
-                notifyItemChanged(index)
+            if (statuses.containsKey(inst.id) || prev.containsKey(inst.id) ||
+                inst.state == DshInstance.State.INSTALLING
+            ) {
+                notifyItemChanged(index, PAYLOAD_INSTALL_STATUS)
             }
         }
     }
 
-    class VH(val binding: ItemDshInstanceBinding) : RecyclerView.ViewHolder(binding.root)
+    class VH(val binding: ItemDshInstanceBinding) : RecyclerView.ViewHolder(binding.root) {
+        /** 进度条补间动画（BL-122）。重绑/切 indeterminate 前必须 cancel，见 [playProgress]。 */
+        var progressAnim: ObjectAnimator? = null
+
+        /** 这个 VH 当前画的是哪个实例：行被别的实例复用后，进度条残留值不可当"当前值"（BL-122）。 */
+        var boundId: String? = null
+    }
+
+    /**
+     * 三参 onBind（change payload 路径，BL-120 A2）。
+     *
+     * `payloads` 非空 = RecyclerView 正在复用同一 ViewHolder 做局部刷新（`canReuseUpdatedViewHolder`
+     * 对非空 payload 恒为 true，recyclerview-1.3.1 字节码实证），**不能**在这里做完整绑定：
+     * 只认自己的 payload，认不出就走完整绑定 —— 将来新增 payload 忘了在这里登记，会得到
+     * "刷了但没全刷"的静默错误，比多绑一次昂贵得多。
+     */
+    override fun onBindViewHolder(holder: VH, position: Int, payloads: MutableList<Any>) {
+        val inst = items[position]
+        // ★ 两个条件缺一不可：
+        //   ① payload 认识 → 只做局部刷新；
+        //   ② holder.boundId == inst.id —— **这一 VH 上次画的确实是这个实例**。payload 通知
+        //      在滚动/插入与更新合并进同一次布局时，可能落到一个还没画过这行的回收 VH 上，
+        //      那种 VH 的其余控件（名称/按钮/体积）还是上一个实例的内容 —— 只刷进度就是
+        //      一行张冠李戴的旧控件配新进度，必须退回完整绑定。
+        //   认不出的 payload 同样走完整绑定：新 payload 忘在这里登记时，宁可多绑一次，
+        //   也不能得到"刷了但没全刷"的静默错误。
+        if (payloads.any { it === PAYLOAD_INSTALL_STATUS } && holder.boundId == inst.id) {
+            applyInstallStatusText(holder, inst)
+            return
+        }
+        onBindViewHolder(holder, position)
+    }
+
+    /**
+     * payload 局部刷新：安装 UI（阶段文案 + 进度条）的完整收敛（BL-120 A2 / BL-122）。
+     *
+     * ★ 必须**自带全部状态**（显示/隐藏/模式切换），不能依赖"稍后会有一次完整重绑来清屏"——
+     *   安装收尾时 statuses 清条后，那一行可能不再收到任何通知（见 submitInstallStatus 的
+     *   通知条件），进度条会留在屏幕上。所以这里与完整绑定的进度块同形态：能更新、也能收掉。
+     *
+     * 进度条走 [playProgress] 从**当前值**补到目标 —— payload 路径的同 VH 复用保证了
+     * `b.installProgress.progress` 还是上一帧画出的那个值，补间因此从"现在屏幕上停在哪"
+     * 出发；若是刚从隐藏切回显示（值已被归零），自然从 0 起。fraction 为 null（无法估算）
+     * 时切 indeterminate 前先 cancel —— 带着一个未完成的 determinate 补间切过去会闪。
+     */
+    private fun applyInstallStatusText(holder: VH, inst: DshInstance) {
+        val b = holder.binding
+        val status = installStatus[inst.id]
+        if (status == null || !status.running) {
+            // 安装结束（statuses 清条）或状态流空窗期：收起安装 UI（同完整绑定的 else 分支）。
+            holder.progressAnim?.cancel()
+            b.installProgress.isIndeterminate = false
+            b.installProgress.progress = 0
+            b.installProgress.visibility = View.GONE
+            b.installStage.visibility = View.GONE
+            return
+        }
+        b.installProgress.visibility = View.VISIBLE
+        b.installStage.visibility = View.VISIBLE
+        b.installStage.text = status.stage
+        val fraction = status.fraction
+        if (fraction != null) {
+            if (b.installProgress.isIndeterminate) {
+                holder.progressAnim?.cancel()
+                b.installProgress.isIndeterminate = false
+            }
+            val to = (fraction * 100).toInt().coerceIn(0, 100)
+            playProgress(holder, b.installProgress, b.installProgress.progress, to)
+        } else {
+            holder.progressAnim?.cancel()
+            b.installProgress.isIndeterminate = true
+        }
+    }
+
+    /**
+     * 进度条从 [from] 平滑补到 [to]（BL-122，V4b 方案 B2）。
+     *
+     * 时长沿用 FCL 的动画标量 `theme.animationSpeed * 30L`（默认 8 → 240ms，与所有入场
+     * 动画同一口径）；out-of-range 的 from 不防（ProgressBar 自己会夹）。同一 VH 上重开
+     * 补间前先 cancel 旧的 —— 阶段阶梯值 0.05/0.10/0.15/0.20/0.40/0.90 相邻 tick 间隔
+     * 大于补间时长时不会互相打断，小于时也从"现在停在哪"续上。
+     */
+    private fun playProgress(holder: VH, bar: ProgressBar, from: Int, to: Int) {
+        holder.progressAnim?.cancel()
+        holder.progressAnim = ObjectAnimator.ofInt(bar, "progress", from, to).apply {
+            duration = ThemeEngine.getInstance().getTheme().animationSpeed * 30L
+            start()
+        }
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
         VH(ItemDshInstanceBinding.inflate(LayoutInflater.from(parent.context), parent, false))
@@ -120,6 +268,11 @@ class DshInstanceAdapter(
         val isRunning = inst.id == runningId
         val isDeleting = deleting.contains(inst.id)
         val status = installStatus[inst.id]
+
+        // ★ BL-122：这一 VH 上次画的是不是同一个实例 —— 决定进度补间的起点
+        //   （同一行续上"现在停在哪"，换到别行的 VH 从 0 起，见下面进度块）。
+        val sameRow = holder.boundId == inst.id
+        holder.boundId = inst.id
 
         val stateText = when (inst.state) {
             DshInstance.State.NOT_INSTALLED -> ctx.getString(R.string.dsh_state_not_installed)
@@ -141,12 +294,22 @@ class DshInstanceAdapter(
             b.installStage.text = status.stage
             val fraction = status.fraction
             if (fraction != null) {
-                b.installProgress.isIndeterminate = false
-                b.installProgress.progress = (fraction * 100).toInt()
+                if (b.installProgress.isIndeterminate) {
+                    holder.progressAnim?.cancel()
+                    b.installProgress.isIndeterminate = false
+                }
+                // BL-122：完整绑定也要补间，起点 = 屏幕上现在停在哪。同一个实例的重绑（如体积
+                // 回调触发的整行刷新）从当前值续上；换到别的实例的 VH（复用）从 0 起 ——
+                // 那个残留值是上一行的，不能当本行的"当前值"。
+                val from = if (sameRow) b.installProgress.progress else 0
+                val to = (fraction * 100).toInt().coerceIn(0, 100)
+                playProgress(holder, b.installProgress, from, to)
             } else {
+                holder.progressAnim?.cancel()
                 b.installProgress.isIndeterminate = true
             }
         } else {
+            holder.progressAnim?.cancel()
             b.installProgress.visibility = View.GONE
             b.installStage.visibility = View.GONE
         }
@@ -162,6 +325,18 @@ class DshInstanceAdapter(
         } else {
             b.errorText.visibility = View.GONE
         }
+        // ★ BL-085：error_text 的失败原因色 @color/dsh_log_error 是 inflate 期解析的
+        //   （亮/暗两套 values 各一份），而亮暗切换不重建 Activity（configChanges 含 uiMode）
+        //   —— 只靠 inflate 那一次，切到暗色后旧深红就压在深底上。照版本适配器对
+        //   installed_badge 的同一做法：绑定期间挂主题回调（registerEvent 注册时立即执行
+        //   一次，颜色即刻就位，无需另写 setTextColor），行回收时在 onViewRecycled 注销 ——
+        //   切模式时不依赖任何重绑也立刻换色，下一次绑定再重新挂上（同一 View 重复注册
+        //   只是替换表项，不堆积）。errorText 没有 auto_text_tint / use_theme_color，替换
+        //   FCLTextView 构造时那条空跑的刷新不损失任何行为。取色用 b.root.context
+        //   （values-night 自动命中；与任务区 DshInstancesUI 的 FAILED 行同一个 R.color，同源）。
+        ThemeEngine.getInstance().registerEvent(b.errorText) {
+            b.errorText.setTextColor(b.root.context.getColor(R.color.dsh_log_error))
+        }
 
         // 按钮可用性
         // BL-029：判据必须含 inst.state==INSTALLING —— 状态流空窗期 status 为 null，
@@ -170,18 +345,29 @@ class DshInstanceAdapter(
         // 安装失败的实例：主按钮变成「重试」（直接重装同版本），
         // 否则用户只能在「更多 → 重装」里找，或者再点一次下载——后者正是"堆一堆损坏实例"的来源之一
         val canRetry = !busy && inst.state == DshInstance.State.BROKEN
+        // BL-081：取消安装（或启动时 repair 降级）后实例回到 NOT_INSTALLED，此时「启动」按
+        // isEnabled 判据不可点 —— 而 FCL 容器无 disabled 视觉（BL-020），就是一块"活外观死按钮"。
+        // 改法：这一态不再冒充可启动，而是改文案「去安装」+ 下载图标，点击切到「版本」页去挑一个
+        // 版本装（onOpenVersions）。这是死按钮唯一说得通的出路 —— B1-1 的建议方向也是它。
+        val notInstalled = !busy && !isRunning && inst.state == DshInstance.State.NOT_INSTALLED
         // BL-020：busy 时 btn_start 直接 GONE —— FCL 容器无 disabled 视觉，isEnabled=false
         // 只剩"看着能点、点了没反应"；安装/删除中本来就没有可启动的东西，藏掉最诚实。
         b.btnStart.visibility = if (busy) View.GONE else View.VISIBLE
-        b.btnStart.isEnabled = !busy && (isRunning || inst.state == DshInstance.State.READY || canRetry)
+        b.btnStart.isEnabled = !busy && (isRunning || notInstalled ||
+            inst.state == DshInstance.State.READY || canRetry)
 
         // ===== 主操作（图标 + 文字）=====
         // 布局里 btn_start 是"clickable 容器 + 图标 + 文字"（照外壳右面板的启动键形态），
         // 所以这里三样都要分别维护：容器的点击、图标、文字。
-        // ★ 文案来源没变，仍是那三个 R.string.dsh_action_* —— 只是落到内部的 btn_start_text 上。
+        // ★ 文案来源没变，仍是那组 R.string.dsh_action_* —— 只是落到内部的 btn_start_text 上。
         val actionRes = when {
             isRunning -> R.string.dsh_action_stop
             canRetry -> R.string.dsh_action_retry
+            // BL-081：读 strings 确认过 —— dsh_action_download 的值是「下载/Download」（指向"下载"
+            // 入口的词），与「去安装」语义不合；改用 dsh_action_install（「安装/Install/安裝」，
+            // 三语言齐全，版本页安装按钮的 contentDescription 也是它）。精确的「去安装」措辞
+            // 若编排要，建议新增独立 key，见报告 String 需求表。
+            notInstalled -> R.string.dsh_action_install
             else -> R.string.dsh_action_start
         }
         b.btnStartText.setText(actionRes)
@@ -189,6 +375,7 @@ class DshInstanceAdapter(
             when {
                 isRunning -> R.drawable.ic_baseline_close_24
                 canRetry -> R.drawable.ic_baseline_refresh_24
+                notInstalled -> R.drawable.ic_baseline_download_24
                 else -> R.drawable.ic_start
             }
         )
@@ -203,6 +390,7 @@ class DshInstanceAdapter(
             when {
                 isRunning -> onStop(inst)
                 canRetry -> onReinstall(inst)
+                notInstalled -> onOpenVersions()
                 else -> onStart(inst)
             }
         }
@@ -246,6 +434,16 @@ class DshInstanceAdapter(
                 actions[index].run()
             }.show()
         }
+
+        // ★ BL-082：根卡片是 clickable + 涟漪 + 按压缩放（布局 :37-41），此前却没有任何监听 ——
+        //   用户按最大的点按目标得到完整的"按钮反馈"，然后什么都不发生（B1-2：FCL 同形态的
+        //   档案行/远程版本行点卡即进对应页，用户合理地以为能打开详情）。这里把它兑现：
+        //   整卡 → 打开该实例详情。用 clickable=false 的"去反馈"方案是次选 —— 卡片保留的是
+        //   FCL 列表行的既有形态，改成"不可点"反而与同族行不一致。
+        b.root.setOnClickListener { onOpenDetail(inst.id) }
+        // 行被复用时根上没有"上一次的监听"残留问题（每次绑定都重设），点击动作引用的是
+        // 本次绑定的 inst —— 与 btnStart/btnMore 同一套路。
+
         if (isDeleting) {
             b.subtitle.text = ctx.getString(R.string.dsh_state_deleting)
         }
@@ -270,15 +468,34 @@ class DshInstanceAdapter(
         }
 
         // ===== 入场动画（FCL 同款：AnimationUtil.playTranslationX，时长随"动画速度"设置）=====
-        AnimUtil.playTranslationX(
-            b.root,
-            ThemeEngine.getInstance().getTheme().animationSpeed * 30L,
-            -100f,
-            0f
-        ).start()
+        // ★ BL-120：只在"这一帧新出现"的实例上播（消费制，见 [pendingAnimIds]）。
+        //   notifyItemChanged 引起的重绑（安装进度、体积回调、运行/删除态变化）不命中 —— 不再重滑。
+        if (pendingAnimIds.remove(inst.id)) {
+            AnimUtil.playTranslationX(
+                b.root,
+                ThemeEngine.getInstance().getTheme().animationSpeed * 30L,
+                -100f,
+                0f
+            ).start()
+        } else {
+            // 复用/重绑的行可能停在上一次动画的中间态（新实例插在前面时，后面的行会换位重绑），
+            // 归零一次，避免"没播动画的行却歪在一边"（归零写法照任务区先例 DshInstancesUI :773-774）。
+            b.root.translationX = 0f
+        }
     }
 
     override fun getItemCount(): Int = items.size
+
+    /** 行被回收：停掉还没跑完的进度补间（BL-122）——继续跑也只是在给一个离屏 View 写属性；
+     *  清掉绑定记录（复用时必须走完整绑定，payload 局部刷新不再放行）；注销 errorText 的
+     *  主题回调（BL-085）。**必须以 holder 为单位清掉这三样**，漏掉哪样都是静默错误。 */
+    override fun onViewRecycled(holder: VH) {
+        holder.progressAnim?.cancel()
+        holder.progressAnim = null
+        holder.boundId = null
+        ThemeEngine.getInstance().unregisterEvent(holder.binding.errorText)
+        super.onViewRecycled(holder)
+    }
 
     /**
      * 「更多」里的一项：文案资源 + 点击后要做的事。
@@ -342,6 +559,16 @@ class DshInstanceAdapter(
 
     companion object {
         private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        /**
+         * 安装状态 change payload（BL-120 A2）。
+         *
+         * payload 非空 → DefaultItemAnimator 走 `canReuseUpdatedViewHolder(vh, payloads)=true`
+         * （recyclerview-1.3.1 字节码实证）→ **同一个 ViewHolder 原地刷新**，不做 change 双视图
+         * 交叉淡化、也不播放入场动画 —— 这是"进度条对象连续、可从当前值补间"（BL-122）的前置条件；
+         * 三参 onBind 据此只刷新 install_stage 文本 + install_progress 值。
+         */
+        val PAYLOAD_INSTALL_STATUS = Any()
     }
 }
 
@@ -362,3 +589,17 @@ fun isRowBusy(
     state: DshInstance.State
 ): Boolean = isDeleting || statusRunning == true ||
     state == DshInstance.State.INSTALLING
+
+/**
+ * "这一帧新出现"的 id：出现在 [current]、却不在 [seen] 里的那些（BL-120 入场动画去重）。
+ *
+ * [seen] 由调用方拼出"已见"全集 = 提交前的旧 items ∪ 尚未消费的待播集合 —— 两个判据缺一不可：
+ *   · 只减待播集合：播过并被消费掉的旧 id 每帧都会被再判成"新出现"，每帧重滑；
+ *   · 只减旧 items：新行在消费前若恰逢一次 submit（旧 items 已含它），待播集合里的欠账被抹掉、
+ *     动画永远不播。
+ *
+ * 写成顶层纯函数（返回值的顺序不影响显示，此处按 [current] 原序）：无类初始化负担，
+ * JVM 单测可直接调（先例：本文件顶部的 [isRowBusy]，见其注释）。
+ */
+fun computeNewIds(current: List<String>, seen: Set<String>): Set<String> =
+    current.filterNot { it in seen }.toSet()

@@ -61,6 +61,7 @@
         <activity
             android:name="com.dsh.ui.DshWebViewActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|keyboard|navigation|uiMode"
+            android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape"
             android:windowSoftInputMode="adjustResize" />
 

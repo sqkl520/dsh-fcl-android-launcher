@@ -71,6 +71,47 @@ class DshSetupActivity : FCLActivity() {
     private var finished = false
     private var observing = false
 
+    /**
+     * BL-074：磁盘事实刷新是否处于"进行中"阶段（[beginPrepare] 置 true，
+     * [DshBootstrap.Progress.Done] / 失败置 false）。
+     *
+     * 解压的数分钟里 [refreshStepStates] 查到的 rootfs 仍未就绪；此时把 rootfs 行显示为
+     * "进行中"而不是"等待中"（"进行中"文案 dsh_setup_state_running 已存在，三语言齐全）。
+     * 只在**未就绪**且阶段进行中时垫"进行中"；磁盘事实变为就绪时 applyStep 照常落"已就绪"。
+     */
+    private var prepareRunning = false
+
+    /**
+     * BL-070：已收到过 [DshBootstrap.Progress.Done]（完成已到、尚未兑现进首页）。
+     *
+     * 解压完成时若本页不在前台，`enterMain` 的 `startActivity` 会被后台启动限制（BAL）
+     * 静默拦截；由本标志配合 [onResume] / [deliverPendingDone] 补偿兑现进入。
+     * 置位：进度收集器收到 Done 时；[enterMain] 因不在前台而推迟时保持。
+     * 清理点：新一轮开始（[beginPrepare]）、失败（[showFailure]）、真正进入首页（[enterMain]）。
+     */
+    private var donePending = false
+
+    /**
+     * BL-070：本实例当前是否处于前台（`onResume` 置 true、`onPause` 置 false）。
+     *
+     * [enterMain] 用它区分两种时机：前台 = 正常导航（行为与原实现一致）；
+     * 后台（仅暂停未销毁）= `startActivity` 会被后台启动限制（BAL）静默拦截、随后的
+     * `finish()` 还会把任务清掉，于是推迟到 [onResume] 兑现。不用 `lifecycle.currentState`：
+     * 其在 `super.onResume()` 返回时刻是否已到 RESUMED 与依赖版本有关，本字段没有这个时序疑问。
+     */
+    private var resumed = false
+
+    /**
+     * BL-070：本实例是否是当前这轮解压的**发起方**（调过 [DshBootstrap.install]，
+     * 因此有一条 [afterPrepareReady] 在跑，负责完成后的自检与导航）。
+     *
+     * 只有两个写入点（都在 [beginPrepare]）：发起新一轮 → true；忙态接回别人跑的任务
+     * （BL-067 分支，含从外壳中途进入 / 重建恢复）→ false。Done 到达时：
+     * - 发起方前台 → 不抢跑，交给走上来的 [afterPrepareReady]（前台正常路径保持不变）；
+     * - 非发起方（中途加入）→ 没有那条链，须由本页自行兑现（前台立即、后台等 onResume）。
+     */
+    private var ownsPrepare = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityDshSetupBinding.inflate(layoutInflater)
@@ -182,16 +223,73 @@ class DshSetupActivity : FCLActivity() {
 
     // ===== 准备流程 =====
 
-    private fun beginPrepare() {
+    /**
+     * 开始（或重新进入）准备流程。[forceExtract] = true 时强制重解压（「重新开始」用，BL-069）。
+     *
+     * ★ BL-067：入口先查 [DshBootstrap.isBusy]。
+     *   解压已在跑时再调 [DshBootstrap.install] 会被 busyGuard 挡住只重放进度并**立即返回**，
+     *   而随后那条无条件 `afterPrepareReady()` 会在 isReady()==false 的当下直接判"准备失败"
+     *   —— 这就是"解压还在跑却红字说失败"的误报根源。忙时改为：只重新订阅进度
+     *   （StateFlow 会重放当前进度帧）+ 标题/进度复位为"正在准备"，**绝不**调
+     *   afterPrepareReady()，然后直接 return。
+     *
+     * ★ 顺序有意为之：先订阅、后写轮次状态。`observeProgress()` 首次订阅时 StateFlow 会
+     *   **同步重放**当前帧（Main.immediate）—— 重放的旧 Failed 会走 showFailure（清掉
+     *   prepareRunning/donePending）；若轮次状态先写，就会被这次重放倒灌回旧值，导致新轮
+     *   rootfs 行不显示"进行中"（BL-074）。所以所有轮次状态在订阅之后写入，保证以新轮为准。
+     */
+    private fun beginPrepare(forceExtract: Boolean = false) {
+        val busy = DshBootstrap.isBusy()
+        // ownsPrepare 在订阅前归位：Done 重放要按正确语义分流（见字段注释）
+        ownsPrepare = !busy
+        if (!busy) {
+            // 新一轮开始：复位自检行上一轮的残留态（"失败"受 BL-074 守卫保护、不会被普通
+            // 磁盘刷新刷回"等待中"，只在这条唯一的启动路径上复位）。接回别人跑的轮次不动它。
+            stepBindings[3]?.let { row ->
+                setStepIcon(row, R.drawable.ic_baseline_download_24)
+                setStepState(row, R.string.dsh_setup_state_waiting)
+            }
+        }
+        observeProgress()
+
+        if (busy) {
+            // 已在解压（BL-067）：不发起新任务、不做就绪校验（误报根源），接回进度流即可。
+            val cur = DshBootstrap.currentProgress()
+            if (cur !is DshBootstrap.Progress.Done && cur !is DshBootstrap.Progress.Failed) {
+                // 活帧（Stage/Detail）：重放已画上进度数值，这里把标题/图标归"正在准备"，
+                // 并垫上 rootfs 行"进行中"（BL-074）。
+                prepareRunning = true
+                donePending = false // 进行中的帧作废任何旧完成记录（活帧必然是新一轮）
+                binding.btnRetry.visibility = View.GONE
+                setStateIcon(R.drawable.ic_baseline_download_24)
+                binding.progressTitle.setText(R.string.dsh_setup_title)
+                refreshStepStates()
+            }
+            // Done/Failed 终态帧与 busy==true 同真只出现在 DshBootstrap "先 emit 后清
+            // busyGuard" 的极窄窗口：重放已画上正确终态，不覆写；Done 的交付由
+            // onResume/立即兑现路径负责（donePending 已在 render 里置位）。
+            DshLogBus.append("[setup] beginPrepare while busy: re-observe progress only")
+            return
+        }
+
+        // 新一轮：supersede 一切旧状态（重放的旧 Done/Failed 都属于上一轮）
+        prepareRunning = true
+        donePending = false
         binding.btnRetry.visibility = View.GONE
         setStateIcon(R.drawable.ic_baseline_download_24)
         binding.progressTitle.setText(R.string.dsh_setup_title)
         setProgress(getString(R.string.dsh_setup_starting), null, null)
         refreshStepStates()
-        observeProgress()
 
         DshAppScope.scope.launch {
-            DshBootstrap.install(this@DshSetupActivity, OWNER_SETUP)
+            DshBootstrap.install(this@DshSetupActivity, OWNER_SETUP, forceExtract)
+            // BL-067 延伸（TOCTOU 兜底）：install 返回后若 busy 仍为 true，说明本调用被
+            // busyGuard 挡下（另一入口在毫秒级窗口内先起跑），此时调 afterPrepareReady
+            // 就是同一个误报源。跳过；进行中的那轮自己会走到 Done 与导航。
+            if (DshBootstrap.isBusy()) {
+                DshLogBus.append("[setup] after install: another task is running, skip ready-check")
+                return@launch
+            }
             afterPrepareReady()
         }
     }
@@ -207,15 +305,28 @@ class DshSetupActivity : FCLActivity() {
             is DshBootstrap.Progress.Stage -> {
                 binding.progressTitle.setText(R.string.dsh_setup_title)
                 setProgress(p.text, null, p.fraction)
+                // 新一轮进度到达：作废可能残留的旧 Done 记录（onResume 补偿只在完成真正
+                // 到达后兑现；Done 是每轮的最后一帧，其后不会再出现 Stage/Detail）
+                donePending = false
                 refreshStepStates()
             }
             is DshBootstrap.Progress.Detail -> {
                 setProgress(getString(R.string.dsh_setup_step_rootfs), p.detail, null)
+                // 同 Stage：解压明细到达即说明新一轮在跑
+                donePending = false
                 refreshStepStates()
             }
             is DshBootstrap.Progress.Done -> {
                 setStateIcon(R.drawable.ic_baseline_done_24)
                 setProgress(getString(R.string.dsh_setup_title_done), null, 1.0)
+                // 解压期结束：立即按磁盘事实重刷清单（把垫着的"进行中"落成"已就绪"）
+                prepareRunning = false
+                refreshStepStates()
+                // ★ BL-070：记下"完成已到、尚未兑现进首页"。前台正常路径不变 —— 发起方
+                //   （ownsPrepare）由走在上面的 afterPrepareReady 自检后导航；中途加入的
+                //   实例没有那条链，须由本页兑现（前台立即、后台等 onResume 补走）。
+                donePending = true
+                if (resumed && !ownsPrepare) deliverPendingDone()
             }
             is DshBootstrap.Progress.Failed -> showFailure(p.reason)
             null -> Unit
@@ -243,6 +354,9 @@ class DshSetupActivity : FCLActivity() {
 
     /** 失败：标题变红、写明原因、露出「重试」；停在原页不自动进首页 */
     private fun showFailure(reason: String) {
+        // 失败到达后 Done 已不可能再兑现：清补偿标志与进行中记号（防旧状态在下一轮误触发）
+        donePending = false
+        prepareRunning = false
         setStateIcon(R.drawable.ic_baseline_warning_24)
         binding.progressTitle.setText(R.string.dsh_setup_title_failed)
         setProgress(reason, null, null)
@@ -267,7 +381,7 @@ class DshSetupActivity : FCLActivity() {
 
         // 自检：真正在 proot 里跑一遍最小链路（probe.sh 9 项），把问题拦在进首页之前
         withContext(Dispatchers.Main) {
-            stepBindings[3]?.stepState?.setText(R.string.dsh_setup_state_running)
+            stepBindings[3]?.let { setStepState(it, R.string.dsh_setup_state_running) }
         }
         val report = withContext(Dispatchers.IO) { DshBootstrap.verify(this@DshSetupActivity) }
         withContext(Dispatchers.Main) {
@@ -277,9 +391,11 @@ class DshSetupActivity : FCLActivity() {
                     row,
                     if (ok) R.drawable.ic_baseline_done_24 else R.drawable.ic_baseline_warning_24
                 )
+                setStepState(
+                    row,
+                    if (ok) R.string.dsh_setup_state_ready else R.string.dsh_setup_state_failed
+                )
             }
-            stepBindings[3]?.stepState?.text =
-                getString(if (ok) R.string.dsh_setup_state_ready else R.string.dsh_setup_state_failed)
             if (ok) {
                 markCompleted()
                 enterMain()
@@ -311,13 +427,14 @@ class DshSetupActivity : FCLActivity() {
             applyStep(0, prootOk)
             applyStep(1, scriptsOk)
             applyStep(2, rootfsOk)
-            // 自检行由 afterPrepareReady 负责置位；未开始前显示"等待中"
+            // 自检行由 afterPrepareReady 负责置位；未开始前显示"等待中"。
+            // ★ BL-074 守卫："进行中/已就绪/失败"是不可被静默覆写的既有呈现 —— 失败被
+            //   覆写回"等待中"就是 R12-B4-3 清单与卡片矛盾的直接成因。判据读行上记录的状态
+            //   资源 id（setStepState 打的 tag），复位只发生在 beginPrepare（新一轮唯一入口）。
             val check = stepBindings[3] ?: return@launch
-            if (check.stepState.text != getString(R.string.dsh_setup_state_running) &&
-                check.stepState.text != getString(R.string.dsh_setup_state_ready)
-            ) {
+            if (setupStepStateOverwritable(check.stepState.tag as? Int)) {
                 setStepIcon(check, R.drawable.ic_baseline_download_24)
-                check.stepState.setText(R.string.dsh_setup_state_waiting)
+                setStepState(check, R.string.dsh_setup_state_waiting)
             }
         }
     }
@@ -325,7 +442,9 @@ class DshSetupActivity : FCLActivity() {
     private fun applyStep(index: Int, ok: Boolean) {
         val b = stepBindings[index] ?: return
         setStepIcon(b, if (ok) R.drawable.ic_baseline_done_24 else R.drawable.ic_baseline_download_24)
-        b.stepState.setText(if (ok) R.string.dsh_setup_state_ready else R.string.dsh_setup_state_waiting)
+        // BL-074 判定走纯函数（单测见 W3DaTest）：解压进行中、rootfs 行未就绪 → "进行中"，
+        // 让数分钟的解压期间清单与进度卡一致（R12-B4-3）；其余保持"等待中"。
+        setStepState(b, setupStepStateRes(rowOk = ok, isRootfsRow = index == 2, preparing = prepareRunning))
     }
 
     /**
@@ -339,16 +458,50 @@ class DshSetupActivity : FCLActivity() {
     }
 
     /**
+     * 设置行状态：文案 + 把资源 id 记在 `tag` 上。
+     *
+     * ★ BL-074：覆写守卫（[setupStepStateOverwritable]）读 tag 而不是比对 `text` ——
+     *   文本是**本地化的**，拿它当状态判据会在语言/主题变化后失配；资源 id 是稳定事实。
+     */
+    private fun setStepState(item: ItemDshSetupStepBinding, res: Int) {
+        item.stepState.setText(res)
+        item.stepState.tag = res
+    }
+
+    /**
      * 「重新开始」：删掉版本标记让下次解压重跑（比重装 App 轻，且能救"半成品"）。
      * 顺带清掉上次解压遗留的 `rootfs.tmp`/`rootfs.old`，避免半成品目录干扰重跑或白占空间。
+     *
+     * ★ BL-068：解压进行中禁止重开 —— 确认分支会递归删除正在写入的 `rootfs.tmp`，
+     *   把进行中的解压搞成"布局异常"（R12-B4-2 的 tmp 破坏路径）。忙时只 toast 不开对话框
+     *   也不删任何文件。入口与确认分支**都**查：对话框弹着的时候解压可能被别处启动。
+     *
+     * ★ BL-069：确认分支改为直接调 [DshBootstrap.install] 并带 `forceExtract = true`
+     *   —— isLatest 在 Android 上恒 true（K20）且 rootfsLooksUsable 只查布局，"version 文件
+     *   被删但布局完好"这类坏底座会被增量判定永久跳过重解压；删除 version + 强制参数双保险。
      */
     private fun restartFromScratch() {
+        // BL-068 入口守卫：进行中直接拒绝（这是 BL-069 tmp 破坏路径的源头）
+        if (DshBootstrap.isBusy()) {
+            Toast.makeText(this, R.string.dsh_setup_restart_busy, Toast.LENGTH_SHORT).show()
+            return
+        }
         FCLAlertDialog.Builder(this)
             .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
             .setTitle(getString(R.string.dsh_setup_restart))
             .setMessage(getString(R.string.dsh_setup_restart_hint))
             .setPositiveButton(getString(R.string.dialog_positive)) {
                 scope.launch {
+                    // BL-068：对话框期间解压可能已被别处启动（本页重试 / 首页任务区），
+                    // 确认分支二次守卫 —— 宁可少删一轮，也不删正在写入的 .tmp
+                    if (DshBootstrap.isBusy()) {
+                        Toast.makeText(
+                            this@DshSetupActivity,
+                            R.string.dsh_setup_restart_busy,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        return@launch
+                    }
                     withContext(Dispatchers.IO) {
                         runCatching { File(DshPaths.ROOTFS_DIR, "version").delete() }
                         runCatching { File(DshPaths.SCRIPTS_DIR, "version").delete() }
@@ -358,7 +511,9 @@ class DshSetupActivity : FCLActivity() {
                         runCatching { File("${DshPaths.ROOTFS_DIR}.tmp").deleteRecursively() }
                         runCatching { File("${DshPaths.ROOTFS_DIR}.old").deleteRecursively() }
                     }
-                    beginPrepare()
+                    // BL-069：forceExtract 强制重解压 —— 不能退回 beginPrepare() 的无参形态：
+                    // version 文件被删 + 布局仍完好时，增量判定可能仍跳过 rootfs 重解
+                    beginPrepare(forceExtract = true)
                 }
             }
             .setNegativeButton(getString(R.string.dialog_negative), null)
@@ -408,12 +563,65 @@ class DshSetupActivity : FCLActivity() {
      */
     private fun enterMain() {
         if (finished) return
+        // ★ BL-070：不在前台时推迟导航。Android 10+ 的后台启动限制（BAL）会**静默拦截**
+        //   后台 Activity 的 startActivity，若照旧继续走 `finish()`，首启场景（本页是任务根）
+        //   连任务都会消失 —— 用户回到 App 只见"已就绪"页、无路可走（R12-B4-1）。
+        //   推迟到 onResume（此刻已在前台，不受 BAL 限制）兑现；donePending 保持置位。
+        if (!resumed) {
+            donePending = true
+            DshLogBus.append("[setup] enterMain deferred: activity not resumed")
+            return
+        }
         finished = true
+        // BL-070：进入已兑现，清掉补偿标志（防 onResume 重复导航；幂等）
+        donePending = false
         startActivity(
             DshMainActivity.intentForTab(this, DshShellHost.TAB_INSTANCES),
             ActivityOptionsCompat.makeCustomAnimation(this, 0, 0).toBundle()
         )
         finish()
+    }
+
+    /**
+     * BL-070 补偿：完成发生在后台时兑现进入首页；同时维护 [resumed]（进入首页判定用）。
+     *
+     * 背景：解压完成后由 [afterPrepareReady] 链自动导航，但那条链的 `startActivity` 在
+     * App 处于后台时会被 Android 10+ 的后台启动限制（BAL）静默拦截 —— 用户回到本页
+     * 只见"运行环境已就绪"，没有任何"进入"入口（R12-B4-1）。[enterMain] 在非前台时
+     * 只置 [donePending] 并返回，此处补走兑现。此刻 Activity 已在前台，不受 BAL 拦截。
+     * Done 到达时若本页就在前台，同样经 [deliverPendingDone] 立即兑现（不等 afterPrepareReady）：
+     * 后者只挂在"发起任务的那个实例"上，从外壳中途进入的另一个实例收不到它的导航。
+     */
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        if (!finished && donePending) deliverPendingDone()
+    }
+
+    override fun onPause() {
+        resumed = false
+        super.onPause()
+    }
+
+    /**
+     * BL-070：兑现"完成已到、尚未进首页"。
+     *
+     * ★ 兑现前用 IO 线程复核 [DshBootstrap.isReady]（磁盘事实）：进度流是 StateFlow，
+     *   新订阅会重放**上一轮**遗留的 Done 帧（如"重新开始"删 version 后的新实例）——
+     *   只信磁盘，重放的旧 Done 在对不上事实时自然不交付。复核期间页面可能被回收
+     *   （finished）或有新轮开始（beginPrepare 会清掉 donePending），回主线程后须复查。
+     * 不进首页时的行为与补偿前完全一致（停在"已就绪"页，可自由操作）。
+     */
+    private fun deliverPendingDone() {
+        if (finished || !donePending) return
+        scope.launch {
+            val ready = withContext(Dispatchers.IO) { DshBootstrap.isReady() }
+            if (!finished && donePending && ready) {
+                DshLogBus.append("[setup] pending done delivered: entering main")
+                markCompleted()
+                enterMain()
+            }
+        }
     }
 
     /**
@@ -466,3 +674,29 @@ class DshSetupActivity : FCLActivity() {
                 .getBoolean(KEY_SETUP_DONE, false)
     }
 }
+
+/**
+ * BL-074（纯函数，便于单测，见 W3DaTest）：rootfs 行（清单第 3 行）未就绪时该显示的状态文案。
+ *
+ * 解压的数分钟里磁盘事实一直是"未就绪"，若无此垫层，rootfs 行整段都显示"等待中"，
+ * 与进度卡的活跃进度自相矛盾（R12-B4-3）。preparing = 本轮解压进行中。
+ *
+ * @return 行状态资源 id；已就绪时返回"已就绪"
+ */
+fun setupStepStateRes(rowOk: Boolean, isRootfsRow: Boolean, preparing: Boolean): Int = when {
+    rowOk -> R.string.dsh_setup_state_ready
+    isRootfsRow && preparing -> R.string.dsh_setup_state_running
+    else -> R.string.dsh_setup_state_waiting
+}
+
+/**
+ * BL-074（纯函数，便于单测，见 W3DaTest）：磁盘事实刷新是否可覆写某行当前状态。
+ *
+ * 行上记录的状态资源 id（`tag`）为 null（尚未置位）或"等待中"时才允许覆写；
+ * "进行中/已就绪/失败"都是**有意置上的呈现**，不得被普通磁盘刷新静默覆盖 ——
+ * 自检中的"进行中"被刷回"等待中"、失败被刷回"等待中"（R12-B4-3 清单与卡片矛盾的
+ * 直接成因）都属此类。复位这些状态只发生在 [DshSetupActivity.beginPrepare]
+ * （新一轮开始的唯一入口，显式置回"等待中"）。
+ */
+fun setupStepStateOverwritable(currentRes: Int?): Boolean =
+    currentRes == null || currentRes == R.string.dsh_setup_state_waiting

@@ -51,6 +51,14 @@ object DshLogBus {
     private const val FILE_MAX_BYTES = 1L * 1024 * 1024
 
     /**
+     * BL-075: consecutive-failure limit per file before a failed batch is dropped instead of being
+     * requeued. A disk-full phone would otherwise retry a batch forever every ~200ms (hot loop);
+     * after this many consecutive failures we give up on the batch, leave one warning line and keep
+     * the failure visible via [lastFileWriteError]. A later successful write resets the counter.
+     */
+    private const val FILE_WRITE_FAIL_LIMIT = 3
+
+    /**
      * Upper bound on how many per-instance streams stay resident in memory (K10 backstop).
      * Each stream can hold up to [MAX_LINES] lines plus a StateFlow, so an unbounded map is a
      * real leak under create/delete churn. The primary cleanup is [removeStream] (wired into
@@ -140,6 +148,34 @@ object DshLogBus {
     @Volatile
     private var logFile: File? = null
 
+    /**
+     * BL-075: last observed file-write failure, for diagnostics (public read-only). Null until a
+     * write fails; deliberately sticky once set — the in-memory warning lines (see [appendToFile])
+     * tell the chronological story, this just answers "did anything ever fail, and where".
+     * Format: `log file write failed: <absolute path> (<ExceptionClass>: <message>)`.
+     */
+    @Volatile
+    var lastFileWriteError: String? = null
+        private set
+
+    /**
+     * BL-075: consecutive write-failure counter per file path (guarded by [fileIoLock]). A failed
+     * batch is requeued for retry only while this counter is below [FILE_WRITE_FAIL_LIMIT]; once
+     * the limit is hit the batch is dropped (warning line only) and later batches are not retried
+     * either, until some write to that file succeeds (which resets the counter). This bounds a
+     * disk-full hot loop to ~[FILE_WRITE_FAIL_LIMIT] attempts per failure streak instead of one
+     * futile write every [FLUSH_INTERVAL_MS] forever.
+     */
+    private val fileWriteFailCounts = HashMap<String, Int>()
+
+    /**
+     * BL-075: paths already warned about *dropping* batches in the current failure streak, so the
+     * "giving up" warning is emitted once per streak instead of once per batch (a disk-full phone
+     * with steady output would otherwise add one warning line every ~[FLUSH_INTERVAL_MS] forever).
+     * Cleared together with the counter on the next successful write. Guarded by [fileIoLock].
+     */
+    private val fileWriteDropWarned = HashSet<String>()
+
     /** token 脱敏：`?token=XXXX` / `token=XXXX` → `token=***` */
     private val tokenRegex = Regex("""(?i)(token=)[A-Za-z0-9_\-]+""")
 
@@ -161,6 +197,13 @@ object DshLogBus {
 
     /** 已注册的敏感串（启动 token 等），做二次兜底替换 */
     private val registeredSecrets = CopyOnWriteArraySet<String>()
+
+    /**
+     * BL-075 / test-only seam: global file path as [attachFile] bound it (null when unbound).
+     * Production code uses [logFile] directly; exposed so the failure-path test can restore the
+     * singleton exactly (see [detachFileForTest]).
+     */
+    val attachedFilePathForTest: String? get() = logFile?.absolutePath
 
     /**
      * 绑定**全局**日志的落盘文件（App 启动时调一次）；[File] 由 [DshPaths] 给出。
@@ -444,7 +487,20 @@ object DshLogBus {
     }
 
     /** 一次刷新里要追加到某个文件的一批行（把锁内算好的东西带出来，锁外只做 IO） */
-    private class FileWrite(val file: File, val lines: List<String>)
+    private class FileWrite(
+        val file: File,
+        val lines: List<String>,
+        /**
+         * BL-075: the per-instance stream this batch came from, or `null` for the global stream —
+         * kept so a *failed* write can be requeued into that stream's own `pendingForFile` head
+         * (retry must land in the stream the batch belongs to, not the other one). If the stream
+         * was evicted (LRU) or removed in the meantime the requeue is skipped and only the file
+         * copy of this batch is lost; the lines themselves still live in the in-memory ring.
+         */
+        val stream: InstanceStream?,
+        /** BL-075: instance id matching [stream] (null for the global stream) — requeue residency check */
+        val instanceId: String?
+    )
 
     /**
      * 一次刷新同时处理两条流：
@@ -493,21 +549,25 @@ object DshLogBus {
                     st.state.value = Snapshot(st.revision, ArrayList(st.buffer))
                     val lines = ArrayList(st.pendingForFile)
                     st.pendingForFile.clear()
-                    if (lines.isNotEmpty()) writes += FileWrite(fileFor(id), lines)
+                    if (lines.isNotEmpty()) writes += FileWrite(fileFor(id), lines, st, id)
                 }
                 instanceWrites = writes
             }
         }
 
         val globalFile = logFile
-        if (globalFile != null && globalWrite.isNotEmpty()) appendToFile(globalFile, globalWrite)
+        if (globalFile != null && globalWrite.isNotEmpty()) {
+            appendToFile(globalFile, globalWrite, stream = null, instanceId = null)
+        }
         // ★ 实例文件只在**全局日志已绑定**时才写。理由：全局日志所在的目录就是实例日志的目录
         //   （见 [instanceLogFile] 从 `DshPaths.LOG_FILE` 推导）；没绑定 = 路径系统还没就绪，
         //   这时实例路径只能落到临时目录兜底，往那儿写日志没有用处（不是 App 私有目录，
         //   UI 显示的"日志路径"也不指向它），只会在单测里凭空产生文件。
         //   真机上两者是同一个时刻就绪的（`DshPaths.loadPaths` 结束前就 [attachFile]），所以不影响行为。
         if (globalFile != null) {
-            for (w in instanceWrites) appendToFile(w.file, w.lines)
+            for (w in instanceWrites) {
+                appendToFile(w.file, w.lines, stream = w.stream, instanceId = w.instanceId)
+            }
         }
 
         // K09: lines appended after we cleared `flushScheduled` above (during the drain tail or the
@@ -527,9 +587,25 @@ object DshLogBus {
     /**
      * 追加落盘 + 超限轮转。全局与实例文件共用这一份实现
      * （两条流各写各的文件，但"怎么写、怎么截断"必须完全一样，否则排障时两边行为不一致）。
+     *
+     * ★ BL-075：失败不再静默。`appendText` 抛异常（典型：磁盘满 ENOSPC）时：
+     *   1. [lastFileWriteError] 记下文件与异常类（排障入口）；
+     *   2. 往**内存流**插一条英文警告行（不经过 append/appendFor —— 那会把警告也排进
+     *      pendingForFile 又落回失败的文件，见 [handleFileWriteFailure]）；
+     *   3. 该批行**放回**对应流的 `pendingForFile` 头部，最多重试到 [FILE_WRITE_FAIL_LIMIT]
+     *      次（回队会置脏，K09 的尾补排会以 ~200ms 间隔排下一次尝试；到上限后丢弃批次、
+     *      只留警告，防止磁盘满时无限热循环）。
+     *
+     * @param stream 该批行所属的实例流；`null` = 全局流（重试要回对应流，不能串流）
+     * @param instanceId [stream] 对应的实例 id（回队前校验流仍驻留用；全局流传 null）
      */
-    private fun appendToFile(f: File, lines: List<String>) {
-        runCatching {
+    private fun appendToFile(
+        f: File,
+        lines: List<String>,
+        stream: InstanceStream?,
+        instanceId: String?
+    ) {
+        val failure = runCatching {
             // K11: serialize file mutations on [fileIoLock], NOT the producer [lock]. flush() calls
             // this off-lock, but two overlapping flushes (e.g. flushNow() racing the scheduled job)
             // could otherwise interleave appends or append-vs-rotate on the same file. Producers
@@ -542,6 +618,91 @@ object DshLogBus {
                 // 实例文件同理：历史遗留的超大文件会在它第一次被写入时被裁到尾部。
                 rotateIfTooBig(f)
             }
+        }.exceptionOrNull()
+
+        if (failure == null) {
+            // 写成功：该文件的连续失败计数清零（下一轮失败重新从 1 计；丢弃警告也可再发）
+            synchronized(fileIoLock) {
+                fileWriteFailCounts.remove(f.absolutePath)
+                fileWriteDropWarned.remove(f.absolutePath)
+            }
+            return
+        }
+        handleFileWriteFailure(f, lines, failure, stream, instanceId)
+    }
+
+    /**
+     * BL-075: react to a failed batch write — record it, surface it in the in-memory streams, and
+     * requeue the batch for a **bounded** number of retries.
+     *
+     * - Recording: [lastFileWriteError] (sticky) always; plus one English warning line into the
+     *   in-memory stream(s) on the first failure of a streak (and one more when the batch is
+     *   finally dropped). Warnings are inserted directly into the buffers — NOT via
+     *   [append]/[appendFor] — because those would queue the warning into `pendingForFile` and
+     *   ship it right back into the failing file (and recurse on every retry).
+     * - Retry: the batch goes back to the **head** of its stream's `pendingForFile` (head keeps
+     *   the file's line order) and the stream is marked dirty, so the K09 tail re-arm schedules
+     *   another attempt ~[FLUSH_INTERVAL_MS] away. After [FILE_WRITE_FAIL_LIMIT] consecutive
+     *   failures the batch is dropped (warning only) — a disk-full phone must not retry forever.
+     *   Any successful write to the file resets the streak; new batches are then attempted again.
+     * - The requeue is skipped if the instance stream was evicted/removed meanwhile (no object to
+     *   requeue into); the lines themselves stay in the in-memory ring regardless.
+     */
+    private fun handleFileWriteFailure(
+        f: File,
+        lines: List<String>,
+        failure: Throwable,
+        stream: InstanceStream?,
+        instanceId: String?
+    ) {
+        val path = f.absolutePath
+        val desc = "log file write failed: $path (${failure.javaClass.simpleName}" +
+            (failure.message?.let { ": $it" } ?: "") + ")"
+        lastFileWriteError = desc
+
+        val attempt = synchronized(fileIoLock) {
+            val c = (fileWriteFailCounts[path] ?: 0) + 1
+            fileWriteFailCounts[path] = c
+            c
+        }
+        val drop = attempt >= FILE_WRITE_FAIL_LIMIT
+
+        val warning = when {
+            attempt == 1 -> "$desc; ${lines.size} line(s) kept for retry"
+            // "giving up" is emitted once per failure streak, not once per dropped batch —
+            // steady output on a full disk would otherwise add a warning every ~200ms (BL-075)
+            drop && synchronized(fileIoLock) { fileWriteDropWarned.add(path) } ->
+                "$desc; giving up on ${lines.size} buffered line(s) after $attempt failed attempts"
+            else -> null
+        }
+
+        synchronized(lock) {
+            // Residency check under the producer lock: the stream may have been evicted (LRU) or
+            // removed since flush() drained it — then there is nothing to requeue/warn into.
+            val st = stream?.takeIf { instanceId != null && streams[instanceId] === it }
+            if (warning != null) {
+                val stamped = stamp(warning)
+                if (st != null) {
+                    // instance files: the instance view and the global timeline stay consistent
+                    // (same contract as appendFor — the instance stream is a subset of global)
+                    st.buffer += stamped
+                    trimLocked(st.buffer)
+                    st.dirty = true
+                }
+                buffer += stamped
+                trimLocked(buffer)
+                dirty = true
+            }
+            if (!drop) {
+                if (st != null) {
+                    st.pendingForFile.addAll(0, lines)
+                    st.dirty = true
+                } else if (stream == null) {
+                    pendingForFile.addAll(0, lines)
+                    dirty = true // drives the K09 tail re-arm → retry ~FLUSH_INTERVAL_MS later
+                }
+                // stream != null but evicted: nothing to requeue into; only the file copy is lost
+            }
         }
     }
 
@@ -552,13 +713,20 @@ object DshLogBus {
      * rotation never blocks append()/appendFor(). [appendToFile] already holds [fileIoLock] when it
      * calls this, so the nested `synchronized` is a reentrant no-op there; direct test callers take
      * it themselves.
+     *
+     * ★ BL-075：读失败不再静默 —— 记进 [lastFileWriteError] 后返回（文件保持超限，下次落盘
+     *   再试轮转），而不是无声无息地让文件一直超限。
      */
     private fun rotateIfTooBig(f: File) {
         if (f.length() <= FILE_MAX_BYTES) return
         synchronized(fileIoLock) {
             if (f.length() <= FILE_MAX_BYTES) return
             val keep = (FILE_MAX_BYTES / 2).toInt()
-            val text = runCatching { f.readText() }.getOrNull() ?: return
+            val text = runCatching { f.readText() }.getOrElse { e ->
+                lastFileWriteError = "log file rotate failed: ${f.absolutePath} " +
+                    "(${e.javaClass.simpleName}${e.message?.let { ": $it" } ?: ""})"
+                return
+            }
             val tail = if (text.length <= keep) text else text.takeLast(keep).substringAfter('\n', "")
             f.writeText(tail)
         }
@@ -575,6 +743,20 @@ object DshLogBus {
      * does after each write (K11 regression anchor).
      */
     fun rotateFileForTest(f: File) = rotateIfTooBig(f)
+
+    /**
+     * Test hook: unbind the global log file and reset the BL-075 per-path failure state, restoring
+     * the "nothing attached" singleton state so a failure-path test's bad file (and its stuck
+     * failure counters) cannot leak into later tests in the same JVM. Mirrors [attachFile];
+     * production code must not call this.
+     */
+    fun detachFileForTest() {
+        logFile = null
+        synchronized(fileIoLock) {
+            fileWriteFailCounts.clear()
+            fileWriteDropWarned.clear()
+        }
+    }
 
     /** Test hook: current number of resident per-instance streams (K10 cap regression anchor). */
     fun streamCountForTest(): Int = synchronized(lock) { streams.size }
