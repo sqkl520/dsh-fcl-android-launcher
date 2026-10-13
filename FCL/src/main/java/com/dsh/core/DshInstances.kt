@@ -4,7 +4,9 @@ import com.dsh.fcl.androidlauncher.R
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
-import com.google.gson.reflect.TypeToken
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +34,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * 3. **id 冲突**：原来 id = `inst-<毫秒>`，同一毫秒创建两个实例会撞 id（目录互踩、清单出现重复项）。
  *    现在加进程序列号 + 随机后缀，并保证与现有 id 不重复。
  * 4. **清单损坏**：原来 JSON 解析失败会被静默吞掉（用户看到"实例全没了"）。现在把坏文件另存为
- *    `.corrupt-<时间>`，并往日志总线写一行，便于事后找回。
+ *    `.corrupt-<时间>`，并往日志总线写一行，便于事后找回。BL-098 起分两级：单个坏元素（未知
+ *    state 枚举名 / 缺 id、name 必填字段）只丢该元素并逐条警告，只有**整份**解析不了才走
+ *    `.corrupt`；读文件失败（EIO）不再直穿 [init] / FCLApp.onCreate。
  * 5. 新增 [rename]/[updateConfig]/[recheck]，配合新的设置页与"修复"入口。
  */
 object DshInstances {
@@ -40,6 +44,12 @@ object DshInstances {
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
     private val writeMutex = Mutex()
     private val seq = AtomicInteger(0)
+
+    /** [delete] 等实例离开 Starting/Running/Stopping 的上限 —— 与 [DshRuntime.stopAndWait] 的默认预算一致 */
+    private const val DELETE_WAIT_TIMEOUT_MS = 8_000L
+
+    /** [delete] 轮询 [DshRuntime.activeInstanceId] 的间隔（停止收尾在秒级，100ms 足够跟手且不费） */
+    private const val DELETE_WAIT_POLL_MS = 100L
 
     private val _instances = MutableStateFlow<List<DshInstance>>(emptyList())
     val instances: StateFlow<List<DshInstance>> = _instances.asStateFlow()
@@ -272,29 +282,76 @@ object DshInstances {
             // ★ 必须等进程真正退出再删：stop() 是异步的（TERM→5s→KILL），
             // 若不等它，node 可能还在往 node_modules 写文件，deleteRecursively 就会留下
             // 一堆 300MB 级残留且无提示（界面早已把实例从列表里移除）。
-            // stopAndWait 最长等 8s（> TERM+等待），超时也硬删并靠日志提示。
+            // 等待上限 [DELETE_WAIT_TIMEOUT_MS]（与 DshRuntime.stopAndWait 的预算一致），
+            // 超时也硬删并靠日志提示。
             //
-            // ★ 归属校验：只有\"被删的这个实例正在跑\"时才去停它。
-            // DshRuntime 是单实例策略，stopAndWait() 停的是**当前正在运行的那个实例**，
-            // 与传入的 id 无关。原来无条件调用，导致\"删除一个没在跑的实例 B\"会把正在跑的
-            // 实例 A 一起杀掉（用户只点了删除 B，A 的会话却断了）。
-            val stopped = if (DshRuntime.runningInstanceId() == id) {
-                DshRuntime.stopAndWait(DshAppContextHolder.context?.getString(R.string.dsh_reason_deleted) ?: "Instance deleted")
-            } else {
-                true
+            // ★ 归属校验（BL-036 重写；旧判据 `runningInstanceId() == id` 漏掉了 Stopping）：
+            // DshRuntime 是单实例策略，stop() 停的是**当前正在运行的那个实例**，与传入的 id 无关。
+            // 无条件调用会"删除没在跑的 B 却杀掉正在跑的 A"（用户只点了删除 B，A 的会话却断了）。
+            // 所以先只对**本实例**发 [DshRuntime.stopIf]（幂等：Starting/Running 拉进 Stopping；
+            // 已在 Stopping 或没在跑则 no-op、返回 false —— 返回 false 不代表"停完了"，所以
+            // 不看返回值，统一由下面的轮询做"是否真的离场"的唯一判据），
+            // 再轮询 [DshRuntime.activeInstanceId]（含 Stopping）直到 != id。
+            // 旧实现跳过"已经在 Stopping"的实例不等待，于是停止窗口内删实例会与 node 收尾
+            // 抢写盘 —— 这正是要修的 BL-036。
+            // 若 activeInstanceId() 返回的是**别的实例**（单实例策略下罕见）：不等它、也不停它，
+            // 直接删本实例（保留原有归属校验思想）。
+            val reason = DshAppContextHolder.context?.getString(R.string.dsh_reason_deleted)
+                ?: "Instance deleted"
+            runCatching { DshRuntime.stopIf(id, reason) }.onFailure { e ->
+                // stopIf 设计上不该抛；万一抛了也不能让删除协程死掉（那样 _deleting 永远清不掉），
+                // 继续走下面的等待循环 —— 进程若真在跑，还会被等到超时才硬删。
+                DshLogBus.append("[instances] stopIf failed for $id: ${e.message}")
             }
-            if (!stopped) {
-                // ★ 保持全局（不进该实例自己的日志）：这个实例正在被**删除** —— 它的目录与日志文件
-                // 紧接着就要 deleteRecursively()，写进它的实例流等于刚写完就被删，谁也看不到。
-                // 而"删除时进程没停干净"恰恰是排障要的（残留 300MB），所以必须留在全局流里。
-                DshLogBus.append("[instances] 停止实例 ${inst?.name ?: id} 超时，仍继续删除目录")
+            var stopTimedOut = false
+            val waitDeadline = System.currentTimeMillis() + DELETE_WAIT_TIMEOUT_MS
+            while (DshRuntime.activeInstanceId() == id) {
+                if (System.currentTimeMillis() >= waitDeadline) {
+                    stopTimedOut = true
+                    break
+                }
+                delay(DELETE_WAIT_POLL_MS) // 协程里轮询：让出线程，别阻塞
+            }
+            if (stopTimedOut) {
+                // ★ 保持全局（不进该实例自己的日志）：这个实例正在被**删除**，写进它的实例流
+                // 等于刚写完就要被丢弃/重建，谁也看不到。而"删除时进程没停干净"恰恰是排障
+                // 要的（残留 300MB），所以必须留在全局流里。
+                DshLogBus.append(
+                    "[instances] stop timed out for ${inst?.name ?: id}, deleting directory anyway"
+                )
             }
             val ok = runCatching { DshPaths.instanceDir(id).deleteRecursively() }.getOrDefault(false)
             // ★ 保持全局：同上，删除结果是"实例管理"这件事的结论，不是该实例运行期间的输出。
-            //   实例页此刻正在被关掉，日志文件也已被删，写实例流没有任何接收方。
-            DshLogBus.append("[instances] 删除实例 ${inst?.name ?: id} 目录: ${if (ok) "完成" else "有文件残留"}")
-            // 实例已删：回收它的日志流（T-A3 提供 removeStream，缝合点由编排在此接线）。
+            //   实例页此刻正在被关掉，写实例流没有接收方（实例日志文件也不在实例目录里，
+            //   见下方删除块 —— 旧注释"日志文件也已被删"的表述一并更正）。
+            DshLogBus.append(
+                "[instances] delete ${inst?.name ?: id} dir: ${if (ok) "done" else "leftover files"}"
+            )
+            // 实例已删：回收它的内存流（buffer / StateFlow / 文件句柄缓存）。
+            // ⚠️ 残余窗口（BL-080 复核）：DshLogBus.appendFor 对未知 id 会**按需重建**内存流，
+            //    删除收尾阶段唯一还可能迟到的写方是停止协程的 "[runtime] … 已停止" 收尾行
+            //    （见 DshRuntime.stop 的 synchronized 块，Idle 落状态与 appendFor 只隔几微秒）。
+            //    最坏后果：重建一条内存流（后续被 MAX_STREAMS=32 的 LRU 自然淘汰）+ 在极窄竞态下
+            //    重写一份 ≤1MB 实例日志文件 —— 与 BL-076 原症状同级、有界，故接受；彻底闭环需要
+            //    DshLogBus 侧加删除墓碑（不在本文件职责内，登记于报告）。
             DshLogBus.removeStream(id)
+            // BL-080/BL-076：实例日志文件是 `<filesDir>/dsh/logs/instance-<id>.log`（由
+            // DshPaths.LOG_FILE 的父目录推导，见 DshLogBus.instanceLogFile），**不在实例目录里**，
+            // 上面 deleteRecursively() 带不走它 —— 全仓原先没有别的删除方（旧注释"它的目录与
+            // 日志文件紧接着就要 deleteRecursively()"是错的：日志文件不在实例目录内），
+            // 不删就每删一个实例留一份 ≤1MB 孤儿。放在 removeStream **之后**：removeStream 清掉
+            // 内存流与文件句柄缓存后，之后即使再有迟到的 appendFor(id, …) 也只会重建内存流、落盘
+            // 是惰性的（再凑满一次 flush 才会重写文件，删除收尾阶段没有这种写入方）；
+            // 若反过来先删文件再 removeStream，还挂在 pendingForFile 里的行下一次 flush
+            // 就会把文件原地写回来。delete() 返回 false（文件本就不存在）时不打日志，避免噪音。
+            runCatching {
+                if (DshLogBus.instanceLogFile(id).delete()) {
+                    DshLogBus.append("[instances] removed instance log file for $id")
+                }
+            }.onFailure { e ->
+                // 删不掉也只是残留一个日志文件，不该拖垮删除收尾 —— 但得留痕（否则是静默孤儿）。
+                DshLogBus.append("[instances] failed to remove instance log file for $id: ${e.message}")
+            }
             _deleting.update { it - id }
             // ★ 终态上报要在 `_deleting` 移除**之后**，但要注意它不能改写"删除是否成功"的判定 ——
             //   失败（有文件残留）在**任务语义**里算 DONE 还是 FAILED？这里选 DONE + 把残留写进 stage：
@@ -328,6 +385,149 @@ object DshInstances {
         DshAppScope.scope.launch { callback(DshPaths.dirSize(DshPaths.instanceDir(id))) }
     }
 
+    // --- 持久化（解析） -----------------------------------------------------
+
+    /**
+     * 清单解析结果。语义与 [loadFrom] 的三种出路一一对应：
+     * - [Corrupt]：**整体**没法解析（不是合法 JSON / 根不是对象 / `instances` 不是数组）→
+     *   调用方照旧另存 .corrupt + 清空；
+     * - [Parsed]：解析完成。单个坏元素已被丢弃且计在 [Parsed.dropped]（逐条英文警告），
+     *   `state` 缺失/null 的元素已被回填 [DshInstance.State.NOT_INSTALLED]。
+     */
+    sealed class ParsedManifest {
+        /** 解析成功后剩下的实例（顺序保持） */
+        data class Parsed(
+            val instances: List<DshInstance>,
+            val selectedId: String?,
+            val dropped: Int
+        ) : ParsedManifest()
+
+        /** 整体损坏：交给 [loadFrom] 的 .corrupt 分支（[reason] 进全局日志，便于排障） */
+        data class Corrupt(val reason: String) : ParsedManifest()
+    }
+
+    /** 取一个"字符串形态"的字段：缺失 / 显式 null / 类型不对都返回 null（调用方决定丢弃或回填） */
+    private fun JsonObject.stringOrNull(key: String): String? {
+        val e = get(key) ?: return null
+        if (!e.isJsonPrimitive || !e.asJsonPrimitive.isString) return null
+        return e.asString
+    }
+
+    /**
+     * 把 instances.json 文本解析成 [ParsedManifest]（BL-098：字段级容错，**纯函数**、可单测）。
+     *
+     * 与旧实现（整份 `gson.fromJson` + 一个 try）的区别：
+     * 1. **逐元素解析**：用 [JsonParser] 先读成 JSON 树，再对 `instances` 里**每个元素**单独
+     *    `fromJson` 包 try。单个坏元素（非对象 / 缺 `id`、`name` 必填字段 / 未知 state 枚举名 /
+     *    字段抛错）只丢弃它自己 + 一条英文警告，其余实例全部保留 —— 旧实现只要有一个元素抛异常，
+     *    整份清单被当"损坏"清空、用户看到"实例全没了"。
+     * 2. **state 回填**：Gson 反序列化缺字段 / 未知枚举名的 `var state` 时不会走 Kotlin 默认值，
+     *    而是给 null。此前 null 会漏进列表，`when(state)` 在列表页直接崩（BL-098 的崩溃面）。
+     *    这里把 null 的 state 显式回填成 NOT_INSTALLED —— 注意本轮实测（Gson 2.10.1，真类）：
+     *    未知枚举名**不抛异常**、也是 null，所以"未知枚举名"与"缺字段"必须从**原始 JSON**
+     *    上区分（前者丢弃、后者回填）。profile / model 同族防 null（同一条 Gson 语义）。
+     * 3. **还是"整体损坏"的才走 Corrupt**：文本不是合法 JSON、根不是对象、`instances` 字段
+     *    存在但不是数组 —— 这些是"整份文件坏了"，保留 .corrupt 备份语义不变。
+     *
+     * 空/纯空白文本约定由 [loadFrom] 处理（视作空清单，不进这里）；本函数对空文本防御性
+     * 返回 Corrupt（不会经生产路径到达，纯函数边界自洽）。
+     */
+    fun parseManifest(json: String): ParsedManifest {
+        val root = try {
+            JsonParser.parseString(json)
+        } catch (e: Exception) {
+            return ParsedManifest.Corrupt("not valid JSON: ${e.message}")
+        }
+        // 非对象（字面量 "null" / 数组 / 数字…）：整份文件是坏的
+        if (!root.isJsonObject) return ParsedManifest.Corrupt("root is not a JSON object")
+        val obj = root.asJsonObject
+        val arr = obj.get("instances")
+        // 字段缺失 = 没有实例（与旧语义一致：m.instances ?: emptyList()）
+        if (arr == null || arr.isJsonNull) {
+            return ParsedManifest.Parsed(emptyList(), null, 0)
+        }
+        // 存在但不是数组：旧实现会在这抛 → 走 .corrupt；保持
+        if (!arr.isJsonArray) return ParsedManifest.Corrupt("\"instances\" is not a JSON array")
+
+        val kept = ArrayList<DshInstance>(arr.asJsonArray.size())
+        var dropped = 0
+        for (element in arr.asJsonArray) {
+            if (!element.isJsonObject) {
+                dropped++
+                DshLogBus.append(
+                    "[instances] dropped a manifest entry (not a JSON object): " +
+                        element.toString().take(200)
+                )
+                continue
+            }
+            val eo = element.asJsonObject
+            // 必填字段：id / name（无 Kotlin 默认值；缺了实例不可用）。从**原始 JSON** 上判，
+            // 比"解析后再判 null"更准 —— Gson 对缺失的 String 字段一律给 null，不会抛。
+            if (eo.stringOrNull("id") == null || eo.stringOrNull("name") == null) {
+                dropped++
+                DshLogBus.append(
+                    "[instances] dropped a manifest entry (missing required id/name): " +
+                        element.toString().take(200)
+                )
+                continue
+            }
+            // state 是字符串但不在枚举里 = 未知枚举名 → **降级回填 NOT_INSTALLED**，不丢弃（R14-V2A F2）。
+            // ⚠️ 必须在 Gson 之前从**原始 JSON** 上判：实测（Gson 2.10.1，真类）未知枚举名
+            //    不抛异常、直接给 null —— 只看解析结果无法区分"未知枚举名"与"缺字段"。
+            // 为什么不丢：版本回退/手工编辑产生合法但未知的 state 时，丢弃 = 用户实例**无声
+            //    永久消失**（此后任何一次落盘即固化），剩余目录成孤儿；而回填是自愈的——启动
+            //    校验以磁盘 package.json 为准（repair/recheck 会把它纠正回真实状态）。缺 state
+            //    字段本来就走同款回填（见下方字段级回填），两种"认不出"的策略应当一致。
+            // 缺失 / 显式 null / 非字符串原语 → 不算未知，同样交给下面的回填。
+            val rawState = eo.get("state")
+            var unknownStateSeen: String? = null
+            if (rawState != null && rawState.isJsonPrimitive && rawState.asJsonPrimitive.isString) {
+                val stateName = rawState.asString
+                if (DshInstance.State.entries.none { it.name == stateName }) {
+                    unknownStateSeen = stateName
+                    DshLogBus.append(
+                        "[instances] manifest entry with unknown state '$stateName' kept as NOT_INSTALLED " +
+                            "(will be re-checked against disk): " + element.toString().take(200)
+                    )
+                }
+            }
+            val inst = runCatching { gson.fromJson(element, DshInstance::class.java) }.getOrNull()
+            if (inst == null) {
+                dropped++
+                DshLogBus.append(
+                    "[instances] dropped a manifest entry (failed to deserialize): " +
+                        element.toString().take(200)
+                )
+                continue
+            }
+            // 字段级回填：Gson unsafe 跳过 Kotlin 默认值，缺失/无法映射的非空字段是 null，
+            // 不能让 null 漏进 StateFlow 列表（列表页 when(state) 必崩）。经局部可空变量读取：
+            // 字段声明是非空类型，直接判空编译器会当成恒真。
+            // 未知枚举名（R14-V2A F2）走同款降级：Gson 对未知枚举名给 null → 落回 NOT_INSTALLED，
+            // 上方日志已记录原始 name 便于排障。
+            val rawStateField: DshInstance.State? = inst.state
+            inst.state = rawStateField ?: DshInstance.State.NOT_INSTALLED
+            if (unknownStateSeen != null && inst.state != DshInstance.State.NOT_INSTALLED) {
+                // 防御分支：极端 Gson 行为下未知枚举若映射成了别的值，也强制回填，保证策略一致
+                inst.state = DshInstance.State.NOT_INSTALLED
+            }
+            val rawProfile: String? = inst.profile
+            inst.profile = rawProfile ?: DshInstance.PROFILE_WEB
+            val rawModel: String? = inst.model
+            inst.model = rawModel ?: DshInstance.MODEL_FLASH
+            kept += inst
+        }
+
+        // selectedId：类型不对/缺失按 null；仍只在"它确实在保留列表里"时生效（旧语义）。
+        // 即使 selectedId 无效也不影响元素保留 —— 那是选中项校正，不是清单损坏。
+        val selected = obj.stringOrNull("selectedId")
+        return ParsedManifest.Parsed(
+            instances = kept,
+            selectedId = selected?.takeIf { sid -> kept.any { it.id == sid } },
+            dropped = dropped
+        )
+    }
+
     // --- 持久化 ------------------------------------------------------------
 
     private fun manifestFile() = File(DshPaths.INSTANCES_MANIFEST)
@@ -351,31 +551,39 @@ object DshInstances {
      */
     fun loadFrom(f: File) {
         if (!f.exists()) return
-        val text = f.readText()
+        // BL-098: readText 必须包 runCatching —— 读失败（EIO 等）此前直穿 init() 一路抛进
+        // FCLApp.onCreate，启动即崩。读不到内容不是"清单损坏"（文件可能好端端的，只是这次读不了），
+        // 所以既不清空列表也不做 .corrupt 备份，只记一条全局英文警告。
+        val text = runCatching { f.readText() }.getOrElse { e ->
+            DshLogBus.append("[instances] failed to read instances.json: ${e.message}")
+            return
+        }
         if (text.isBlank()) {
             // Empty / whitespace-only = empty manifest. Nothing to parse, nothing to back up.
             _instances.value = emptyList()
             _selectedId.value = null
             return
         }
-        runCatching {
-            val type = object : TypeToken<Manifest>() {}.type
-            // Blank is handled above; a non-blank body that still parses to null (e.g. the literal
-            // "null") is genuinely malformed, so fail into the corrupt branch rather than NPE.
-            val m: Manifest = gson.fromJson(text, type)
-                ?: throw IllegalStateException("manifest parsed to null")
-            val list = m.instances ?: emptyList()
-            _instances.value = list
-            _selectedId.value = m.selectedId?.takeIf { id -> list.any { it.id == id } }
-                ?: list.firstOrNull()?.id
-        }.onFailure { e ->
-            // 清单坏了不要静默丢：另存一份便于人工找回，并把清单重置为空
-            // ★ 保持全局：清单（instances.json）是**所有实例**的索引，不是任何一个实例的日志。
-            //   而且此刻 _instances 已被清空，"这条属于哪个实例"根本无从判断（也不该猜）。
-            DshLogBus.append("[instances] failed to parse instances.json, kept a backup: ${e.message}")
-            runCatching { f.renameTo(File(f.parentFile, "${f.name}.corrupt-${System.currentTimeMillis()}")) }
-            _instances.value = emptyList()
-            _selectedId.value = null
+        when (val parsed = parseManifest(text)) {
+            is ParsedManifest.Corrupt -> {
+                // 整体损坏（不是合法 JSON / 根不是对象 / instances 不是数组）才走这里：
+                // 另存一份便于人工找回，并把清单重置为空。
+                // 单个元素的坏字段不会到达这里 —— parseManifest 已逐元素容错（BL-098）。
+                // ★ 保持全局：清单（instances.json）是**所有实例**的索引，不是任何一个实例的日志。
+                //   而且此刻 _instances 已被清空，"这条属于哪个实例"根本无从判断（也不该猜）。
+                DshLogBus.append(
+                    "[instances] failed to parse instances.json (${parsed.reason}), kept a backup"
+                )
+                runCatching { f.renameTo(File(f.parentFile, "${f.name}.corrupt-${System.currentTimeMillis()}")) }
+                _instances.value = emptyList()
+                _selectedId.value = null
+            }
+
+            is ParsedManifest.Parsed -> {
+                _instances.value = parsed.instances
+                // 选中项校正语义与旧实现一致：清单里的 selectedId 有效则用它，否则回落第一个
+                _selectedId.value = parsed.selectedId ?: parsed.instances.firstOrNull()?.id
+            }
         }
     }
 

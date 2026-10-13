@@ -27,6 +27,15 @@ class DshVersionAdapter(
     private var items: List<DshVersionListItem> = emptyList()
     private var installingVersions: Set<String> = emptySet()
 
+    /**
+     * 还欠一次入场动画的版本号（消费制，BL-121 / V4b 方案 A1"两 Adapter 动画去重"的版本页一份）。
+     *
+     * [submitInstalling] 的单行通知会让"安装中/已安装"翻转的那一行重绑 —— 重绑命中本集合
+     * 以外的 id 时不再播入场动画（见 onBind 末尾），否则点一下安装、那一行自己又滑一次。
+     * [submit] 时把「新出现 − 已见」并入（首次加载=全部新 id → 全列表滑入，现观感保留）。
+     */
+    private val pendingAnimIds = mutableSetOf<String>()
+
     fun submit(list: List<DshVersionListItem>) {
         val newItems = ArrayList(list)
         val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
@@ -38,14 +47,35 @@ class DshVersionAdapter(
             override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
                 items[oldPos] == newItems[newPos]
         })
+        // ★ BL-121：与实例卡同款的新 id 判定（消费制，见 [pendingAnimIds]）：
+        //   "已见" = 提交前的旧 items ∪ 尚未消费的待播集合。必须在 items 替换**之前**算。
+        pendingAnimIds += computeNewIds(newItems.map { it.version }, pendingAnimIds + items.map { it.version })
+        pendingAnimIds.retainAll(newItems.map { it.version }.toSet())
         items = newItems
         diff.dispatchUpdatesTo(this)
     }
 
-    /** 正在安装的版本集合（按钮态） */
+    /**
+     * 正在安装的版本集合（按钮态）。
+     *
+     * ★ BL-121：不再 `notifyItemRangeChanged(0, itemCount)` —— 那条通知让**整页可见行**重绑、
+     * 每行各自从 -100f 滑入（装开始/结束各一次全列表重滑，V4b-2 实证）。改为只通知
+     * "归属发生变化"的行：[changedVersions] 对称差里的每个版本 → 求当前 index → 单行
+     * notifyItemChanged。归属没变的行（如装 0.1.5-rc.2 时旁边十几行）一像素都不动。
+     *
+     * 边界说明（有意为之）：
+     * - 差集里的版本若已不在当前列表（列表刷新把它过滤掉了，如关掉"预览版"的瞬间），
+     *   `indexOfFirst` 返回 -1 → 跳过，不发多余通知；
+     * - 这里逐版本求 index 而非按位置：列表顺序由 [submit] 的 DiffUtil 维护，位置随时可能变，
+     *   版本号才是稳定标识（与 [submit] 用 version 做 diff key 同一口径）。
+     */
     fun submitInstalling(versions: Set<String>) {
+        val prev = installingVersions
         installingVersions = versions
-        notifyItemRangeChanged(0, itemCount)
+        changedVersions(prev, versions).forEach { version ->
+            val index = items.indexOfFirst { it.version == version }
+            if (index >= 0) notifyItemChanged(index)
+        }
     }
 
     class VH(val binding: ItemDshVersionBinding) : RecyclerView.ViewHolder(binding.root) {
@@ -133,13 +163,20 @@ class DshVersionAdapter(
 
         // 入场动画（FCL 同款：RemoteVersionListAdapter 在 onBindViewHolder 末尾调
         // AnimUtil.playTranslationX，时长随「动画速度」设置走）。
-        // 注意这会带来 FCL 一样的观感：列表整体重绑时（切"显示预览版"/刷新）所有行一起滑入。
-        AnimUtil.playTranslationX(
-            b.root,
-            ThemeEngine.getInstance().getTheme().animationSpeed * 30L,
-            -100f,
-            0f
-        ).start()
+        // ★ BL-121：只在"这一帧新出现"的版本上播（消费制，见 [pendingAnimIds]）——
+        //   切"显示预览版"/刷新时列表整体重绑、全部是新 id，所有行一起滑入（FCL 同款观感保留）；
+        //   而安装开始/结束时那一次单行重绑不再让该行重滑。
+        if (pendingAnimIds.remove(item.version)) {
+            AnimUtil.playTranslationX(
+                b.root,
+                ThemeEngine.getInstance().getTheme().animationSpeed * 30L,
+                -100f,
+                0f
+            ).start()
+        } else {
+            // 复用/重绑的行可能停在上一次动画的中间态，归零一次（照任务区先例 DshInstancesUI :773-774）
+            b.root.translationX = 0f
+        }
     }
 
     /**
@@ -156,3 +193,13 @@ class DshVersionAdapter(
 
     override fun getItemCount(): Int = items.size
 }
+
+/**
+ * 两个安装集合之间"归属发生变化"的版本：对称差（[next]−[prev] 与 [prev]−[next] 的并）。
+ *
+ * BL-121：`submitInstalling` 据此逐版本定位行再发通知 —— 不再全范围 notifyItemRangeChanged。
+ * 写成顶层纯函数（先例：DshInstanceAdapter.kt 顶部的 `isRowBusy`/`computeNewIds`，
+ * 见其注释）：无类初始化负担，JVM 单测可直接调。
+ */
+fun changedVersions(prev: Set<String>, next: Set<String>): Set<String> =
+    (prev + next) - (prev intersect next)

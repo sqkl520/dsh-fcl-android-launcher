@@ -58,4 +58,30 @@ object DshUiText {
     @JvmStatic
     fun getString(resId: Int, fallback: String, vararg args: Any): String =
         contextOrNull()?.getString(resId, *args) ?: fallback
+
+    /**
+     * 把**任意 base Context** 套上启动器语言设置，返回按用户所选语言取词的 Context。
+     *
+     * ## 为什么要有这个入口（BL-107）
+     * [context] / [contextOrNull] 是"**自己去拿**"：前台 Activity 优先、拿不到退回 Application。
+     * 而 core 层有一批**已经持有 applicationContext** 的长驻链路（`DshRuntime` / `DshInstances` /
+     * `DshRuntimeService`），它们的取词缺的不是"去拿 Activity"，而是"把手里这个 base 变对"：
+     * ```
+     * val ui = DshUiText.wrap(appContext ?: return)
+     * ui.getString(R.string.dsh_reason_exited_early, code)
+     * ```
+     *
+     * ## 实现
+     * 直接复用 [LocaleUtils.setLanguage] —— 与 `FCLActivity.attachBaseContext` 完全同一条链
+     * （读 `launcher.lang` → 旧下标归一 → `createConfigurationContext`），**不另造 wrapper、
+     * 不复制第二份语言判定**（两处判定必然漂移）。`setLanguage` 只读偏好不写盘；
+     * `createConfigurationContext` 只解析一份资源表，无 IO。
+     *
+     * ⚠️ 与 [contextOrNull] 一样**不要缓存返回值**：用户可在 App 存活期间切语言。
+     *
+     * ⚠️ 只在取"给用户看的字符串"时用。取路径、比对标识、读配置这些**不涉及语言**的场合，
+     * 继续用调用方原本的 Context —— 别为了统一而统一（同上文告诫）。
+     */
+    @JvmStatic
+    fun wrap(base: Context): Context = LocaleUtils.setLanguage(base)
 }

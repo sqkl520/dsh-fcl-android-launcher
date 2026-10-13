@@ -15,6 +15,7 @@ import com.dsh.core.DshRuntime
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshLogsBinding
 import com.mio.dialog.ItemSelectionDialog
+import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import kotlinx.coroutines.launch
 
@@ -107,6 +108,41 @@ class DshLogsUI(
     private var filter: Filter = Filter.ALL
 
     /**
+     * 上一帧"过滤后"的行数（[render] 每次渲染后更新；`-1` = 还没渲染过第一帧）。
+     *
+     * BL-114：补偿的**回落口径**输入（锚定失败时用，见纯函数 [scrollCompensation]）。
+     * 为什么是"过滤后"而不是原始行数：裁剪发生在过滤之后（`filtered.takeLast(maxLines)`），
+     * 只有过滤后的行会进入正文、参与像素位移；原始行里被筛掉的部分与视觉无关。
+     */
+    private var lastFilteredCount = -1
+
+    /**
+     * 上一帧展示窗口（`shown`）首行的**引用** —— BL-114 位移补偿的首选锚。
+     *
+     * 为什么用引用而不是下标/行号：总线里每行 String 是独立对象、过滤与裁剪只搬运引用，
+     * 所以"同一个对象"就是"同一行日志"的精确身份；换行/折行都不影响它。锚在旧窗口里
+     * 恒为位置 0（`takeLast` 的起点），在新列表里用 `===` 找到它的新位置即知"窗口上移了几行"。
+     *
+     * ⚠️ 持有一个 String 的强引用无内存风险：它本来就被总线的环形缓冲（≤2000 行）持有。
+     */
+    private var lastShownFirst: String? = null
+
+    /** BL-114：lineHeight 取 0 时只报一次英文日志（见 [render] 的补偿分支），避免每帧刷屏 */
+    private var scrollCompensationWarned = false
+
+    /** BL-114：待执行的补偿位移（px，负=上移）。同帧窗口内多次 render 会在 pre-draw 前累加。 */
+    private var pendingCompensationPx = 0
+
+    /** BL-114：补偿的一次性预绘制监听（与 [pinPreDrawListener] 同构，生命周期同管） */
+    private var compensationListener: ViewTreeObserver.OnPreDrawListener? = null
+
+    /** BL-113：本次钉底请求里预绘制回调已执行的次数（[pinToBottomAfterLayout] 清零；上限 [MAX_PIN_ATTEMPTS]） */
+    private var pinAttempts = 0
+
+    /** BL-113：本次钉底请求是否带"确认针"（「回到底部」的 fling(0) 收尾可能落在钉底帧的绘制里，需下一帧再确认一次） */
+    private var pinConfirmPending = false
+
+    /**
      * 5 个分级色，在 [onCreate] 里解析一次，并在**主题刷新时重新解析**。
      *
      * 为什么要缓存 + 重注册，而不是每次渲染现取：`render()` 里每一行都要判一次级别，
@@ -171,10 +207,21 @@ class DshLogsUI(
         }
 
         binding.btnClear.setOnClickListener {
-            // 清哪个范围要跟视角一致：实例页里点"清空"只该清掉这个实例的日志，
-            // 顺手把全局也清了会让人以为"别的东西的日志也丢了"（反之亦然）。
-            if (instanceId == null) DshRuntime.clearLogs() else DshLogBus.clearFor(instanceId)
-            toast(context.getString(R.string.dsh_logs_cleared))
+            // BL-078：清空是**破坏性**动作（本会话的排障上下文就此消失，且无撤销），
+            // 与「删除实例」同级 —— 先确认再清。这是本页三个图标里唯一造成不可逆损失的操作。
+            FCLAlertDialog.Builder(context)
+                .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                .setTitle(context.getString(R.string.dsh_action_clear))
+                .setMessage(context.getString(R.string.dsh_logs_clear_confirm))
+                .setPositiveButton(context.getString(R.string.dialog_positive)) {
+                    // 清哪个范围要跟视角一致：实例页里点"清空"只该清掉这个实例的日志，
+                    // 顺手把全局也清了会让人以为"别的东西的日志也丢了"（反之亦然）。
+                    if (instanceId == null) DshRuntime.clearLogs() else DshLogBus.clearFor(instanceId)
+                    toast(context.getString(R.string.dsh_logs_cleared))
+                }
+                .setNegativeButton(context.getString(R.string.dialog_negative), null)
+                .create()
+                .show()
         }
         binding.btnCopy.setOnClickListener { copyAll() }
         binding.btnFilter.setOnClickListener { pickFilter() }
@@ -182,7 +229,23 @@ class DshLogsUI(
             // 用户主动动作：**无条件**钉到底 —— 刻意不受「自动滚动」开关约束（理由见 [render]）。
             // 走"布局落定后再钉"而不是 `post { fullScroll }`：后者与"新文本测量完成"没有先后关系，
             // 按旧高度算出的位置随后会被布局 clamp 一次 —— 观感就是先跳一下再落位。
-            pinToBottomAfterLayout()
+            //
+            // ★ BL-113：只发静态 `scrollTo` 会被**进行中的惯性滚动（fling）夺回** ——
+            //    按钮在滚动区之外（xml 里与 log_scroll 同级），点它不会向滚动区送 DOWN/UP，
+            //    fling 的余速继续按它自己的 spline 推动 scrollY；一次性静态 scrollTo 只在
+            //    下一帧短暂落底，随即被余速盖走（静止时点击才有效，所以症状是"有时无效"）。
+            //    先调 `fling(0)` 用**零速度**接管滚动器：接管会替换 Scroller 的动画状态，
+            //    旧惯性就此终止（静止点击=无位移的接管）。注意零速接管自身可能在**接管帧的
+            //    draw** 里做一次"收尾写"（把位置写回接管时刻的 scrollY）——它可能恰落在本次
+            //    钉底那一针之后；这是 [attachPinListener] 里"确认帧"存在的原因，两者配合才闭环。
+            //    （为什么不选 `smoothScrollBy(0,0)` 兜底：它走 250ms 的零距动画，会在动画存续的
+            //    每一帧把位置**反复**写回调用时刻的值，与钉底正面冲突，比"至多一次收尾写"糟得多。）
+            //    confirmAfterFling=true 让钉底排一根"确认针"（见 [pinToBottomAfterLayout]）——
+            //    零速接管的收尾写一旦晚于首针，确认针会把它盖回底部；收尾只有一次，不会连环夺回。
+            //    先作废可能已排队的裁剪补偿：它与"钉到底"方向相反，留着只会同帧先补后钉白做。
+            cancelPendingCompensation()
+            runCatching { binding.logScroll.fling(0) }
+            pinToBottomAfterLayout(confirmAfterFling = true)
         }
 
         // 向上翻看时显示「回到底部」，贴底时隐藏。
@@ -280,7 +343,11 @@ class DshLogsUI(
 
     private fun render(forceScroll: Boolean = false) {
         val atBottom = !binding.logScroll.canScrollVertically(1)
-        val filtered = lines.filter(::matches)
+        // K27 部分缓解（早退，**不改变语义**）：Filter.ALL 下 matches() 恒真，
+        // `lines.filter(::matches)` 只是白白复制一份 ≤2000 元素的列表（每渲染一次一份）。
+        // 直接复用快照里的列表 —— Snapshot 发布后不再被修改（flush 里传入的是防御性副本），
+        // filtered 在本函数内只读，共享安全。
+        val filtered = if (filter == Filter.ALL) lines else lines.filter(::matches)
         val shown = if (filtered.size > maxLines) filtered.takeLast(maxLines) else filtered
 
         val sb = SpannableStringBuilder()
@@ -292,7 +359,14 @@ class DshLogsUI(
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
             )
             // `[tag]` 前缀用另一种颜色，便于区分来源（setup / start-dsh / bootstrap / proot…）
-            val tag = TAG_RE.find(line)
+            // K27 部分缓解（早退，**严格不改变语义**）：TAG_RE 以 `^` 锚定且未开 MULTILINE，
+            // 只能在位置 0 匹配 —— 行首不是 `[` 时 find() 必然返回 null。先做一次
+            // `startsWith("[")` 的字符比较，跳过绝大多数行（本页每行都带 `HH:mm:ss  ` 时间戳
+            // 前缀，行首为 `[` 的占比很小）上的一次正则引擎调度。
+            // ⚠️ 级别三正则的完整降本（级别在总线入库时预计算）会改 DshLogBus 的快照结构，
+            //    是批 C 的 K27 重构，不在本波 —— 本波只做上面这类"免费"的早退（另见 render
+            //    首行 Filter.ALL 的列表复用），收益估计见报告 K27 节。
+            val tag = if (line.startsWith("[")) TAG_RE.find(line) else null
             if (tag != null && tag.range.first == 0) {
                 sb.setSpan(
                     ForegroundColorSpan(levelColors.tag), start, start + tag.value.length,
@@ -302,6 +376,83 @@ class DshLogsUI(
             if (i != shown.lastIndex) sb.append('\n')
         }
         binding.logText.text = sb
+
+        // ── BL-114：裁剪位移补偿 ──────────────────────────────────────────────
+        // 长会话里展示窗口只含"过滤后"的末尾（`filtered.takeLast(maxLines)`）——每来一批新行，
+        // 窗口顶部要么被 takeLast 裁掉、要么被总线环形缓冲挤掉，剩余内容在视口里整体**上移**
+        // "移出的行数 × 行高"，而 scrollY 停在旧值不动（症状：读历史"被传送一段距离"）。
+        // 补偿 = 在 setText 触发的布局落定后 `scrollBy(0, -k×行高)`，把同一段文字钉回视口里的
+        // 同一像素位置（视口锚定）。
+        //
+        // k 怎么数（关键，两档；数学本体都是文件末尾的 public 纯函数，单测钉住）：
+        // ① 锚定法（首选，[scrollCompensationAnchored]）：记上帧展示窗口首行的**引用**
+        //    （[lastShownFirst]）——总线里每行 String 唯一、过滤/裁剪只搬运引用，所以身份比较
+        //    （`===`）就能在新 filtered 里定位它。锚在旧窗口里位置恒为 0；窗口起点
+        //    （trimmedAway = takeLast 裁掉的量）比锚的新位置大多少行，内容就上移了多少行。
+        // ② 计数法回落（[scrollCompensation]）：锚被挤出总线环形缓冲时（一帧内输出突发把
+        //    整段挤掉；锚定法找不到就落到这里），按"两帧窗口起点的差"估算。此时可能**低估**
+        //    （总线已达 2000 行上限后就地挤头、过滤后行数不变），宁少补勿坏补。
+        //    ⚠️ 只靠计数法会漏掉"总线已达上限"的稳态（行数不变、内容照样整体上移）——
+        //    这正是锚定法必须存在的原因。
+        //
+        // 触发条件（与"要不要跟随"共用同一判据，避免出现第二份策略）：
+        // · 本次会 pin（forceScroll / 开关开 / 贴底）时**不做** —— pin 落下后位置本来就对，
+        //   补偿只会与它打架（且此刻会把上一帧可能排队的补偿一并作废，见下）；
+        // · 不 pin 时才补偿（另有"上次 render 的 pin 还挂着"的小守卫，见下）。
+        // 时序：scrollBy 必须发生在"新文本测量/布局完成"之后，否则按旧高度 clamp 会夹错。
+        // 因此不放裸 `post`（post 与布局完成没有先后关系 —— 与 [pinToBottomAfterLayout]
+        // 顶部注释同一条理由），而是挂一次性 OnPreDraw 监听：回调时布局已落定
+        // （ViewRootImpl 的 测量 → 布局 → dispatchOnPreDraw 顺序保证）。
+        // 行高：`logText.lineHeight`（TextView 的 public API，含 lineSpacingExtra）；
+        // ≤0（控件还没被测量过）时跳过并只报一次英文日志 —— 不猜行高。
+        val pinned = forceScroll || binding.switchAutoScroll.isChecked || atBottom
+        if (pinned) {
+            // pin 覆盖一切：上一帧排队的补偿与"钉到底"语义相反，作废之（见 [compensateAfterLayout]）
+            cancelPendingCompensation()
+        } else {
+            val lineHeight = binding.logText.lineHeight
+            val anchor = lastShownFirst
+            var anchorIndex = -1
+            if (anchor != null) {
+                for (idx in filtered.indices) {
+                    if (filtered[idx] === anchor) { anchorIndex = idx; break }
+                }
+            }
+            val dy = when {
+                // 首帧：没有"上一帧位置"可锚定，不猜
+                anchor == null -> 0
+                anchorIndex >= 0 -> scrollCompensationAnchored(anchorIndex, filtered.size, maxLines, lineHeight)
+                else -> scrollCompensation(lastFilteredCount, filtered.size, maxLines, lineHeight)
+            }
+            // 守卫：上一次 render 决定的 pin 可能仍挂在预绘制队列里（同帧窗口内状态又变了才会
+            // 出现）。pin 覆盖一切 —— 两个监听若同时挂着，回调之间没有顺序保证，补偿可能加在
+            // 钉底之上把位置抬离底部。此时放弃这一帧补偿（钉到底已是正确答案，视口锚定的
+            // 前提"用户不在底部"也不再成立）。
+            if (dy != 0 && pinPreDrawListener == null) {
+                // 同帧窗口内多次 render 时累加：监听一次、合并补一次（布局只认最终内容高度）
+                pendingCompensationPx += dy
+                compensateAfterLayout()
+            }
+            // 行高取不到而确实存在位移时留一行英文日志可查（只报一次防刷屏）。
+            // 只看冷路径（lineHeight≤0 的帧）：这里用 rows 口径纯函数复算"本应补偿多少行"。
+            if (lineHeight <= 0 && !scrollCompensationWarned) {
+                val rows = when {
+                    anchor == null -> 0
+                    anchorIndex >= 0 -> scrollShiftRowsAnchored(anchorIndex, filtered.size, maxLines)
+                    else -> scrollShiftRows(lastFilteredCount, filtered.size, maxLines)
+                }
+                if (rows > 0) {
+                    scrollCompensationWarned = true
+                    DshLogBus.append(
+                        "[logs] trim compensation skipped: lineHeight=0 (view not measured yet)"
+                    )
+                }
+            }
+        }
+        // ⚠️ 两个跟踪量在 pinned 与否都要更新：跳过补偿的帧若不同步基准，下一帧的对账
+        //    会把"钉底那一帧的位移"错记到后面。
+        lastFilteredCount = filtered.size
+        lastShownFirst = shown.firstOrNull()
 
         val hidden = lines.size - filtered.size
         val truncated = filtered.size - shown.size
@@ -331,7 +482,7 @@ class DshLogsUI(
         //    同一段"要不要跟随"的判断里，两个判据必须量的是**同一个时刻**的内容。
         // ⚠️ 这里刻意**不**用 `fullScroll(FOCUS_DOWN)`：它按调用时刻的旧高度算完 scrollY，
         //    紧接着的布局再把它 clamp 一次，于是先跳一下才落位。改成"布局落定后再钉"，一次到位。
-        if (forceScroll || binding.switchAutoScroll.isChecked || atBottom) {
+        if (pinned) {
             pinToBottomAfterLayout()
         }
     }
@@ -347,14 +498,39 @@ class DshLogsUI(
      * **测量 → 布局 → `dispatchOnPreDraw()` → 绘制**，所以回调触发时新内容的真实高度已经确定
      * （`logText.bottom` 就是它），一次就能滚到正确位置。
      *
-     * ⚠️ **一次性**：回调里第一件事就是注销自己。理由不是省事 —— 常驻的话它会在**用户拖拽的
-     *    每一帧**都把视图拉回底部，手根本拖不动；而"要不要继续跟随"这件事已经在 [render] 里
-     *    按日志流（~5Hz）判断过了，比逐帧判断更合适。
+     * ⚠️ **有界的一次性**：回调里第一件事就是注销自己。理由不是省事 —— 常驻的话它会在**用户
+     *    拖拽的每一帧**都把视图拉回底部，手根本拖不动；而"要不要继续跟随"这件事已经在 [render]
+     *    里按日志流（~5Hz）判断过了，比逐帧判断更合适。BL-113 的重试/确认（见下）也遵守
+     *    [MAX_PIN_ATTEMPTS] 硬上限 —— "有界的一次性"，不是常驻。
      * ⚠️ 本方法只负责"滚到底"，**不做任何"该不该跟随"的判断**：那个判断只在 [render] 一处，
      *    否则第二次实现会漂移成"某些路径偷偷跟随"。
+     *
+     * ★ BL-113：一次钉底请求最多执行 [MAX_PIN_ATTEMPTS]（2）次预绘制钉，两种续针理由：
+     *   1. **同帧复查**：钉完后 `canScrollVertically(1)` 仍为真 = 布局在预绘制里又变化 /
+     *      同帧内容二次增长 —— 立即再挂一针，下一帧再钉；
+     *   2. **确认针**（只在对 [confirmAfterFling] = true 的请求启用）：下一帧无条件再钉一次。
+     *      存在的理由：点击「回到底部」时发的 `fling(0)` 用零速接管滚动器，其"收尾"可能落在
+     *      **本帧的绘制阶段**（预绘制之后），把 scrollY 写回接管时刻 —— 同帧复查看不见它，
+     *      必须下一帧再确认。收尾是一次性的（写完即 finished），确认针之后不会再被夺回。
      */
-    private fun pinToBottomAfterLayout() {
-        if (pinPreDrawListener != null) return
+    private fun pinToBottomAfterLayout(confirmAfterFling: Boolean = false) {
+        if (pinPreDrawListener != null) {
+            // 已有待发钉底：把它升级为"带确认针"即可（针已排好，不重复排）
+            pinConfirmPending = pinConfirmPending || confirmAfterFling
+            return
+        }
+        pinAttempts = 0
+        pinConfirmPending = confirmAfterFling
+        attachPinListener()
+    }
+
+    /**
+     * 挂上钉底监听（[pinToBottomAfterLayout] 的首发与续针共用）。预绘制回调里：
+     * 1) 先摘自己；2) `scrollTo` 钉底；3) 按"同帧复查 + 确认针"两个理由决定是否续挂
+     *    （续挂受 [MAX_PIN_ATTEMPTS] 约束，见方法注释）。
+     */
+    private fun attachPinListener() {
+        pinAttempts++
         // 每次现取 viewTreeObserver：它在视图 detach/attach 之间会被替换，
         // 缓存下来的那个旧对象上调用 remove 是无效的（监听永远摘不掉）。
         val observer = binding.logScroll.viewTreeObserver
@@ -367,6 +543,18 @@ class DshLogsUI(
                 // 这里给的是内容的完整高度；即使传大了也不用担心 —— `ScrollView.scrollTo`
                 // 内部会按 `childHeight - viewportHeight` 夹紧到最大值。
                 binding.logScroll.scrollTo(0, binding.logText.bottom)
+                val confirm = pinConfirmPending
+                pinConfirmPending = false
+                // 同帧复查：仍可下滚 = 没钉到底；或本请求带确认针（fling 收尾可能在本帧
+                // 绘制里写回）—— 两种都再钉一针。到上限即止（防常驻，理由见方法注释）。
+                // ★ R14-V2C N1：确认针**不计预算** —— 同帧复查若先把 MAX_PIN_ATTEMPTS
+                //   耗尽，按钮承诺的"收尾确认"会被静默丢弃（逻辑不严）。确认针最多补一次
+                //   （pinConfirmPending 一次性），单独给它一次续针机会。
+                if (binding.logScroll.canScrollVertically(1)) {
+                    if (pinAttempts < MAX_PIN_ATTEMPTS) attachPinListener()
+                } else if (confirm) {
+                    attachPinListener()
+                }
                 return true
             }
         }
@@ -382,6 +570,42 @@ class DshLogsUI(
         // 直接 remove 是安全的（不存在则什么都不做）；仍然包一层兜底，避免极端时序下抛异常
         // 把一次普通的日志刷新变成崩溃。
         runCatching { binding.logScroll.viewTreeObserver.removeOnPreDrawListener(listener) }
+    }
+
+    /**
+     * BL-114：把 [pendingCompensationPx] 里的补偿位移在**布局落定后**一次性应用（预绘制时
+     * `scrollBy`），随后清零。挂监听与摘监听和钉底同构（见 [removePinListener] 的时序说明）。
+     * 幂等：已有待发监听时不重复挂（新累积的量由已挂监听统一消费）。
+     */
+    private fun compensateAfterLayout() {
+        if (compensationListener != null) return
+        val observer = binding.logScroll.viewTreeObserver
+        val listener = object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                // 顺序：先摘监听（只动监听引用），后取/清零待发量 —— 反过来的话
+                // 摘监听顺带清零会把这次要应用的位移抹掉（值读出来永远是 0）。
+                removeCompensationListener()
+                val dy = pendingCompensationPx
+                pendingCompensationPx = 0
+                if (dy != 0) binding.logScroll.scrollBy(0, dy)
+                return true
+            }
+        }
+        compensationListener = listener
+        observer.addOnPreDrawListener(listener)
+    }
+
+    /** 注销待执行的补偿监听（幂等；**不动** [pendingCompensationPx] —— 由调用方决定清除语义） */
+    private fun removeCompensationListener() {
+        val listener = compensationListener ?: return
+        compensationListener = null
+        runCatching { binding.logScroll.viewTreeObserver.removeOnPreDrawListener(listener) }
+    }
+
+    /** 作废一切未应用的补偿（摘监听 + 清零）—— pin 到来时用，避免两个方向的滚动同帧打架 */
+    private fun cancelPendingCompensation() {
+        removeCompensationListener()
+        pendingCompensationPx = 0
     }
 
     private fun copyAll() {
@@ -405,16 +629,106 @@ class DshLogsUI(
         // 正文的焦点监听由本页注册；页面在 ViewPager2 里会被回收重建，这里反向解掉，
         // 免得被回收的页面仍挂在还活着的视图上。预绘制监听同理（见 [removePinListener] 的时序说明）。
         binding.logText.setOnFocusChangeListener(null)
-        // 页面可能在"请求钉底"与"这一帧预绘制"之间被回收，落到旧 ViewTreeObserver 上的监听要一起摘掉
+        // 页面可能在"请求钉底"与"这一帧预绘制"之间被回收，落到旧 ViewTreeObserver 上的监听要一起摘掉。
+        // BL-114 的补偿监听同理；顺带丢弃未应用的补偿量（页面都回收了，没有"视口锚定"可言）。
         removePinListener()
+        cancelPendingCompensation()
         super.onDestroy()
     }
 
     companion object {
+        /**
+         * BL-113：一次钉底请求最多执行几次预绘制钉底（首发 1 次 + 复查未到底再补 1 次）。
+         * 有硬上限的理由：`canScrollVertically(1)` 在极端内容/时序下可能一直为真，
+         * 无上限重试会把"一次性监听"悄悄变成常驻监听 —— 那就回到了"每帧拽回底部、手拖不动"的老路。
+         */
+        private const val MAX_PIN_ATTEMPTS = 2
+
         private val ERROR_RE =
             Regex("""error|failed|failure|fatal|exception|denied|错误|失败|异常|拒绝|不可用""", RegexOption.IGNORE_CASE)
         private val WARN_RE = Regex("""warn|警告|注意""", RegexOption.IGNORE_CASE)
         private val OK_RE = Regex("""\bok\b|ready|done|success|passed|通过|完成|就绪""", RegexOption.IGNORE_CASE)
         private val TAG_RE = Regex("""^\[[^\]]+\]""")
     }
+}
+
+/**
+ * BL-114 纯函数：计数法补偿量（px）—— 展示窗口起点从 [oldCount] 到 [newCount] 的位移。
+ *
+ * 数学推导 —— `render()` 里 `filtered.takeLast(maxLines)` 只展示"过滤后"的末尾窗口：
+ * ```
+ * trimmedAway(n) = max(0, n - maxLines)         // n 行过滤结果里被从顶部裁掉的行数
+ * k = trimmedAway(newCount) - trimmedAway(oldCount)   // 两帧之间展示窗口起点的位移行数
+ * dy = -k * lineHeight                          // 内容整体上移 k 行 ⇒ scrollY 同步上移补偿
+ * ```
+ * 例：maxLines=1500，上一帧 1500 行（无裁剪），这一帧 1520 行（裁 20）——
+ * 展示窗口起点从第 1 行（1-based）移到第 21 行：视口里同一段文字整体上移 20×行高，
+ * scrollY 不减 20×行高的话用户读到哪就被推走多远（症状：读历史"传送一段距离"）。
+ *
+ * ⚠️ 语义边界：这条路只覆盖"过滤后行数变化"引起的位移；总线已达环形上限（2000 行）
+ *    后就地挤头的稳态靠**锚定法**（[scrollCompensationAnchored]），本函数会低估 → 0。
+ *    这是刻意的降级（宁少补勿坏补），见 render() 的注释。
+ *
+ * 边界（单测钉住）：
+ * - 不裁剪（两帧都 ≤ maxLines）→ 0；
+ * - 首帧（[oldCount] < 0 = 还没渲染过）→ 0（没有"上一帧位置"可锚定，不猜）；
+ * - [lineHeight] ≤ 0（控件未测量）→ 0（宁可不动，不拿错的行高乱滚）；
+ * - 内容被清空 / 缩短（k ≤ 0）→ 0（不向上追溯，只补偿"从顶部裁掉"的那部分）。
+ *
+ * ★ 必须 public：单测在独立模块编译（见任务硬性规则 5）。
+ */
+fun scrollCompensation(oldCount: Int, newCount: Int, maxLines: Int, lineHeight: Int): Int {
+    val k = scrollShiftRows(oldCount, newCount, maxLines)
+    return if (lineHeight > 0 && k > 0) -k * lineHeight else 0
+}
+
+/**
+ * BL-114 纯函数：计数法"本帧内容上移了几行"（≥0）。与 [scrollCompensation] 同源
+ * （后者只是乘上行高并取负）—— 单测同时钉住两个口径，防止漂移。
+ */
+fun scrollShiftRows(oldCount: Int, newCount: Int, maxLines: Int): Int {
+    if (oldCount < 0 || maxLines <= 0) return 0
+    return (scrollTrimmedAway(newCount, maxLines) - scrollTrimmedAway(oldCount, maxLines))
+        .coerceAtLeast(0)
+}
+
+/**
+ * BL-114 纯函数：**锚定法**补偿量（px）—— 上一帧窗口首行（锚）在新 `filtered` 里的下标为
+ * [anchorIndex]，本帧窗口起点为 trimmedAway(newFilteredCount)。
+ *
+ * 几何：锚在旧窗口里位于位置 0（takeLast 的起点）。本帧窗口起点右移 (trimmedAway 减锚的新
+ * 下标) 行 ⇒ 锚（以及它下方的所有内容）在视口里上移同样多的行；scrollY 需同步减掉
+ * `行数 × [lineHeight]` 以保持锚的屏幕位置不变。
+ *
+ * 覆盖计数法够不着的场景：总线已达环形上限后就地挤头 —— 过滤后行数两帧相同（计数法差为 0），
+ * 但锚的绝对下标照样前移，锚定法给出的行数依然准确。
+ *
+ * 边界（单测钉住）：锚不在新列表（[anchorIndex] < 0）/ 行高≤0 / maxLines≤0 → 0；
+ * 锚未被移出窗口（下标 ≥ 窗口起点）→ 0（内容没有"被推走"，不动）。
+ *
+ * ★ 必须 public：单测在独立模块编译（见任务硬性规则 5）。
+ */
+fun scrollCompensationAnchored(
+    anchorIndex: Int,
+    newFilteredCount: Int,
+    maxLines: Int,
+    lineHeight: Int
+): Int {
+    val rows = scrollShiftRowsAnchored(anchorIndex, newFilteredCount, maxLines)
+    return if (lineHeight > 0) -rows * lineHeight else 0
+}
+
+/** BL-114 纯函数：锚定法"本帧内容上移了几行"（≥0）。与 [scrollCompensationAnchored] 同源。 */
+fun scrollShiftRowsAnchored(anchorIndex: Int, newFilteredCount: Int, maxLines: Int): Int {
+    if (anchorIndex < 0 || maxLines <= 0) return 0
+    return (scrollTrimmedAway(newFilteredCount, maxLines) - anchorIndex).coerceAtLeast(0)
+}
+
+/**
+ * BL-114 纯函数：`takeLast(maxLines)` 从顶部裁掉的行数（≥0）。
+ * 与上层各函数共用同一口径本体 —— 单测同时钉住，防止口径漂移。
+ */
+fun scrollTrimmedAway(count: Int, maxLines: Int): Int {
+    if (maxLines <= 0) return 0
+    return if (count > maxLines) count - maxLines else 0
 }

@@ -23,6 +23,21 @@
 # 失败一律 `[setup] FAILED reason=...` 并以非 0 退出（启动器据此判定 BROKEN）。
 set -eu
 
+# Interpreter-wide EXIT trap (BL-108): `set -e` aborts on the first failing command
+# (npm init / npm install / apt-get ...) without printing any FAILED line, so the launcher
+# only ever saw a bare non-zero exit and fell back to its generic "install failed" text.
+# This trap guarantees every abnormal exit still carries the machine-readable reason line
+# promised in the header comment. `$?` is read first thing, before anything else can clobber it.
+# No other trap exists in this script (verified: only `trap` mentions are the stage-key docs);
+# the trap is thus registered here once and never overwritten.
+_on_exit() {
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[setup] FAILED reason=unexpected-exit code=$rc" >&2
+  fi
+}
+trap _on_exit EXIT
+
 # 预装 Node 进 PATH（rootfs 内 node/npm 在 /opt/node22/bin）
 PATH="/opt/node22/bin:$PATH"
 export PATH

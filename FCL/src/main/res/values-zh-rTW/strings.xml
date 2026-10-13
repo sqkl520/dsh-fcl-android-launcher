@@ -8,6 +8,7 @@
          values-zh/strings.xml（簡體）、values-zh-rTW/strings.xml（繁體）。 -->
     <string name="dsh_action_clear">清空</string>
         <string name="dsh_action_close">關閉</string>
+        <string name="dsh_back_again_to_exit">再按一次返回鍵結束</string>
         <string name="dsh_action_configure">前往設定</string>
         <string name="dsh_action_copy">複製</string>
         <string name="dsh_action_delete">刪除</string>
@@ -73,12 +74,13 @@
         <string name="dsh_instance_status_row">狀態</string>
         <!-- 詳情頁是在實例已消失（在別處被刪）時也可能被打開的頁面，需要一句墊底文案 -->
         <string name="dsh_instance_detail_empty">該實例已不存在</string>
-        <string name="dsh_instances_empty">還沒有實例。\n點選"下載"安裝一個 dsh 版本。</string>
+        <string name="dsh_instances_empty">還沒有實例。\n點選左側「版本」標籤安裝一個 dsh 版本。</string>
         <string name="dsh_instances_title">DeepSeek Harness</string>
         <string name="dsh_key_first_run_title">填寫 API Key</string>
         <string name="dsh_key_first_run_message">dsh 需要一個 DeepSeek API Key 才能對話。請點左下角的設定圖示，在「模型」裡填入。Key 由 dsh 自己儲存和管理，啟動器不再經手。</string>
         <string name="dsh_logs_auto_scroll">自動捲動</string>
         <string name="dsh_logs_cleared">日誌已清空</string>
+        <string name="dsh_logs_clear_confirm">確定清空目前檢視的全部日誌？此操作無法復原。</string>
         <string name="dsh_logs_copied">日誌已複製到剪貼簿</string>
         <string name="dsh_logs_empty">暫無日誌</string>
         <string name="dsh_logs_path">日誌檔案：%1$s</string>
@@ -269,6 +271,7 @@
     <string name="dsh_task_install_done">安裝完成</string>
     <string name="dsh_setup_percent">%1$d%%</string>
     <string name="dsh_setup_restart_hint">將重新解壓縮執行環境（不會影響實例與 API Key）。</string>
+    <string name="dsh_setup_restart_busy">執行環境正在準備中，請稍候</string>
     <string name="dsh_setup_steps_header">準備項目</string>
     <string name="dsh_settings_row_name">實例名稱</string>
     <string name="dsh_settings_row_port">連接埠</string>
@@ -324,4 +327,11 @@
     <string name="dsh_webview_compat_message">目前的 WebView 過舊，dsh 介面會顯示異常（需要 %1$d 以上版本）。您可以仍要繼續，或改用外部瀏覽器開啟本頁。</string>
     <string name="dsh_webview_compat_continue">仍要繼續</string>
     <string name="dsh_webview_compat_external">用外部瀏覽器開啟</string>
+    <string name="dsh_webview_compat_upgrade_hint">升級方法：在應用商店將「Android System WebView」（部分裝置為 Chrome）更新到最新版，然後重新開啟本頁。</string>
+    <string name="dsh_webview_render_gone_repeat">頁面多次崩潰，已停止自動恢復。點「重試」重新載入。</string>
+    <string name="dsh_edit_blank_hint">不能為空</string>
+    <string name="dsh_download_warning_stale">重新整理失敗，目前顯示的是快取資料</string>
+    <string name="dsh_download_empty_prerelease">沒有可顯示的穩定版。開啟「顯示預覽版」檢視全部版本。</string>
+    <string name="dsh_download_empty_all">沒有可顯示的版本，點右上角重新整理再試。</string>
+    <string name="open_link_failed">未能自動跳轉至瀏覽器，已自動複製連結，請手動開啟瀏覽器貼上進入。</string>
 </resources>

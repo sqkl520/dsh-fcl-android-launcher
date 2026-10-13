@@ -101,9 +101,9 @@ class DshInstancesUI(
      * 把某实例的详情压进本页的临时页栈 —— 外壳的 `openInstanceDetail` 调它
      * （见 [DshShellHost.openInstanceDetail]）。
      *
-     * 落点固定为「运行」段：外壳那条入口（实例行的「更多 → 设置」）只带实例 id，
-     * 不带"要看哪一段"的意图，那么落在详情页的第一段是唯一说得通的选择。
-     * 需要指定段落的调用方（实例行的「日志」菜单）用 [showInstanceDetailAt]。
+     * 落点固定为「运行」段：这条入口只带实例 id、不带"要看哪一段"的意图，
+     * 落在详情页的第一段是唯一说得通的选择。需要指定段落的调用方
+     * （实例行的「更多 → 设置 / 日志」菜单）用 [showInstanceDetailAt]。
      */
     fun showInstanceDetail(instanceId: String) {
         showInstanceDetailAt(instanceId, DshInstanceDetailPage.TAB_RUN)
@@ -312,12 +312,21 @@ private class InstanceListPage(
         adapter = DshInstanceAdapter(
             onStart = ::startInstance,
             onStop = { DshRuntime.stop() },
-            // 行的「更多 → 设置」与左滑菜单的「设置」：统一走外壳那条入口
-            // （它先切到「实例」tab 再让那一页把详情压栈，语义是"打开这个实例的详情"）
-            onOpenSettings = { host.openInstanceDetail(it.id) },
+            // 行的「更多 → 设置」：落在详情页的「配置」段（BL-084 —— 菜单写"设置"，
+            // 用户预期看到名字/端口这些配置项；原来固定落「运行」段，与菜单语义矛盾，
+            // 也与 DshInstanceDetailPage 那侧"「设置」菜单 → 配置 tab"的注释对不上）。
+            // 走本页自己的 onOpenDetail（即 showInstanceDetailAt）而不是外壳那条
+            // host.openInstanceDetail：点击只可能发生在**本页可见时**，
+            // 不需要外壳"先切 tab 再压栈"那两步，与下一行「日志」菜单同一条机制。
+            onOpenSettings = { onOpenDetail(it.id, DshInstanceDetailPage.TAB_CONFIG) },
             onOpenLogs = { onOpenDetail(it.id, DshInstanceDetailPage.TAB_LOGS) },
             onReinstall = ::reinstall,
-            onDelete = ::confirmDelete
+            onDelete = ::confirmDelete,
+            // BL-081：NOT_INSTALLED 态主按钮「去安装」→ 切到版本页（与本文件重装确认框
+            // 的「下载」按钮同一调用模式，见下方 :590 附近）。
+            onOpenVersions = { host.switchTab(DshShellHost.TAB_VERSIONS) },
+            // BL-082：整卡可点 → 打开详情页「运行」段（详情已在栈上则切段复用）。
+            onOpenDetail = { id -> onOpenDetail(id, DshInstanceDetailPage.TAB_RUN) }
         )
         binding.instanceList.layoutManager = LinearLayoutManager(context)
         binding.instanceList.adapter = adapter
@@ -547,6 +556,14 @@ private class InstanceListPage(
 
     /** 启动实例。复用 [DshLauncher]（与外壳右面板、实例详情页是**同一份**逻辑与参数） */
     private fun startInstance(inst: DshInstance) {
+        // BL-083：点击瞬间给一行反馈 —— 启动链的第一段（停旧实例，停旧最长 8s）里
+        // 卡片还是"启动"可点、任务区也没有行，用户以为没点中而重复点。任务行等
+        // DshRuntime 置到 Starting 才会出现（那是 stopAndWait **之后**的事），
+        // 这段窗口只有这里能填。用 toast 而不是任务行/卡片视觉：不加新的任务真值
+        // （任务区是 DshTasks 对四个模块状态流的**只读投影**，往里塞 UI 侧任务会多出
+        // 一个会在失败/切页时失配的状态）；toast 是纯旁路，最坏情况只是多冒一句。
+        // 文案复用现有 key，不新增 string。
+        Toast.makeText(context, R.string.dsh_webview_starting, Toast.LENGTH_SHORT).show()
         DshLauncher.startInstance(
             activity = host.activity,
             inst = inst,

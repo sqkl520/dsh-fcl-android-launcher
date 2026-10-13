@@ -48,6 +48,9 @@ class ProotProcessExecutor(
      * @param timeoutMs 超时毫秒；<=0 表示不超时
      * @param tag 任务归属标记（用 instanceId）：[destroyActive] 只杀 tag 匹配的进程，
      *            避免同时装两个实例时"取消 A 把 B 一起杀了"
+     * @param onPidResolved pid 解析成功（>0）后调用**一次**（默认 null = 不回调，行为与旧版完全一致）。
+     *            安装路径（BL-041）用它把刚启动的 proot pid 立刻写成 pid 文件；拿不到 pid（-1）
+     *            不回调 —— 宁可没有文件，也不写假 pid（下次清理会误杀）。
      */
     fun run(
         script: String,
@@ -55,6 +58,7 @@ class ProotProcessExecutor(
         secretEnv: Map<String, String>,
         timeoutMs: Long = 0,
         tag: String? = null,
+        onPidResolved: ((Long) -> Unit)? = null,
         onLine: (String) -> Unit
     ): Int {
         val pre = ProotCommand.preflight(context, rootfsDir, script)
@@ -81,10 +85,24 @@ class ProotProcessExecutor(
             // BL-001：从不往子进程 stdin 写东西，start 后立即关掉写端 —— 否则 FD 泄漏到整个任务生命周期；
             //   且子进程若读 stdin 会看到 EOF 而不是永久阻塞。
             runCatching { p.outputStream.close() }
-            // pid 解析复用 ProotRunner.Handle（反射 → /proc 兜底，真机走 /proc）；拿不到返回 -1。
-            val pid = runCatching { ProotRunner.Handle(p, preExisting).pid() }.getOrDefault(-1L)
+            // pid 解析复用 ProotRunner.Handle（反射 → children 差集 → /proc 全扫，真机走全扫）；
+            // fix2：带上身份标记（argv 里现成的 INSTANCE_DIR=<实例路径> 项），供全扫的
+            // cmdline 身份匹配用；拿不到返回 -1。
+            val identityMarker = ProotRunner.identityMarkerFromArgv(spec.argv)
+            val pid = runCatching {
+                ProotRunner.Handle(p, preExisting, identityMarker).pid()
+            }.getOrDefault(-1L)
             val active = Active(tag, p, pid)
             synchronized(this) { actives += active }
+            // fix2 / BL-041 接口（W1C 用）：pid 解析成功（>0）时向调用方回报一次 —— 安装路径拿它
+            // 立刻写 pid 文件。-1 不回调：宁可没有文件，也不写假 pid（下次清理会误杀）。
+            // 放在登记之后：回调再慢，取消/超时也已能找到这条进程。
+            // 回调异常不许带崩本次运行（与 onLine 回调同一防御原则）；失败留一条英文诊断。
+            if (pid > 0) {
+                runCatching { onPidResolved?.invoke(pid) }.onFailure {
+                    runCatching { onLine("[proot] onPidResolved callback threw; pid=$pid (continuing)") }
+                }
+            }
             // 跨线程可见：看门狗线程写、当前线程读，必须用 Atomic/volatile，否则可能读到旧值把超时误判为正常退出。
             val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
             val watchdog = if (timeoutMs > 0) {
@@ -274,20 +292,36 @@ object ProotRunner {
     /**
      * 列出"当前进程此刻的所有直接子进程 pid"（所有线程的并集）。
      *
-     * 用途：`start()` 之前先拍一张快照，作为 [findChildPidFromProc] 的排除集。
+     * 用途：`start()` 之前先拍一张快照，作为 [findChildPidFromProc] / [Handle] 全扫的排除集。
      * 为什么不直接用"第一个子进程"：启动器可以**同时**有别的子进程 ——
      * 例如正在跑自检的 `runOnce`、或另一个实例的 proot。不排除就会认错进程，
      * 进而写出假 pid，下次清理时误杀无辜（`killBlocking` 的 cmdline 校验是最后一道防线，
      * 但不该指望它兜住"一开始就选错"）。
+     *
+     * fix2 / BL-027：children 文件一路在"内核未开 CONFIG_PROC_CHILDREN"的机型上**全失败**
+     * （真机确诊 `childrenFilesPresent=0`）—— 收出空集时回退 [scanProcChildren] 全表扫描，
+     * 按同一"ppid == 本进程"口径收快照。做成"空集才回退"而非无条件合并：children 文件能读时
+     * 它就是权威口径（与 [Handle] 的第二路径成对使用），两条口径混用会让排除集算错。
+     *
+     * @param myPid 本进程 pid；null = 内部自取（`android.os.Process.myPid()`）。做成参数是为了
+     *              单测能喂假 /proc 目录（测试环境 android.jar 的该方法只是抛异常的桩）。
      */
     @JvmStatic
-    fun snapshotChildPids(procRoot: String = "/proc"): Set<Long> {
+    fun snapshotChildPids(procRoot: String = "/proc", myPid: Int? = null): Set<Long> {
         val selfTask = File(procRoot, "self/task")
-        val tids = selfTask.listFiles()?.mapNotNull { it.name.toLongOrNull() } ?: return emptySet()
+        val tids = runCatching { selfTask.listFiles()?.mapNotNull { it.name.toLongOrNull() } }.getOrNull()
         val out = HashSet<Long>()
-        for (tid in tids) {
-            val text = runCatching { File(selfTask, "$tid/children").readText() }.getOrNull() ?: continue
-            text.split(' ', '\n', '\t').mapNotNullTo(out) { it.trim().toLongOrNull() }
+        if (tids != null) {
+            for (tid in tids) {
+                val text = runCatching { File(selfTask, "$tid/children").readText() }.getOrNull() ?: continue
+                text.split(' ', '\n', '\t').mapNotNullTo(out) { it.trim().toLongOrNull() }
+            }
+        }
+        if (out.isEmpty()) {
+            val self = myPid ?: runCatching { android.os.Process.myPid() }.getOrNull() ?: return out
+            if (self > 0) {
+                runCatching { scanProcChildren(procRoot, self) }.getOrNull()?.forEach { out.add(it.pid) }
+            }
         }
         return out
     }
@@ -302,8 +336,14 @@ object ProotRunner {
      * 真机上那条反射路径**根本不会成功**。
      *
      * 原理：Linux 的 `/proc/<pid>/task/<tid>/children` 是该线程的**直接子进程**列表
-     * （空格分隔，内核 `CONFIG_PROC_CHILDREN` 打开时才有；Android 内核有）。
+     * （空格分隔，内核 `CONFIG_PROC_CHILDREN` 打开时才有；旧注释假设"Android 内核有"已被
+     * R13-V7 真机确诊推翻 —— 该机 children 文件全缺失（`childrenFilesPresent=0`），此法恒空。
+     * 该机型靠 [scanProcChildren] 全表扫描（[Handle.pid] 的第三路径）。）
      * 我们刚 start 的 proot 就是我们进程的子进程 → 与启动前快照求差集即得。
+     *
+     * ⚠️ 本函数**不改**为自动回退全扫（[snapshotChildPids] 有，这没有）：它取的是无身份的
+     * "第一个新子进程"，全扫回退会与 [Handle] 第三路径重复扫描、且把"身份匹配"的职责
+     * 悄悄漏到这里。第三路径在 [Handle.pid] 里，身份匹配由 [selectProotPid] 独占。
      *
      * @param procRoot    `/proc` 根目录。做成参数是为了**能用假目录喂单测**（/proc 没法在测试里造）
      * @param excludePids 启动前已存在的子进程 pid（见 [snapshotChildPids]）
@@ -324,20 +364,146 @@ object ProotRunner {
         return children.firstOrNull { it > 0 && it !in excludePids } ?: -1L
     }
 
+    /**
+     * fix2 / BL-027 方案 A：从一行 `/proc/<pid>/stat` 里解析 ppid。
+     *
+     * stat 的字段布局（proc(5)）：`pid (comm) state ppid pgrp session ...`。
+     * ⚠️ comm 是**进程名**且可能含空格、括号（内核原样输出、不转义）——
+     * 所以不能按第一个空格或第一个 `)` 切分，必须以**最后一个 `)`** 为界：
+     * 其后的字段依次是 state、ppid、…，ppid 即其后**第 2 个**字段。
+     *
+     * @return ppid；行不合式（没有 `)`、`)` 后不足 2 个字段、ppid 非数字）返回 null，
+     *         绝不抛异常 —— 调用方在扫描循环里，一行垃圾不该中断整轮扫描。
+     */
+    @JvmStatic
+    fun parsePpidFromStat(statContent: String): Int? {
+        val close = statContent.lastIndexOf(')')
+        if (close < 0) return null
+        val fields = statContent.substring(close + 1)
+            .split(' ', '\t', '\n').filter { it.isNotEmpty() }
+        return fields.getOrNull(1)?.toIntOrNull()
+    }
+
+    /** 全扫候选项：一条"ppid == 本进程"的直接子进程记录（[cmdline] 为 NUL→空格处理后的 argv 全文）。 */
+    data class Candidate(val pid: Long, val cmdline: String)
+
+    /**
+     * fix2 / BL-027 方案 A：全表扫描 [procRoot] 下的纯数字目录，收集"ppid == [myPid] 的
+     * 直接子进程"候选（附 cmdline，身份匹配用）。
+     *
+     * 为什么要它：真机确诊（R13-V7）该设备内核**没有** children 文件
+     * （`CONFIG_PROC_CHILDREN` 未开，[findChildPidFromProc] 恒空），而反射路径在任意
+     * Android 上结构必然失败（`java.lang.Process` 无 `pid()` 方法）—— 两条老路都死，
+     * 全扫是唯一还活着的路。
+     *
+     * 静默降级（契约）：SELinux 挡目录列举、个别进程的 stat/cmdline 读不到（不同 UID 的
+     * 系统进程是常态）都只是"跳过这一项"，绝不抛异常；整体失败返回空表。
+     * 一次启动只扫 1~2 次（几百个 pid × 两个小文件，毫秒级），不做缓存 —— 调用点本身就是
+     * "解析现场"，缓存反而把新鲜度搞坏。
+     *
+     * @param myPid 本进程 pid（ppid 匹配基准）。调用方传 `android.os.Process.myPid()`；
+     *              做成参数是为了单测能喂假 procRoot + 固定 myPid（测试环境 android.jar 是桩）。
+     */
+    @JvmStatic
+    fun scanProcChildren(procRoot: String = "/proc", myPid: Int): List<Candidate> {
+        if (myPid <= 0) return emptyList()
+        val dirs = runCatching { File(procRoot).listFiles() }.getOrNull() ?: return emptyList()
+        val out = ArrayList<Candidate>()
+        for (dir in dirs) {
+            val pid = dir.name.toLongOrNull() ?: continue
+            if (pid <= 0) continue
+            val stat = runCatching { File(dir, "stat").readText() }.getOrNull() ?: continue
+            if (parsePpidFromStat(stat) != myPid) continue
+            // cmdline = argv 逐项、NUL 分隔；转空格便于子串匹配。读不到（权限）就当空串 ——
+            // 空串不会匹配 proot/标记，等于该项直接出局，不需要单独分支。
+            val cmdline = runCatching { File(dir, "cmdline").readText() }.getOrNull().orEmpty()
+                .split(0.toChar()).joinToString(" ").trim()
+            out.add(Candidate(pid, cmdline))
+        }
+        return out
+    }
+
+    /**
+     * fix2 / BL-027：候选的匹配判据（[selectProotPid] 与诊断计数 [prootMatchCount] 共用同一谓词，
+     * 保证"诊断说有几个匹配"与"选择器会怎么挑"永远一致）。
+     *
+     * 三条判据，缺一不可：
+     * 1. `cmdline` 含 `proot` —— 认的是宿主侧 fork/exec 出来的那条 proot（路径里含 libproot.so）。
+     * 2. `cmdline` 含 [marker]（argv 里现成的 `INSTANCE_DIR=<实例路径>` 项，见
+     *    [identityMarkerFromArgv]）—— **防 pid 复用/认错兄弟进程的核心防线**：pid 号会被内核
+     *    复用，光"ppid==我们 + 名字像 proot"挡不住"自检的 proot / 另一个实例的 proot"；
+     *    INSTANCE_DIR 逐实例唯一（含实例 id）。marker 为空串（自检 probe.sh 的 argv 里没有
+     *    INSTANCE_DIR）时退化为只按第 1 条匹配 —— 仍有排除集兜底。
+     * 3. 不在 [excludePids]（启动前快照）里、也不等于本进程 —— 排除"本来就存在"和"自己"。
+     */
+    private fun isProotMatch(c: Candidate, myPid: Int, marker: String, excludePids: Set<Long>): Boolean =
+        c.pid > 0 && c.pid != myPid.toLong() && c.pid !in excludePids &&
+            c.cmdline.contains("proot") &&
+            (marker.isBlank() || c.cmdline.contains(marker))
+
+    /**
+     * fix2 / BL-027：从全扫候选里选出"我们刚启动的 proot"的 pid；选不出返回 null（调用方折成 -1）。
+     *
+     * 多候选（同标记重复）的设计决策：取 **pid 最大者**。同标记重复只发生在"秒启竞态"
+     * （同实例停后秒启、新旧两条 proot 短暂并存）——Linux 的 pid 分配单调递增（回绕除外），
+     * 刚 start 的那条就是最新、pid 最大；而我们解析的**恰恰是刚 start 的那条**，所以
+     * "取最大"是"取最新"的合理代理。取错时仍有下行防线：写 pid 文件前、发信号前还有
+     * cmdline 身份复核（见 DshRuntime 的 killBlocking 与 BL-040 的复核要求），不盲信一个 pid。
+     */
+    @JvmStatic
+    fun selectProotPid(
+        candidates: List<Candidate>,
+        myPid: Int,
+        marker: String,
+        excludePids: Set<Long>
+    ): Long? = candidates.filter { isProotMatch(it, myPid, marker, excludePids) }
+        .maxByOrNull { it.pid }?.pid
+
+    /** 与 [selectProotPid] 同判据的命中计数 —— 只给失败诊断用（describePidFailure 的全扫字段）。 */
+    @JvmStatic
+    fun prootMatchCount(
+        candidates: List<Candidate>,
+        myPid: Int,
+        marker: String,
+        excludePids: Set<Long>
+    ): Int = candidates.count { isProotMatch(it, myPid, marker, excludePids) }
+
+    /**
+     * fix2 / BL-027：从 proot 的 argv 里取身份标记 —— 现成的 `INSTANCE_DIR=<实例路径>` 项
+     * （[ProotCommand.build] 把 argvEnv 逐项加进 argv；启动（DshRuntime）与安装（DshInstaller）
+     * 两个注入点都带 INSTANCE_DIR）。
+     * 返回**整项**（含 `INSTANCE_DIR=` 前缀）而不是裸路径：前缀让匹配更严（裸路径可能出现在
+     * 别的参数里，整项则不会）。
+     *
+     * @return 找到的项；argv 里没有（如自检 probe.sh 路径）返回空串 —— 全扫退化为只按 proot 名匹配。
+     */
+    @JvmStatic
+    fun identityMarkerFromArgv(argv: List<String>): String =
+        argv.firstOrNull { it.startsWith("INSTANCE_DIR=") } ?: ""
+
     /** 启动后的句柄 */
     class Handle(
         val process: Process,
         /** 启动前的子进程快照 —— `/proc` 兜底要拿它做差集 */
-        private val preExistingChildren: Set<Long> = emptySet()
+        private val preExistingChildren: Set<Long> = emptySet(),
+        /**
+         * fix2 / BL-027 身份标记：argv 里现成的 `INSTANCE_DIR=<实例路径>` 整项
+         * （见 [identityMarkerFromArgv]）。全扫（第三路径）的 cmdline 身份匹配用；
+         * 空串 = 退化为只按 `proot` 名匹配（自检路径）。参数顺序保证既有调用
+         * （`Handle(p, preExisting)`）行为完全不变。
+         */
+        private val identityMarker: String = ""
     ) {
         /**
-         * 进程 pid。**两条路径**：先反射（桌面 JVM 有 `pid()`），失败再走 `/proc` 兜底（真机走这条）。
+         * 进程 pid。**三条路径**：先反射（桌面 JVM 有 `pid()`），失败走 children 差集
+         * （内核开了 CONFIG_PROC_CHILDREN 时可靠），再失败走 `/proc` 全表扫描（真机确诊后
+         * 新增的第三路径，见 [pidViaFullScan]）。
          *
-         * 缓存成功值：pid 不会变，而 `/proc` 兜底要扫 task 目录，不该每次调用都扫。
+         * 缓存成功值：pid 不会变，而兜底路径要扫 /proc，不该每次调用都扫。
          * **不缓存 -1**：进程刚 start 时 `/proc` 目录可能还没建好，缓存了 -1 就永远拿不到了。
          *
-         * BL-027：返回 -1 表示两条路都失败 —— 此时打一条英文诊断行（见 [logPidFailureOnce]），
-         * 每个 Handle 只打一次；返回值与解析逻辑不变。
+         * BL-027：返回 -1 表示三条路都失败 —— 此时打一条英文诊断行（见 [logPidFailureOnce]），
+         * 每个 Handle 只打一次；返回值契约不变（拿不到 = -1）。
          */
         @Volatile
         private var cachedPid: Long = 0
@@ -345,9 +511,9 @@ object ProotRunner {
         fun pid(): Long {
             val c = cachedPid
             if (c > 0) return c
-            val resolved = pidViaReflection() ?: pidViaProc()
+            val resolved = pidViaReflection() ?: pidViaProc().takeIf { it > 0 } ?: pidViaFullScan()
             if (resolved > 0) cachedPid = resolved
-            // ★ 只加诊断、不改逻辑：-1 意味着反射与 /proc 两条路都死了（真机两次启动全 -1，
+            // ★ 只加诊断、不改逻辑：-1 意味着三条路都死了（真机两次启动全 -1，
             //   光看返回值分不清是 tids 扫不到、children 读不到、还是差集为空）。
             if (resolved <= 0) logPidFailureOnce()
             return resolved
@@ -358,10 +524,29 @@ object ProotRunner {
             Process::class.java.getMethod("pid").invoke(process)
         }.getOrNull()?.let { raw -> toPid(raw).takeIf { it > 0 } }
 
-        /** 路径二：`/proc` 兜底（真机唯一可靠的路径） */
+        /** 路径二：children 差集（内核开 CONFIG_PROC_CHILDREN 的机型可靠；未开的机型恒空） */
         private fun pidViaProc(): Long = runCatching {
             findChildPidFromProc(excludePids = preExistingChildren)
         }.getOrDefault(-1L)
+
+        /**
+         * 路径三（fix2 / BL-027 方案 A）：`/proc` 全表扫描 —— ppid == 本 App 进程 pid 的候选，
+         * 再用 cmdline（含 `proot` + 本实例的 INSTANCE_DIR 标记）与排除集做身份匹配。
+         *
+         * 为什么是它：老真机上两条老路都结构性死（见 R13-V7：`childrenFilesPresent=0` +
+         * `java.lang.Process` 无 `pid()`），全扫是唯一还活着的路。 扫描/匹配的完整语义见
+         * [scanProcChildren] / [selectProotPid]；本函数只负责取参数、静默降级、折成 -1/null。
+         *
+         * @param procRoot `/proc` 根。默认真机路径；做成参数只是为了将来单测可喂假目录。
+         */
+        private fun pidViaFullScan(procRoot: String = "/proc"): Long {
+            val mine = runCatching { android.os.Process.myPid() }.getOrNull() ?: return -1L
+            val candidates = runCatching { scanProcChildren(procRoot, mine) }.getOrNull() ?: return -1L
+            return runCatching {
+                // 排除集里也塞进本进程自身：静态/假进程中 myPid 可能测不出真值，防自杀。
+                selectProotPid(candidates, mine, identityMarker, preExistingChildren + mine.toLong()) ?: -1L
+            }.getOrDefault(-1L)
+        }
 
         /**
          * BL-027：pid 解析失败的诊断开关（每个 Handle 只打一次）。
@@ -387,33 +572,42 @@ object ProotRunner {
 
         /**
          * 拼出 pid 解析失败的现场：tids 数、`children` 文件是否存在、可读几个、读到什么、
-         * 当前子进程集合与启动前快照的差集结果 —— 正好对应"三个死因"（见 BL-027）。
+         * 当前子进程集合与启动前快照的差集结果 —— 对应前两条老路（BL-027 "三个死因"）；
+         * fix2 追加**全扫试算**字段（第 0 步诊断）：`directChildrenCount`（全扫看到几个
+         * ppid==本进程的目录）与 `prootMatchCount`（其中几个过了 proot+INSTANCE_DIR 身份匹配）
+         * —— 下次真机日志直接验证方案 A 的读权限与匹配数。
          *
-         * ★ 只读诊断，不参与解析：真正的解析仍是 [pidViaReflection]/[pidViaProc] 那两条路，
-         * 这里只是把"失败当时"的 /proc 现场拍下来。输出英文（R-LOG），写进全局流。
+         * ★ 只读诊断，不参与解析：真正的解析仍是 [pidViaReflection]/[pidViaProc]/[pidViaFullScan]
+         * 那三条路，这里只是把"失败当时"的 /proc 现场拍下来。输出英文（R-LOG），写进全局流。
          *
          * 输出形状示例（成功时根本不会打）：
          * `pid resolution failed (reflection + /proc both failed); tids=12,
          *  childrenFilesPresent=12, readable=12; rawChildren=[1234 1235]; currentChildren=2,
-         *  preExisting=1, newAfterDiff=0`
+         *  preExistingSnapshotSize=1, newAfterDiff=0; directChildrenCount=3, prootMatchCount=0`
          *
          * 怎么读它：
          * - `cannot list …/self/task` → task 目录本身扫不到（SELinux 挡或内核无该节点）；
          * - `childrenFilesPresent=0` → 内核无 CONFIG_PROC_CHILDREN（"Android 内核有"只是旧注释的假设）；
          * - `readable=0` → 文件在但读不到（权限）；
          * - `rawChildren=[]` → 读到了但全是空（刚 start 的 proot 还没成为我们的子进程，或已退出）；
-         * - `newAfterDiff=0` → 差集为空（快照拍晚了把 proot 自己含进去，或它已经死了）。
+         * - `newAfterDiff=0` → 差集为空（快照拍晚了把 proot 自己含进去，或它已经死了）；
+         * - `directChildrenCount` → 全扫 ppid==本进程的目录数；>=1 = 读权限 OK；-1 = 扫描不可用
+         *   （myPid 取不到或 /proc 列举被挡 —— 方案 A 在此环境走不通，转 D 回退）；
+         * - `prootMatchCount` → 过身份匹配的候选数；>=1 而解析仍失败 = 竞态（进程已退/标记不匹配
+         *   之外的时序问题）；0 且 directChildrenCount>=1 = cmdline 读不到或标记不匹配。
          *
          * @param procRoot `/proc` 根。默认真机路径；做成参数只是为了将来单测可喂假目录。
          */
         private fun describePidFailure(procRoot: String = "/proc"): String {
+            val scanCounts = fullScanCounts(procRoot)
             val selfTask = File(procRoot, "self/task")
             val entries = runCatching { selfTask.listFiles() }.getOrNull()
             if (entries == null) {
                 val exists = runCatching { selfTask.exists() }.getOrDefault(false)
                 return "pid resolution failed (reflection + /proc both failed); " +
                     "cannot list $procRoot/self/task (exists=$exists); " +
-                    "preExistingSnapshotSize=${preExistingChildren.size}"
+                    "preExistingSnapshotSize=${preExistingChildren.size}; " +
+                    "directChildrenCount=${scanCounts.first}, prootMatchCount=${scanCounts.second}"
             }
             val tids = entries.mapNotNull { it.name.toLongOrNull() }
             var childrenFiles = 0
@@ -436,7 +630,28 @@ object ProotRunner {
                 "tids=${tids.size}, childrenFilesPresent=$childrenFiles, readable=$readable; " +
                 "rawChildren=[${raws.joinToString("|")}]; " +
                 "currentChildren=${children.size}, " +
-                "preExistingSnapshotSize=${preExistingChildren.size}, newAfterDiff=$fresh"
+                "preExistingSnapshotSize=${preExistingChildren.size}, newAfterDiff=$fresh; " +
+                "directChildrenCount=${scanCounts.first}, prootMatchCount=${scanCounts.second}"
+        }
+
+        /**
+         * fix2 第 0 步诊断：全扫试算，只计数不返回 pid。
+         * @return `(directChildrenCount, prootMatchCount)`；`(-1, -1)` = 扫描本身不可用
+         *         （myPid 取不到 / /proc 列举被 SELinux 挡）—— 诊断字段直接用这两个值表达。
+         *         匹配口径与 [pidViaFullScan] 完全一致（同排除集含本进程）。
+         */
+        private fun fullScanCounts(procRoot: String): Pair<Int, Int> {
+            val mine = runCatching { android.os.Process.myPid() }.getOrNull()?.takeIf { it > 0 }
+                ?: return -1 to -1
+            // 目录列举失败（SELinux 挡）要报 -1 而不是 0：0 会被读成"权限 OK、就是没儿子"，
+            // 而 -1 明确表达"方案 A 在此环境测不出来" —— 诊断字段的语义差别就在这里。
+            if (runCatching { File(procRoot).listFiles() }.getOrNull() == null) return -1 to -1
+            val candidates = runCatching { scanProcChildren(procRoot, mine) }.getOrNull()
+                ?: return -1 to -1
+            val matches = runCatching {
+                prootMatchCount(candidates, mine, identityMarker, preExistingChildren + mine.toLong())
+            }.getOrDefault(-1)
+            return candidates.size to matches
         }
 
         fun isAlive(): Boolean = runCatching { process.isAlive }.getOrDefault(false)
@@ -469,7 +684,9 @@ object ProotRunner {
         //   proot 自己已经在集合里了，差集永远为空 → 又回到拿不到 pid 的老问题。
         val preExisting = snapshotChildPids()
         val process = spec.toProcessBuilder().start()
-        val handle = Handle(process, preExisting)
+        // fix2 / BL-027：身份标记取 spec.argv 里现成的 INSTANCE_DIR 项，供全扫路径做 cmdline
+        // 身份匹配（启动路径的 argvEnv 由 DshRuntime 注入 INSTANCE_DIR；自检路径没有 → 空串退化）。
+        val handle = Handle(process, preExisting, identityMarkerFromArgv(spec.argv))
         // 立刻解析一次 pid 并缓存：此刻进程一定还活着、/proc 目录一定在。
         // 拖到调用方（DshRuntime 写 dsh.pid）再解析也行，但那时进程可能已经退出，白扫一遍。
         runCatching { handle.pid() }

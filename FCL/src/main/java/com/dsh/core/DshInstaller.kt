@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * dsh 版本安装器：把指定版本的 @deepseek-ai/dsh 装进某个实例目录。
@@ -143,6 +144,128 @@ class DshInstaller(
     private val errorTails = ConcurrentHashMap<String, ArrayDeque<String>>()
     private val errorSummaries = ConcurrentHashMap<String, String>()
 
+    /**
+     * 本次安装的**目标版本**（F2-8 / BL-048），key = instanceId。
+     *
+     * ★ 为什么需要它：[fail] 原来把 `instance.dshVersion` 塞进 [Progress.Failed]，而新建实例的
+     *   `dshVersion` 快照是 null —— 下载页收到 `version == null` 时 `p.version?.let { ... }`
+     *   跳过清理，「安装中」标记就永久留在那一行（必现）。目标版本只存在于**本次请求**里
+     *   （install() 的 version 参数），所以入口 put、收尾 remove，与 [running] 同一生命周期。
+     *
+     * ★ 为什么用 map 而不是单个字段：同时装两个实例时，单字段会被后一次安装覆盖，
+     *   先失败的那个又拿不到版本（与 [errorSummaries] 按实例分开存同一个理由）。
+     */
+    private val installVersions = ConcurrentHashMap<String, String>()
+
+    /** 安装 pid 文件：[实例目录]/dsh-install.pid（与运行期的 dsh.pid / dsh-node.pid 同目录，生命周期独立） */
+    private fun dshInstallPidFile(instanceId: String): File =
+        File(DshPaths.instanceDir(instanceId), INSTALL_PID_FILE_NAME)
+
+    /**
+     * 把刚解析出的 proot pid 写进 `dsh-install.pid`（F2-6 / BL-041）。
+     *
+     * 格式与 [ProcessUtil.writePidFile] 完全一致（PidMeta 的 JSON；安装期没有运行端口概念，
+     * port 恒 0），不写 token/URL —— 与 dsh.pid 同一隐私口径。
+     *
+     * ★ 必须**同步**写（不经 [DshLogBus] 的异步落盘）：App 被 LMK 杀掉时来不及刷任何异步队列，
+     *   而这个 pid 的唯一用途恰好就是"App 没了之后"被下一次安装读到。
+     */
+    private fun writeInstallPidFile(instance: DshInstance, pid: Long) {
+        // 写文件与日志分开：日志本身不该再被 runCatching 卷进来 —— 否则"日志 bus 出错"会被
+        // 误报成"pid 文件写失败"（诊断日志要如实反映文件写的成败）。
+        val failure = runCatching {
+            val f = dshInstallPidFile(instance.id)
+            f.parentFile?.mkdirs()
+            f.writeText(JsonUtils.GSON.toJson(ProcessUtil.PidMeta(pid, 0)))
+        }.exceptionOrNull()
+        if (failure == null) {
+            DshLogBus.appendFor(instance.id, "[install] installer pid=$pid written to $INSTALL_PID_FILE_NAME")
+        } else {
+            DshLogBus.appendFor(instance.id, "[install] failed to write $INSTALL_PID_FILE_NAME: ${failure.message ?: failure}")
+        }
+    }
+
+    /** 读 `dsh-install.pid`（与 [ProcessUtil.readPidFile] 同一格式与容错口径）；无文件/坏文件/pid<=0 → null */
+    private fun readInstallPidFile(instanceId: String): Long? {
+        val f = dshInstallPidFile(instanceId)
+        if (!f.isFile) return null
+        return runCatching {
+            JsonUtils.fromNonNullJson(f.readText(), ProcessUtil.PidMeta::class.java).pid.takeIf { it > 0 }
+        }.getOrNull()
+    }
+
+    /**
+     * 安装启动前的孤儿清理（F2-6 / BL-041 的"认领"半边）：上次安装期间 App 被系统杀掉 /
+     * LMK 后，npm（proot）可能仍活着继续写 node_modules —— 不等用户重新点安装就变成双写。
+     * 所以在起新 npm 之前先把残留进程收掉。
+     *
+     * 判据（与 [ProcessUtil.killStale] 同构，宁可不杀不误杀）：
+     * 1. pid 文件存在且能解析出 pid；2. pid 仍存活；
+     * 3. `/proc/<pid>/cmdline` 同时含 `proot` 与本实例 id（cmdline 读不到/不匹配 → 放手，只删文件）。
+     *
+     * 清理动作 = **SIGQUIT → 等待 → SIGKILL 兜底**。为什么不是直接 SIGKILL（R14-V2A F1 修正）：
+     * 本仓自身的既有结论是 proot 对 SIGTERM 装死、SIGKILL 又来不及跑 kill_all_tracees
+     * （rootfs 内的 node/npm 会以宿主视图继续存活，正是"防双写"要拦的东西）；只有 SIGQUIT
+     * 会让 proot 优雅收尾并带走全部 tracee（同 [ProotProcessExecutor] 的 destroyActive 口径）。
+     * SIGQUIT 预算 2 秒，超时仍换 SIGKILL 兜底（它至少能保证 proot 本身死透）。
+     * 收尾后删 pid 文件 —— 不删文件会让下一次安装重复检查同一个死 pid。
+     */
+    private suspend fun cleanupStaleInstallProcess(instance: DshInstance) {
+        val f = dshInstallPidFile(instance.id)
+        val pid = readInstallPidFile(instance.id)
+        if (pid == null) {
+            // 大多数情况：文件不存在（上次安装正常收尾已删）。顺手删掉"存在但读不出"的坏文件。
+            runCatching { f.delete() }
+            return
+        }
+        if (!ProcessUtil.isAlive(pid)) {
+            DshLogBus.appendFor(instance.id, "[install] stale installer pid=$pid is not alive; removed stale pid file")
+            runCatching { f.delete() }
+            return
+        }
+        val cmd = ProcessUtil.cmdline(pid).orEmpty()
+        if (cmd.contains("proot") && cmd.contains(instance.id)) {
+            DshLogBus.appendFor(
+                instance.id,
+                "[install] stale installer pid=$pid still running (proot for this instance); SIGQUIT then KILL fallback"
+            )
+            // SIGQUIT：唯一能让 proot 带走 tracee（旧 npm）的信号（理由见方法头注释）
+            val quitSent = runCatching { android.os.Process.sendSignal(pid.toInt(), 3) }.isSuccess
+            if (quitSent) {
+                val deadline = System.currentTimeMillis() + STALE_INSTALL_QUIT_GRACE_MS
+                while (System.currentTimeMillis() < deadline && ProcessUtil.isAlive(pid)) {
+                    kotlinx.coroutines.delay(100)
+                }
+            }
+            if (ProcessUtil.isAlive(pid)) {
+                DshLogBus.appendFor(instance.id, "[install] stale installer pid=$pid survived SIGQUIT grace; SIGKILL fallback")
+                runCatching { android.os.Process.sendSignal(pid.toInt(), 9) } // SIGKILL
+            } else {
+                DshLogBus.appendFor(instance.id, "[install] stale installer pid=$pid exited within SIGQUIT grace")
+            }
+        } else {
+            // pid 已被系统复用或属于别的进程：不动它
+            DshLogBus.appendFor(instance.id, "[install] pid=$pid in $INSTALL_PID_FILE_NAME is not this instance's proot (cmdline mismatch); left it alone")
+        }
+        runCatching { f.delete() }
+    }
+
+    /**
+     * 终态清理（K03 compare-and-delete，与 [ProcessUtil.removePidFile] / DshRuntime 的
+     * deleteNodePidFile 同一约定）：只有文件里仍是**本次**安装的 pid（或文件已不存在/读不出）
+     * 才删 —— 防"取消后立刻重装"时被取消那次的收尾误删新一次安装刚写下的 pid 文件，
+     * 让新安装失去孤儿保护。
+     *
+     * [expectedPid] 传 0（本次没解析到 pid、没写过文件）时等价于"文件里只要有别的东西就不删"。
+     */
+    private fun deleteInstallPidFile(instanceId: String, expectedPid: Long) {
+        runCatching {
+            if (pidFileBelongsTo(readInstallPidFile(instanceId), expectedPid)) {
+                dshInstallPidFile(instanceId).delete()
+            }
+        }
+    }
+
     fun isInstalling(instanceId: String): Boolean = gate.isRunning(instanceId)
 
     fun statusOf(instanceId: String): InstallStatus? = _statuses.value[instanceId]
@@ -161,6 +284,10 @@ class DshInstaller(
         cancelled.remove(instance.id)
         errorSummaries.remove(instance.id)
         errorTails.remove(instance.id)
+        // F2-8（BL-048）：目标版本只存在于本次请求里 —— 存下来供 [fail] 写进 Progress.Failed
+        // （新建实例的 dshVersion 快照为 null，界面收不到版本就清不掉「安装中」标记）。
+        // 与其它共享状态同一套所有权规则：入口 put，任务体 finally 里"仍归我管"才 remove。
+        installVersions[instance.id] = version
         DshInstances.markState(instance.id, DshInstance.State.INSTALLING, version = version, error = null)
         updateStatus(
             InstallStatus(instance.id, version, DshUiText.getString(com.dsh.fcl.androidlauncher.R.string.dsh_stage_prepare, "install failed"))
@@ -232,6 +359,7 @@ class DshInstaller(
                     cancelled.remove(instance.id)
                     errorSummaries.remove(instance.id)
                     errorTails.remove(instance.id)
+                    installVersions.remove(instance.id)
                     gate.release(instance.id)
                 }
             }
@@ -308,7 +436,12 @@ class DshInstaller(
      */
     private fun fail(instance: DshInstance, reason: String) {
         DshInstances.markState(instance.id, DshInstance.State.BROKEN, error = reason)
-        _progress.value = Progress.Failed(reason, instance.dshVersion)
+        // F2-8（BL-048）：版本取"本次安装的目标版本"，快照兜底。
+        // ★ 原来是 `Progress.Failed(reason, instance.dshVersion)`：新建实例的快照是 null，
+        //   下载页的 `p.version?.let { ... }` 据此跳过清理，「安装中」标记永久留在那一行。
+        //   快照只在"老实例重装/换版本"时还有信息量（此时目标版本与它相等，等价），
+        //   所以这里的顺序对两种实例都是对的。VM 不用改：拿到正确 version 会自行清标记。
+        _progress.value = Progress.Failed(reason, resolveFailVersion(installVersions[instance.id], instance.dshVersion))
         finishStatus(instance.id)
         // 实例级：安装失败原因就是这个实例自己的失败（实例页"为什么它坏了"的唯一权威解释）
         DshLogBus.appendFor(instance.id, "[install] ${instance.name} 安装失败：$reason")
@@ -384,7 +517,16 @@ class DshInstaller(
     private fun checkInstallSpace(instance: DshInstance, version: String): String? {
         val need = nodeModulesBudgetBytes(instance, version)
         val free = DshPaths.freeSpaceBytes()
-        if (isEnoughSpaceForInstall(need, free)) return null
+        if (isEnoughSpaceForInstall(need, free)) {
+            // ★ BL-133：放行也要留一行英文诊断 —— 门槛余量正在收窄（真机 573M vs 600MB 仅余 4.5%，
+            //   node_modules 每版本约 +50M），"放行了多少余量"是将来判断"该不该抬门槛"的唯一数据。
+            //   数字走的与失败文案同两个变量（need/free），单位统一 MB（负数=读不到，原样报出）。
+            DshLogBus.appendFor(
+                instance.id,
+                "[install] space ok need=${need / 1024 / 1024}MB free=${free / 1024 / 1024}MB"
+            )
+            return null
+        }
         return DshUiText.getString(
             com.dsh.fcl.androidlauncher.R.string.dsh_install_no_space,
             "Not enough space",
@@ -524,7 +666,7 @@ class DshInstaller(
     private fun npmErrorCode(raw: String): String? =
         NPM_ERROR_CODE_RE.find(raw)?.groupValues?.get(1)
 
-    private fun runInstall(instance: DshInstance, version: String): Boolean {
+    private suspend fun runInstall(instance: DshInstance, version: String): Boolean {
         errorSummaries.remove(instance.id)
         errorTails.remove(instance.id)
         val script = "${ProotCommand.GUEST_ROOT}/scripts/setup-node-dsh.sh"
@@ -547,12 +689,17 @@ class DshInstaller(
         DshPaths.instanceWorkspace(instance.id).mkdirs()
         File(DshPaths.NPM_CACHE_DIR).mkdirs()
 
+        // ★ F2-6（BL-041）：起新 npm 之前先清理**上一次安装**的残留（App 被杀/安装中退出界面后
+        //   留下的孤儿 proot）。不清的话重装就是两个 npm（一新一旧）同时写同一个 node_modules。
+        //   放在空间检查之前：残留进程可能还在写盘，先停它，报出的"剩余空间"才是准的。
+        cleanupStaleInstallProcess(instance)
+
         // ★ 起 npm 之前的空间检查（判据与"要留多少"见 [checkInstallSpace] / [nodeModulesBudgetBytes]）。
         //   放在这里是因为：① 预检已经过了，失败原因不会再被预检文案顶掉；
         //   ② 目录已经建好，报出来的"当前剩余"就是真正要写入的那个分区；
         //   ③ 还没起 proot/npm —— 空间不足时立刻返回，而不是让用户等 29 分钟再拿到
         //     一个"安装失败（详见日志）"（真机实测：盘上只剩约 1.1 GB，而一次安装
-        //     要写 500 MB 上下；写满盘时同样只会剩下那句泛化文案）。
+        //      要写 500 MB 上下；写满盘时同样只会剩下那句泛化文案）。
         val shortfall = checkInstallSpace(instance, version)
         if (shortfall != null) {
             errorSummaries[instance.id] = shortfall
@@ -562,43 +709,73 @@ class DshInstaller(
         }
 
         val instancePathInRootfs = "${ProotCommand.GUEST_ROOT}/instances/${instance.id}"
+        // 本次安装真正写进 dsh-install.pid 的 pid（0 = 本次没解析到/没写）。
+        // ★ AtomicLong 而不是普通变量：回调来自 [ProotProcessExecutor.run] 的 pid 解析侧，
+        //   与读它的 finally 不一定同线程。CAS(0, pid) 同时保证"只认第一次回调"（防御重放）。
+        val installPid = AtomicLong(0L)
         var exit = -1
         try {
-            exit = (proot as? ProotProcessExecutor)?.run(
-                script = script,
-                argvEnv = mapOf(
-                    "INSTANCE_DIR" to instancePathInRootfs,
-                    "DSH_VERSION" to version,
-                    "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache",
-                    "CI" to "true" // 让 npm 输出更适合日志、别做交互式进度条刷屏
-                ),
-                secretEnv = emptyMap(),
-                timeoutMs = INSTALL_TIMEOUT_MS,
-                // 标记这个子进程属于哪个实例：取消/超时只杀自己那一个
-                tag = instance.id
-            ) { line -> onInstallLine(instance, version, line) }
-                ?: run {
+            // ★ F2-7（BL-051）：整段 npm 执行持 PARTIAL_WAKE_LOCK —— 安装是 10~30 分钟的
+            //   CPU/网络密集活，灭屏进 Doze 会被掐网络（npm 卡死）或被 LMK 直接杀。超时用
+            //   [DshBootstrap.INSTALL_WAKE_LOCK_TIMEOUT_MS]（40 分钟 = 30 分钟看门狗 + 余量）。
+            //   只包进程执行段：前后的状态更新 / pid 清理不持有锁。
+            //
+            // ★ 结构说明：block 是 suspend 非 inline lambda，**不能**在里面 `return false` ——
+            //   预检失败的早退改写成"返回 -1 退出码"，下游（`exit == 0` → false、fail → errorSummary）
+            //   与之完全等价（errorSummaries 已在块内写入失败原因）。
+            exit = DshBootstrap.withRuntimeBusyWakeLock(context, DshBootstrap.INSTALL_WAKE_LOCK_TIMEOUT_MS) {
+                val direct = (proot as? ProotProcessExecutor)?.run(
+                    script = script,
+                    argvEnv = mapOf(
+                        "INSTANCE_DIR" to instancePathInRootfs,
+                        "DSH_VERSION" to version,
+                        "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache",
+                        "CI" to "true" // 让 npm 输出更适合日志、别做交互式进度条刷屏
+                    ),
+                    secretEnv = emptyMap(),
+                    timeoutMs = INSTALL_TIMEOUT_MS,
+                    // 标记这个子进程属于哪个实例：取消/超时只杀自己那一个
+                    tag = instance.id,
+                    // ★ F2-6（BL-041）：pid 解析出来的那一刻同步落盘 —— App 若被杀，
+                    //   下次安装的 [cleanupStaleInstallProcess] 靠这个文件认领孤儿 npm。
+                    onPidResolved = { pid ->
+                        if (pid > 0 && installPid.compareAndSet(0L, pid)) {
+                            writeInstallPidFile(instance, pid)
+                        }
+                    }
+                ) { line -> onInstallLine(instance, version, line) }
+                if (direct != null) {
+                    direct
+                } else {
                     // ★ BL-032：只有"非 ProotProcessExecutor 的 ProotExecutor 实现"（单测替身）才走这里，
                     //   真机实现自己在 run() 内部做预检。替身没有内部预检，这次补调是它唯一的预检。
                     val pre = ProotCommand.preflight(context, DshPaths.ROOTFS_DIR, script)
                     if (!pre.ok) {
                         errorSummaries[instance.id] = pre.reason ?: "预检失败（原因未知）"
                         DshLogBus.appendFor(instance.id, "[install] Preflight failed: ${pre.reason}")
-                        return false
+                        -1
+                    } else {
+                        proot.run(
+                            script = script,
+                            env = mapOf(
+                                "INSTANCE_DIR" to instancePathInRootfs,
+                                "DSH_VERSION" to version,
+                                "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache"
+                            ),
+                            onLine = { line -> onInstallLine(instance, version, line) }
+                        )
                     }
-                    proot.run(
-                        script = script,
-                        env = mapOf(
-                            "INSTANCE_DIR" to instancePathInRootfs,
-                            "DSH_VERSION" to version,
-                            "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache"
-                        ),
-                        onLine = { line -> onInstallLine(instance, version, line) }
-                    )
                 }
+            }
         } catch (t: Throwable) {
             errorSummaries[instance.id] = t.message ?: t.toString()
             return false
+        } finally {
+            // ★ F2-6（BL-041）：安装的所有终态（成功/失败/取消/异常/早退）都把本次的 pid 文件清掉 ——
+            //   它只在"安装进行中"有意义，留着会让下一次安装的孤儿清理去检查一个早就结束的 pid。
+            //   K03 compare-and-delete：只有文件里仍是**本次**写的 pid（或读不出）才删，
+            //   防"取消后立即重装"时被取消那次的收尾误删新安装刚写的文件（新安装失去孤儿保护）。
+            deleteInstallPidFile(instance.id, installPid.get())
         }
         // ★ R-14：看门狗超时（ProotProcessExecutor 约定返回 -2）时给可读文案，
         // 否则 errorSummary 只会落到泛化的\"安装失败\"，用户完全不知道是卡死/超时。
@@ -843,9 +1020,34 @@ class DshInstaller(
          */
         private const val PREINSTALLED_SKELETON_BYTES = 16L * 1024 * 1024
 
+        /** 安装 pid 文件名（F2-6 / BL-041）：与本包内各 pid 文件名的命名风格一致（dsh.pid / dsh-node.pid） */
+        const val INSTALL_PID_FILE_NAME = "dsh-install.pid"
+
+        /**
+         * R14-V2A F1：清理**上一次安装**的残留 proot 时，SIGQUIT 之后的等待预算（毫秒）。
+         * proot 收尾（kill_all_tracees + 退出）通常 1 秒内完成；2 秒与运行期停止链的
+         * SIGQUIT 预算同量级，超时才落 SIGKILL 兜底。
+         */
+        private const val STALE_INSTALL_QUIT_GRACE_MS = 2_000L
+
         private data class PackageJson(
             @SerializedName("version") val version: String? = null
         )
+
+        /**
+         * [fail] 写进 `Progress.Failed` 的版本号（F2-8 / BL-048 的纯判断内核，可单测）。
+         *
+         * 优先本次安装的目标版本（[installVersions] 里存的；新建实例只有这里有），
+         * 其次实例快照（老实例重装时两者相等；快照非空而 map 空只可能出现在清理后的异常路径），
+         * 都拿不到才 null。
+         *
+         * ★ 为什么必须"stored 优先"：下载页拿这个版本号清「安装中」标记（`p.version?.let { … }`）。
+         *   只要它是非空，标记就能被清掉 —— null 才是那条"标记卡死"路径的根因。
+         * ★ 为什么写在这里：与 [isEnoughSpaceForInstall] / [stageFraction] 同理 ——
+         *   [DshInstaller] 要 Context，JVM 单测构造不出来，判断内核必须能独立被钉住。
+         */
+        fun resolveFailVersion(stored: String?, snapshot: String?): String? =
+            stored?.takeIf { it.isNotBlank() } ?: snapshot?.takeIf { it.isNotBlank() }
 
         /**
          * 空间够不够装（[checkInstallSpace] 的纯判断内核）。

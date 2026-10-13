@@ -9,7 +9,7 @@
   动作做成页内的图标按钮。刷新按钮用 FCLImageButton + android:src + anim_scale_large
   （照 FCL item_version.xml：FCLImageButton 自带 Ripple 按压涟漪，FIT_XY 自适应；
   1.5 倍按压缩放是 FCL 图标按钮的既定做法）。
-  内容：顶部刷新按钮 + "显示预览版"开关 + 版本列表 + 加载/错误态。
+  内容：顶部刷新按钮 + "显示预览版"开关 + 版本列表 + 加载/错误/空态。
 
   左右留白 10dp，与 FCL 的列表页规范同档（`page_version_list.xml` 的根就是
   padding 10/10/10，`page_setting_list.xml` 的列表也是 10dp）：FCL 的侧边菜单与右面板
@@ -73,11 +73,30 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
         android:gravity="center"
-        android:textColor="#CC4444"
+        android:textColor="@color/dsh_log_error"
         android:textSize="13sp"
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/switch_prerelease" />
+
+    <!-- 空态提示（BL-117）：列表为空时显示（"仅显示稳定版"过滤全灭 / 目录本来就空，两种文案）。
+         布局里不挂 android:text 占位（新 key 由 strings 落地时一并加，见报告 String 需求表）——
+         运行期文案全部由 DshDownloadUI.render 经 emptyHintRes 设置，避免资源缺失期编译不过。
+         顶边锚在 error_hint 之下（它 GONE 时坍缩为一点，空态即在整个列表区垂直居中）；
+         这样"warning 存在且列表为空"时两条提示也不会叠在一起。 -->
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/empty_hint"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:textSize="14sp"
+        android:visibility="gone"
+        app:auto_text_tint="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/error_hint" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
