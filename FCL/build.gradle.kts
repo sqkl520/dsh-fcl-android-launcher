@@ -45,6 +45,12 @@ android {
         ?: error("缺少 dshVersion：请在根 gradle.properties 里设置（版本号单一来源）")
     val dshVersionCode = providers.gradleProperty("dshVersionCode").orNull?.toIntOrNull()
         ?: error("缺少 dshVersionCode（整数）：请在根 gradle.properties 里设置")
+    // ★ 显示用 fix 标签（R16/fix4 起）：正式包留空；fix 包为 fixN（如 fix4）。
+    //   拼进 versionName 尾部 —— 关于页 / 系统「应用信息」/ APK 文件名全链可见
+    //   （此前它们只有 dshVersion，看不出装的是第几轮修复）。
+    //   dshVersion 本身保持不变（fix 包约定），本标签只影响**显示**。
+    val dshFixLabel = providers.gradleProperty("dshFixLabel").orNull?.trim().orEmpty()
+    val dshVersionName = if (dshFixLabel.isEmpty()) dshVersion else "$dshVersion-$dshFixLabel"
     // 命令行 -Darch 优先；local.properties 仅在命令行未指定时生效
     if (System.getProperty("arch") == null && localProperty != null && localProperty.getProperty(
             "arch",
@@ -73,7 +79,9 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = dshVersionCode
-        versionName = dshVersion
+        // R16/fix4：versionName = dshVersion（+ "-fixN"，若 dshFixLabel 非空）——
+        // 见上方 dshVersionName 的注释。此前这里直接是 dshVersion，关于页看不出 fix 轮次。
+        versionName = dshVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

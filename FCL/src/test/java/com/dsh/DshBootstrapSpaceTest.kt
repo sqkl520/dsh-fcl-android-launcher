@@ -14,9 +14,12 @@ import org.junit.Test
  * 两个口径逐一钉死，连同"升级不该按两份 rootfs 的可用空间要求"这条回归也一起锁住。
  *
  * 实测来源：docs/ROOTFS.md §9「瘦身后（0.1.3 起）」——
- *   · rootfs 解压后合计 904,335,360 B（≈862 MiB）
+ *   · rootfs 解压后 apparent-size 合计 904,335,360 B（≈862 MiB）
  *   · assets/dsh/rootfs/version = debian-bookworm-arm64-node22-dsh0.1.6-alpha.2-slim1（slim1 瘦身版）
- * 若将来再次瘦身/换底座，这里会先失败，强制"改常量必须同步改实测记录"。
+ * ★ BL-072（R15）：门槛常量已从 apparent-size 改为**块对齐保守值 960 MiB**
+ *   （实测 4K 块对齐 961,220,608 B + 目录开销 ≈936 MiB，见
+ *   `docs/reports/round12/A6-bootstrap.md` A6-3；门槛要拦"注定写满"，宁多勿少）。
+ *   testFordebug 与常量同源同改 —— 改常量必须同步改这里与实测记录。
  *
  * 运行：./gradlew :FCL:testFordebugUnitTest --tests "com.dsh.DshBootstrapSpaceTest"
  *   （或仓库的 run-tests.sh，自动扫描本类）
@@ -24,8 +27,8 @@ import org.junit.Test
 class DshBootstrapSpaceTest {
 
     private companion object {
-        /** docs/ROOTFS.md §9 实测：瘦身后 rootfs 解压后合计字节数（≈862 MiB） */
-        const val ROOTFS_EXTRACTED = 904_335_360L
+        /** [DshBootstrap.requiredFreeBytes] 依赖的 rootfs 门槛常量（BL-072：960 MiB 保守值） */
+        const val ROOTFS_EXTRACTED = 960L * 1024 * 1024
 
         /** 一个实例的 node_modules 预留（= DshBootstrap.INSTANCE_NODE_MODULES_BYTES，600 MiB） */
         const val NODE_MODULES = 600L * 1024 * 1024

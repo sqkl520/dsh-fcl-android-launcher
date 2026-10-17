@@ -271,7 +271,7 @@
     <string name="dsh_setup_state_ready">已就绪</string>
     <string name="dsh_setup_state_running">进行中</string>
     <string name="dsh_setup_state_failed">失败</string>
-    <string name="dsh_setup_hint_space">首次准备需要约 2.2 GB 可用空间，耗时可能几分钟。</string>
+    <string name="dsh_setup_hint_space">首次准备需要约 1.5 GB 可用空间，耗时可能几分钟。已装过的设备升级所需空间远小于此。</string>
     <string name="dsh_setup_enter">进入</string>
     <string name="dsh_setup_running_now">正在准备运行环境</string>
     <string name="dsh_tasks_header">进行中</string>
@@ -330,8 +330,8 @@
     <string name="dsh_bootstrap_data_dir_failed">无法创建数据目录：%1$s（磁盘空间或权限问题）</string>
     <string name="dsh_bootstrap_missing_artifacts">缺少 %1$s（应随 APK 的 jniLibs/arm64-v8a 提供）。这属于打包问题，请检查构建产物是否包含该原生库。</string>
     <string name="dsh_bootstrap_artifact_no_exec">%1$s（无执行位）</string>
-    <string name="dsh_bootstrap_no_space_extract">可用空间不足：解压 rootfs 需要约 %1$s，当前 %2$s。</string>
-    <string name="dsh_bootstrap_no_space_replace">可用空间不足：升级 rootfs 需要约 %1$s（升级期间新旧两份 rootfs 会同时存在），当前 %2$s。</string>
+    <string name="dsh_bootstrap_no_space_extract">可用空间不足：解压 rootfs 需要约 %1$s，当前 %2$s。请清理空间后重试。</string>
+    <string name="dsh_bootstrap_no_space_replace">可用空间不足：升级 rootfs 需要约 %1$s（升级期间新旧两份 rootfs 会同时存在），当前 %2$s。请清理空间后重试。</string>
     <string name="dsh_bootstrap_verify_failed_prefix">自检未通过：%1$s</string>
     <string name="dsh_bootstrap_verify_ok">proot + rootfs 正常</string>
     <string name="dsh_bootstrap_verify_proot_failed">proot 执行失败（退出码 %1$d）：%2$s</string>

@@ -669,6 +669,28 @@ object ProotRunner {
     }
 
     /**
+     * BL-045：长驻路径的读循环内核 —— 逐行喂回调，**单行回调抛异常跳过该行、继续排空管道**。
+     *
+     * 为什么不能让异常跳出循环：读循环就是管道排空器；跳出后 child 的 stdout 写满缓冲区
+     * 就会阻塞在 write 上（进程"挂死"，且 onExit 永远不会来）。这是一次性路径 BL-002 修过的
+     * 坑，长驻路径此前仍是裸调（R12-A2-5），这里抽成内核供 [start] 使用、并**可被单测钉住**
+     * （喂 StringReader + 抛异常的回调，验证后续行仍被读到）。
+     * 一次性路径的循环形态与本函数同款但**未合并**：BL-002 是已修的稳定区域，不为去重触碰它。
+     *
+     * @return true = 至少有一行回调抛过异常（调用方据此在循环结束后补一条诊断；
+     *         诊断行本身也要防御性包裹，免得"还在抛"的回调把收尾也带崩）
+     */
+    @JvmStatic
+    fun drainLines(reader: BufferedReader, onLine: (String) -> Unit): Boolean {
+        var callbackFailed = false
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            if (runCatching { onLine(line!!) }.isFailure) callbackFailed = true
+        }
+        return callbackFailed
+    }
+
+    /**
      * 启动并开始读取输出（读取在 IO 线程）。
      * @param onLine 每行输出
      * @param onExit 进程退出时回调（退出码；-1 表示异常）
@@ -691,18 +713,29 @@ object ProotRunner {
         // 拖到调用方（DshRuntime 写 dsh.pid）再解析也行，但那时进程可能已经退出，白扫一遍。
         runCatching { handle.pid() }
         scope.launch(Dispatchers.IO) {
+            // BL-045：与一次性路径（BL-002）同款 —— 单行 onLine 回调抛异常**不许跳出读循环**
+            // （跳出会停止排空管道，child 写满 stdout 就憋在那里、onExit 也永远不来）。
+            // 吞掉单行异常、继续读，循环结束后补一条英文诊断；内核见 [drainLines]。
+            var callbackFailed = false
             try {
                 BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        onLine(line!!)
-                    }
+                    callbackFailed = drainLines(reader, onLine)
                 }
             } catch (e: Exception) {
-                onLine("[proot] 读取输出失败: ${e.message}")
+                // 读取失败也是同样的防御面：回调若持续抛，"读取输出失败"这行诊断自身不能反过来
+                // 把协程带崩（否则下面的 onExit 被跳过，退出回调整条丢失）。
+                runCatching { onLine("[proot] 读取输出失败: ${e.message}") }
+            }
+            if (callbackFailed) {
+                // 与一次性路径同款的收口提示；再套 runCatching，免得还在抛的回调把收尾也带崩。
+                runCatching { onLine("[proot] output callback threw; drained remaining output and continued") }
             }
             val code = runCatching { process.waitFor() }.getOrDefault(-1)
-            onExit(code)
+            // onExit 是调用方（DshRuntime）的状态推进回调：它若抛出且不拦，未捕获异常会打到
+            // 协程全局 handler（Android 上可能直接崩 App）。拦住、留一条英文诊断，控制流不变。
+            runCatching { onExit(code) }.onFailure { ex ->
+                runCatching { DshLogBus.append("[proot] onExit callback threw (code=$code): ${ex.message}") }
+            }
         }
         return handle
     }

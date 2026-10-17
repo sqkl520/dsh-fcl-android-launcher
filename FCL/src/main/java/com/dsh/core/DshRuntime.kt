@@ -50,8 +50,20 @@ object DshRuntime {
     /** 停止时，按 pid 终止 rootfs 内 node 的宽限时间（TERM 后等这么久再 KILL，毫秒） */
     private const val NODE_KILL_GRACE_MS = 2_000L
 
-    /** 停止时，等 proot 响应 SIGQUIT / 确认它已经退出的宽限时间（毫秒） */
+    /**
+     * 停止时，等 proot 响应 SIGQUIT / 确认它已经退出的宽限时间（毫秒）。
+     *
+     * ★ R16/fix4（BL-138）：两段式 —— 先总时长 [PROOT_EXIT_GRACE_MS]，仍在则以
+     * [PROOT_EXIT_GRACE_EXTENDED_MS] 为增量再等（总上限 = 两段之和）。依据（bebug (2)，
+     * `reports/round16/V4-orphan-proot.md`）：SIGQUIT → proot 的 `kill_all_tracees()` 要先把
+     * node 的**整棵子进程树**逐个 SIGKILL 再自己退出，收整棵树可能 >1s —— 旧实现单段 1s 到期
+     * 即打"停止后 proot 仍存活"警告（01:49:21 pid=13662 即该窗口产物），把正常收尾误报成异常。
+     * 两段式让"1 秒外退出"不再触发警告；真残留（两段全过仍活）照样被抓到。
+     */
     private const val PROOT_EXIT_GRACE_MS = 1_000L
+
+    /** 停止校验的第二段宽限（毫秒）：第一段未退出时的增量等待，见 [PROOT_EXIT_GRACE_MS] */
+    private const val PROOT_EXIT_GRACE_EXTENDED_MS = 4_000L
 
     /** 脚本打印 node 真实 pid 的行：`[start-dsh] node pid: 12345`（与 start-dsh.sh 的格式一致） */
     private val NODE_PID_LINE = Regex("""\[start-dsh]\s*node\s*pid:\s*(\d+)""")
@@ -148,14 +160,22 @@ object DshRuntime {
      * `kill_all_tracees()`（对每个 tracee 发 SIGKILL）再退出事件循环。所以"先 SIGQUIT、
      * 等一会儿、不行再 SIGKILL"能让 proot 在死之前把 node 一起带走。
      *
+     * @param logInstanceId 日志归属（这个 SIGQUIT 是为哪个实例发的）；null = 全局流。
+     *                     失败日志不该丢，但归属对了排障时才不用翻全局流找。
      * @return true 表示信号已发出（pid 可用）；false 表示拿不到 pid，只能靠按 pid 终止 node
      */
-    private fun signalProotQuit(pid: Long): Boolean {
+    private fun signalProotQuit(pid: Long, logInstanceId: String? = null): Boolean {
         if (pid <= 0) return false
+        // BL-046：原实现整段静默 runCatching —— 发信号失败（权限/SELinux）会让停止悄悄退化为
+        // TERM/KILL 兜底，日志里没有任何线索。现在失败留一行英文诊断（R-LOG），控制流不变。
         return runCatching {
             android.os.Process.sendSignal(pid.toInt(), 3) // SIGQUIT
             true
-        }.getOrDefault(false)
+        }.getOrElse { e ->
+            val line = "[runtime] sendSignal(SIGQUIT) failed for pid=$pid: ${e.message}; falling back to TERM/KILL"
+            if (logInstanceId == null) DshLogBus.append(line) else DshLogBus.appendFor(logInstanceId, line)
+            false
+        }
     }
 
     private class ProcessHandle(
@@ -190,7 +210,7 @@ object DshRuntime {
                 handle.terminate(graceMillis)
                 return@withContext
             }
-            if (signalProotQuit(p)) {
+            if (signalProotQuit(p, instanceId)) {
                 val quitBudget = (graceMillis / 2).coerceAtLeast(500)
                 val startedAt = System.currentTimeMillis()
                 val deadline = startedAt + quitBudget
@@ -224,7 +244,16 @@ object DshRuntime {
             if (pid > 0) {
                 // R14-V2A F3：身份复核（与 ProcessHandle 同款判据，public 纯函数，见 canSendQuitSignal）
                 if (canSendQuitSignal(pid, ProcessUtil.cmdline(pid).orEmpty(), instanceId)) {
+                    // BL-046：与 signalProotQuit 同款 —— 发信号失败不许静默（否则停止悄悄退化
+                    // 为 TERM/KILL 兜底却查无实据）。控制流不变，仅补英文诊断。
                     runCatching { android.os.Process.sendSignal(pid.toInt(), 3) } // SIGQUIT
+                        .onFailure { e ->
+                            DshLogBus.appendFor(
+                                instanceId,
+                                "[runtime] sendSignal(SIGQUIT) failed for pid=$pid (PidHandle): ${e.message}; " +
+                                    "falling back to TERM/KILL"
+                            )
+                        }
                 } else {
                     DshLogBus.appendFor(
                         instanceId,
@@ -374,6 +403,23 @@ object DshRuntime {
         // BL-007：把阻塞的孤儿清理放在对象监视器**之外**（这里在 IO 线程、未持 @Synchronized 锁）。
         // 先清干净再启动的语义不变：killStale 收上一轮残留 proot、terminateNodeProcess 按 pid 收上一轮
         // node（proot 被 SIGKILL 时来不及带走它，会占着端口）。
+        //
+        // ★ BL-047 判定（R15 批 B；读全调用链后**有意保留在 startMutex 之内**，只补此注释）：
+        //   R12-A1-5 建议把本段挪到 withLock 之外"以竞态复检换延迟"，评估后否决，原因是挪出会引入
+        //   一个**破坏级**窗口而无互补手段可封：
+        //   1) 本段按 instance.id 操作（killStale 读 dsh.pid、terminateNodeProcess 读 dsh-node.pid），
+        //      而并发 start(同实例) 的窗口真实存在（DshLauncher.startInstance 被实例页/详情页/右面板/
+        //      WebView 重试四处复用，UI 无启动防重）。
+        //   2) 挪出后，B 的锁外清理可与 A 的持锁 fork 并发：A fork 后立刻 writePidFile、脚本写
+        //      dsh-node.pid；B 的 killStale 若在新文件落盘后读文件，cmdline 身份校验（proot +
+        //      instanceId）对**新生进程同样成立**（它本来就是本实例的 proot），B 会 SIGKILL 掉 A 刚
+        //      起来的进程；terminateNodeProcess 对新生 node 同理。杀完 B 进锁、复检见"同实例在跑"
+        //      还会走复用分支 —— 复检拦得住状态覆写，拦不住**已发出的信号**。
+        //   3) 收益面很小：清理只针对"上次收尾失败留下的残留"（正常路径下两个 pid 文件已删，本段
+        //      是两次文件读的 no-op）；"A 运行中 → 启动 B" 的 2s 级等待来自上面 stopAndWait 的正确性
+        //      等待（R12-A1-5 原文也认定可接受），不来自本段。
+        //   故：宁可让残留边角启动多等 ≤2s（有界、且端口避让 `resolveLaunchPort` 兜底），也不换
+        //   一个能杀掉新生进程的窗口。
         withContext(Dispatchers.IO) {
             ProcessUtil.killStale(instance.id)
             terminateNodeProcess(instance.id, 0)
@@ -585,12 +631,127 @@ object DshRuntime {
         if (runningInstanceId() != null) return false
         stopRequestedFor = null
 
-        handle = PidHandle(meta.pid, instance.id)
-        nameOf[instance.id] = instance.name
-        // 认领来的实例同样要知道 node 的 pid：停止时要按它终止 rootfs 内的 node（B10）。
-        nodePid = readNodePidFile(instance.id) ?: 0
-        _state.value = State.Running(instance.id, instance.name, "http://127.0.0.1:$port/", port, adopted = true)
-        _running.value = Running(instance.id, port, "http://127.0.0.1:$port/")
+        // ★ BL-135（R16/fix4，401 主根因修复）：优先用 pid 文件里持久化的**带 token URL**。
+        //   dsh 的 token 是进程级的（只在该进程启动时打过一次），认领时没有任何其他恢复途径；
+        //   拿不到时才回落裸 URL（旧 pid 文件无 url 字段 / 该 URL 的 pid 代次已过时）。
+        //   带 token URL 对应用内 WebView 无害（cookie 模式照常 200；token 同进程有效）；
+        //   对外跳浏览器则是"首访即 303 → Set-Cookie → 200"与"首访必 401 原文"的区别。
+        //
+        // ★ R17（H1/H2/A1 根治）：**多源候选 + 三态探活**。三个候选源按可靠性排序：
+        //   ① pid 文件 url 字段（fix4；依赖 pid 解析成功）；
+        //   ② 侧车文件 `dsh-token-url.txt`（R17 新增；落 filesDir 系统不回收、**不依赖 pid 解析**）；
+        //   ③ start-dsh.sh 实时日志扫描（fix2 起即有；cacheDir 可被回收但也覆盖历史代次）。
+        //   每个候选经 `Probe.probeTokenUrl` 三态探活：3xx=live（立即采用）、4xx/5xx=dead（换下个）、
+        //   超时=unknown（记下、若最终无 live 则作 tentative 采用——最坏与裸 URL 同效、
+        //   最好直接救活；X4 红队 A5：超时不许与 401 同码处理）。
+        //   采用后回写 pid 文件 + 侧车文件（下次认领直读）。
+        //
+        //   ★ 顺序纪律（R17 自查修正的 TOCTOU）：**探活/恢复是慢操作，必须
+        //   全部做完再进入状态写入段** —— 恢复段结束后、写 `_state` 之前**再复核一次**。
+        val persistedUrl = meta.url?.takeIf { UrlScanner.tokenOf(it) != null }
+        var liveUrl: String? = null
+        var tentativelyLiveUrl: String? = null
+
+        /** 三态探活一个候选并归类（live 立即采用；unknown 记 tentative）。 */
+        fun tryCandidate(candidate: String?): Boolean {
+            if (candidate.isNullOrEmpty()) return false
+            val code = Probe.probeTokenUrl(candidate)
+            return when {
+                code != null && code in 300..399 -> {
+                    liveUrl = candidate
+                    true
+                }
+                code == null -> {
+                    // unknown（超时/连接异常）：不覆盖已记的 tentative（先到先得，新的先探）。
+                    if (tentativelyLiveUrl == null) tentativelyLiveUrl = candidate
+                    false
+                }
+                else -> false // 4xx/5xx：明确 dead，换下一个候选
+            }
+        }
+
+        tryCandidate(persistedUrl)
+        if (liveUrl == null && persistedUrl != null) {
+            DshLogBus.append(
+                "[runtime] adopted ${instance.name}: persisted url not live " +
+                    "(stale entry or probe timeout); searching other sources"
+            )
+        }
+        if (liveUrl == null) {
+            tryCandidate(ProcessUtil.readTokenUrlFile(instance.id))
+        }
+        if (liveUrl == null) {
+            // 防御：TMP_DIR 是 lateinit（正常在 FCLApp.onCreate 已就绪）；整段包 runCatching，
+            // 恢复是"锦上添花"，绝不许它把认领本身带崩（失败就回落裸 URL + 诊断）。
+            runCatching {
+                val candidates = ProcessUtil.recoverTokenUrlsFromStartLogs(
+                    File(DshPaths.TMP_DIR), DshPaths.instanceDir(instance.id), port
+                )
+                for (candidate in candidates) {
+                    if (candidate == persistedUrl) continue // 已探过（预算去重）
+                    if (tryCandidate(candidate)) break
+                }
+                if (liveUrl == null && candidates.isNotEmpty()) {
+                    DshLogBus.append(
+                        "[runtime] adopted ${instance.name}: ${candidates.size} start-log candidate(s) " +
+                            "probed, none confirmed live"
+                    )
+                }
+            }.onFailure { e ->
+                DshLogBus.append("[runtime] adopted ${instance.name}: start-log recovery failed: ${e.message}")
+            }
+        }
+        // 全部源都没确认 live：unknown（超时）候选退而求其次（X4-A5：最坏与裸 URL 同效）。
+        if (liveUrl == null && tentativelyLiveUrl != null) {
+            liveUrl = tentativelyLiveUrl
+            DshLogBus.append(
+                "[runtime] adopted ${instance.name}: using tentative url after probe timeouts " +
+                    "(may or may not carry a live token)"
+            )
+        }
+        if (liveUrl != null) {
+            // 回写双持久化源（下次认领直读，无需再扫日志）+ 注册脱敏。
+            // 幂等：即便值来自 pid 文件本身，重写一遍也保证**侧车文件**从无到有补齐
+            //（fix4→fix5 升级场景：pid 文件有 url、侧车还没建过）。
+            // 日志只记"恢复了、写回成功"这个事实 —— URL 明文不落日志。
+            val recovered = liveUrl
+            if (recovered != null) {
+                UrlScanner.tokenOf(recovered)?.let { DshLogBus.registerSecret(it) }
+                ProcessUtil.writeTokenUrlFile(instance.id, recovered)
+                ProcessUtil.writePidFile(instance.id, meta.pid, port, recovered)
+                if (recovered != persistedUrl) {
+                    DshLogBus.append(
+                        "[runtime] adopted ${instance.name}: live token url recovered from fallback source; " +
+                            "persisted to sidecar + pid file"
+                    )
+                }
+            }
+        }
+        // ★ R17（自查修正）：恢复（慢操作）结束后的**第二道归属复核** —— 探活窗口内用户完全
+        //   可能已经启动了别的实例；此时再无条件写 _state/handle 会把新实例的状态覆盖掉
+        //   （界面显示 A 在跑、实际 B 在跑）。与函数开头的早退同一判据、同一理由。
+        //
+        //   ★ 并且"复核 + 写入"必须**同一临界区**（与 stop/startLocked 共用对象监视器）：
+        //   两个实例的认领（实例页重建可产生并行 maybeAdoptOrphan）各自走到这里时，
+        //   无锁的 check-then-act 会让"后写覆盖前写"（与 R15-B #2 的 updateStatusIfOwned 同形）。
+        //   ⚠️ 只锁这一小段 —— 上面的探活/恢复是秒级慢操作，绝不许持锁执行（会把 stop/start
+        //   一起卡住）。探活失败重进的代价只是"再读一次 state"，可忽略。
+        val adoptedUrl = liveUrl ?: "http://127.0.0.1:$port/"
+        if (liveUrl == null) {
+            DshLogBus.append(
+                "[runtime] adopted instance ${instance.name}: no token url recovered from any source; " +
+                    "falling back to bare url — external browser may 401"
+            )
+        }
+        synchronized(this) {
+            if (runningInstanceId() != null) return false
+            handle = PidHandle(meta.pid, instance.id)
+            nameOf[instance.id] = instance.name
+            // 认领来的实例同样要知道 node 的 pid：停止时要按它终止 rootfs 内的 node（B10）。
+            nodePid = readNodePidFile(instance.id) ?: 0
+            _state.value = State.Running(instance.id, instance.name, adoptedUrl, port, adopted = true)
+            _running.value = Running(instance.id, port, adoptedUrl)
+        }
         // ★ 保持全局：这是**认领巡检**（App 冷启时跨实例的恢复动作 —— "上次被系统杀掉时它还活着，
         // 直接复用"），不是某个实例自己跑出来的输出。归到全局才能看清"这次冷启到底认领/清理了什么"。
         DshLogBus.append("[runtime] 认领仍在运行的实例 ${instance.name}（pid=${meta.pid}，端口=$port）")
@@ -736,7 +897,12 @@ object DshRuntime {
             //   proot 的 atexit(kill_all_tracees) / --kill-on-exit 都来不及跑 → node 变孤儿。
             terminateNodeProcess(instanceId, np)
             val prootPid = h?.pid ?: 0
-            runCatching { h?.terminate(5000) }
+            // BL-046：terminate 失败原先静默 —— 停止链最关键的一步（SIGQUIT→TERM/KILL）若整体
+            // 抛出，verifyProotGone 会给出"仍存活"的结论，但**为什么**失败查无实据。补英文诊断，
+            // 控制流不变。
+            runCatching { h?.terminate(5000) }.onFailure { e ->
+                DshLogBus.appendFor(instanceId, "[runtime] terminate of proot handle failed during stop (pid=$prootPid): ${e.message}")
+            }
             verifyProotGone(instanceId, prootPid)
             // K03 compare-and-delete：只有当 pid 文件仍记着**我们正在停的这个** proot/node 时才删，
             // 否则"停后秒启"里新进程刚写好的 pid 文件会被这里的收尾误删 → 新进程失联成孤儿。
@@ -907,11 +1073,18 @@ object DshRuntime {
      * 删除 node pid 文件（K03 compare-and-delete）。
      * 仅当文件里仍是 [expectedPid]（或文件已不存在/读不出）时才删，避免误删"停后秒启"时
      * 脚本为新 node 刚写下的 pid 文件（见 [pidFileBelongsTo]）。
+     *
+     * ★ R17：**侧车 token URL 文件与此成对清理**（同一 K03 判据守卫）——
+     * 该 run 的 node 已经退出/被停，其 token 已失效，留着只会让下次认领多探一次死候选；
+     * 而"停后秒启"时新 run 已写过自己的两份文件 → `pidFileBelongsTo` 为假 → 二者都不动
+     *（不会误删新 run 的侧车）。expectedPid<=0（拿不到 pid）时不删——保守方向：
+     * 侧车多留一会儿无害，下次认领的探活会拒绝死 token。
      */
     private fun deleteNodePidFile(instanceId: String, expectedPid: Long) {
         runCatching {
             if (pidFileBelongsTo(readNodePidFile(instanceId), expectedPid)) {
                 nodePidFile(instanceId).delete()
+                ProcessUtil.deleteTokenUrlFile(instanceId)
             }
         }
     }
@@ -962,21 +1135,36 @@ object DshRuntime {
      */
     private suspend fun verifyProotGone(instanceId: String, prootPid: Long) {
         if (prootPid <= 0) return
-        val deadline = System.currentTimeMillis() + PROOT_EXIT_GRACE_MS
-        while (System.currentTimeMillis() < deadline && ProcessUtil.isAlive(prootPid)) {
-            kotlinx.coroutines.delay(100)
-        }
-        if (!ProcessUtil.isAlive(prootPid)) {
+        // ★ R16/fix4（BL-138）：两段式宽限。第一段（PROOT_EXIT_GRACE_MS）覆盖常见收尾；
+        //   仍在则以 PROOT_EXIT_GRACE_EXTENDED_MS 为增量再等第二段 —— SIGQUIT 的
+        //   kill_all_tracees 收整棵 tracee 树可能 >1s，单段 1s 会把正常收尾误报成"仍存活"。
+        //   只有两段全过仍活着才告警（此时才真正值得排障者注意）。
+        var alive = waitProotExit(prootPid, PROOT_EXIT_GRACE_MS)
+        if (alive) alive = waitProotExit(prootPid, PROOT_EXIT_GRACE_EXTENDED_MS)
+        if (!alive) {
             // 实例级：这是"这个实例的 proot 确实走了"的结论，实例页要能看到（否则只有"停止"没有下文）
             DshLogBus.appendFor(instanceId, "[runtime] proot 已退出（pid=$prootPid）")
             return
         }
-        // 实例级：这条"停止没停干净"的警告正是排障时要找的，必须出现在该实例自己的日志里
+        // 实例级：这条"停止没停干净"的警告正是排障时要找的，必须出现在该实例自己的日志里。
+        // BL-138：文案更新 —— 明确这是"两段宽限（1s+4s）过后仍存活"，取消"1 秒误报"的歧义。
         DshLogBus.appendFor(
             instanceId,
-            "[runtime] 警告：停止后 proot 仍存活（pid=$prootPid）；" +
+            "[runtime] 警告：停止后 proot 仍存活（pid=$prootPid，两段宽限后仍未退出）；" +
                 "它可能还带着 rootfs 内的进程 —— 下次启动若端口被占，实例会自动改用其它端口"
         )
+    }
+
+    /**
+     * R16/fix4（BL-138）：等 [pid] 退出最多 [budgetMs] 毫秒；期间每 100ms 轮询一次。
+     * @return true = 预算耗尽时仍存活；false = 已退出
+     */
+    private suspend fun waitProotExit(pid: Long, budgetMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + budgetMs
+        while (System.currentTimeMillis() < deadline && ProcessUtil.isAlive(pid)) {
+            kotlinx.coroutines.delay(100)
+        }
+        return ProcessUtil.isAlive(pid)
     }
 
     /**
@@ -1065,7 +1253,11 @@ object DshRuntime {
                 // 这条路径覆盖"启动超时"——超时的进程仍然是活的 node，不收掉就会占着端口，
                 // 下一次启动直接 EADDRINUSE（正是 B10 的现场）。
                 terminateNodeProcess(instance.id, np)
-                runCatching { h?.terminate(3000) }
+                // BL-046：与 stop() 同款 —— terminate 失败补英文诊断（启动失败收尾到底收没收干净，
+                // 事后只靠 pid 文件与端口反推太贵）。控制流不变（含 h?.pid 的求值时机）。
+                runCatching { h?.terminate(3000) }.onFailure { e ->
+                    DshLogBus.appendFor(instance.id, "[runtime] terminate of failed proot handle failed (pid=${h?.pid ?: 0}): ${e.message}")
+                }
                 // K03 compare-and-delete：只删仍属于这个失败 proot 的 pid 文件（别误删秒启后新进程的）。
                 ProcessUtil.removePidFile(instance.id, h?.pid ?: 0)
             }
@@ -1160,8 +1352,13 @@ object DshRuntime {
         //   不拦它就会用旧 run 的 node pid / URL / 端口污染**新** run 的状态。
         //   stale 行仍进实例日志（它就是该实例进程的真实输出，排障要看），但不再参与任何状态变更。
         //   token 脱敏照旧：不管这行来自哪一代，token 不允许泄漏进日志。
+        // ★ BL-109（R15）：三级解析 —— ①dsh 自己打的带 token URL；②脚本 READY url=；
+        //   ③脚本 READY port=<n>（兜底：端口可达但 20s 无 token URL 时脚本报的就绪标记，
+        //   以裸 URL 走既有 cookie 路径 —— 应用内 WebView 有持久 cookie，与 loadBestUrl
+        //   的无 token 分支同形态）。前两级拿不到 URL 时，用第③级合成 http://127.0.0.1:<port>/。
         val url = UrlScanner.findAuthenticatedUrl(line)
             ?: UrlScanner.findMarkerUrl(line)
+            ?: UrlScanner.findMarkerPort(line)?.let { "http://127.0.0.1:$it/" }
         // 先注册 token（若有）再判世代：旧 run 首次出现的 token 同样要脱敏
         url?.let { UrlScanner.tokenOf(it)?.let { t -> DshLogBus.registerSecret(t) } }
         if (gen != runGen) {
@@ -1190,16 +1387,45 @@ object DshRuntime {
             // 在退出前把 URL 打出来，就会把新实例的 url/port 覆盖成旧实例的，WebView 于是连到已经
             // 关掉的端口上。第三轮已把"状态跃迁先校验 instanceId"定成约定，这一处当时漏了。
             if (cur is State.Running && cur.instanceId == instance.id) {
-                val port = UrlScanner.portOf(url) ?: cur.port
-                _state.value = cur.copy(url = url, port = port)
-                _running.value = Running(cur.instanceId, port, url)
+                if (syntheticUrlWouldOverwriteToken(cur.url, url)) {
+                    // ★ BL-136（R16/fix4）：**无 token 的合成 URL 不许覆盖已带 token 的 url**。
+                    //   fix3 的③级兜底（READY port= → 合成 http://127.0.0.1:P/）在行序为
+                    //   "dsh web:（①级带token）→ READY port=（③级裸）→ READY url=（②级带token）" 时，
+                    //   中间那一步会短暂把裸 URL 写进 state（毫秒级窗口；若收集器/外跳恰在窗口内读
+                    //   state 即受害）。判据见纯函数，端口仍可取（合成值里有端口）；url 保留旧值。
+                    val portOnly = UrlScanner.portOf(url) ?: cur.port
+                    _state.value = cur.copy(port = portOnly)
+                    _running.value = Running(cur.instanceId, portOnly, cur.url)
+                } else {
+                    val port = UrlScanner.portOf(url) ?: cur.port
+                    _state.value = cur.copy(url = url, port = port)
+                    _running.value = Running(cur.instanceId, port, url)
+                    // BL-135：重复打印/迟到的带 token URL 是 pid 文件里 url 字段的刷新机会
+                    //（首次写入若发生在③级裸 URL 行，writePidFile 会把 url 记为 null；
+                    // 此处把它补成带 token 的最终值）。
+                    if (UrlScanner.tokenOf(url) != null && cur.url != url) {
+                        handle?.pid?.takeIf { it > 0 }
+                            ?.let { ProcessUtil.writePidFile(instance.id, it, port, url) }
+                        // R17：侧车文件同刷（不依赖 pid 解析成功，见 onProcessLine 就绪段的注释）
+                        ProcessUtil.writeTokenUrlFile(instance.id, url)
+                    }
+                }
             }
             return
         }
         val port = UrlScanner.portOf(url) ?: instance.port
         _state.value = State.Running(instance.id, instance.name, url, port)
         _running.value = Running(instance.id, port, url)
-        handle?.pid?.takeIf { it > 0 }?.let { ProcessUtil.writePidFile(instance.id, it, port) }
+        // ★ BL-135：把**就绪时的带 token URL** 连同 pid 一起落进 pid 文件 —— 它是"App 被杀后
+        //   认领孤儿还能拿到 token"的唯一来源（token 进程级、日志已脱敏、dsh 自身不落盘）。
+        //   仅当次解析出的 url 带 token 时才存（writePidFile 内部再校验一次；②级 READY url=
+        //   与①级 dsh web: 都带 token，③级合成裸 URL 不带 → 不会把裸 URL 存进去）。
+        handle?.pid?.takeIf { it > 0 }?.let { ProcessUtil.writePidFile(instance.id, it, port, url) }
+        // ★ R17（H1/H2/A1）：侧车文件**不依赖 pid 解析成功**（真机 pid 曾长期拿不到 -1，
+        //   那样 pid 文件的 url 字段整条写入路径都不执行）；带 token 才写、同源同值。
+        if (UrlScanner.tokenOf(url) != null) {
+            ProcessUtil.writeTokenUrlFile(instance.id, url)
+        }
         // K04：只有当实例本来就是"自动端口"（port<=0）时，才把实际端口回写进配置。
         // 旧实现无条件回写，会把用户在设置里**手工固定**的端口在"端口被占→自动避让"后永久覆盖掉。
         // 用户固定过端口（instance.port>0）就尊重它，不改他的配置（见 [shouldPersistPort]）。
@@ -1437,6 +1663,23 @@ fun activeOwnerOf(state: DshRuntime.State): String? = when (state) {
 fun canSendQuitSignal(pid: Long, cmdline: String, instanceId: String): Boolean =
     pid > 0 && instanceId.isNotBlank() && cmdline.contains("proot") && cmdline.contains(instanceId)
 
+/**
+ * R16/fix4（BL-136）：本行解析出的 [incoming] 是否属于"会覆盖已带 token url"的坏更新。
+ *
+ * 判据（纯函数，供 [DshRuntime.onProcessLine] 的"已 Running 刷新"分支用）：
+ * 当 **新值无 token**（③级 `READY port=` 合成裸 URL，或任何无 token 行）**且旧值带 token** 时，
+ * 该更新是"降级"，不许写 —— 否则 fix3 的三级解析在
+ * `dsh web:`(带token) → `READY port=`(合成裸) → `READY url=`(带token) 行序下会在中间那步
+ * 把 state 的 url 短暂降级成裸 URL（毫秒级窗口；外跳恰在窗口内取 fresh URL 即得 401 隐患）。
+ *
+ * 允许的更新：新值带 token（升级/换代）、旧值本来就是裸的（初次/同等降级无损失）、
+ * 旧值为 null（首写）。写成顶层函数而不是 private：单测 harness 不加载 android 依赖，
+ * 顶层落在 `DshRuntimeKt` 静态方法上（同 `canSendQuitSignal` / `pidFileBelongsTo` 的惯例）。
+ */
+fun syntheticUrlWouldOverwriteToken(current: String?, incoming: String): Boolean =
+    UrlScanner.tokenOf(incoming) == null &&
+        current != null && UrlScanner.tokenOf(current) != null
+
 /** 端口连通性探测（判断孤儿进程是否还活着、是否已就绪） */
 object Probe {
     fun isPortOpen(port: Int, timeoutMs: Int = 800): Boolean = runCatching {
@@ -1445,6 +1688,39 @@ object Probe {
             true
         }
     }.getOrDefault(false)
+
+    /**
+     * R17（H1/H2 根治）：探测一个带 token 的 URL 是否属于**当前活着的** dsh 进程。
+     *
+     * 返回值三态（X4 红队 A5 修正：**超时与 401 必须区分**——同为 false 会把"dsh 忙导致
+     * 的慢响应"误判成"token 已死"，丢弃一个本可用的 token）：
+     * - **3xx**（[HttpURLConnection.getResponseCode]）→ token 被受理（现行实现是 303 重定向；
+     *   取 3xx 全族，对未来换 302/307 的 dsh 版本保持兼容）＝ **live**；
+     * - **4xx/5xx**（当前实现的 401）→ token 被拒 ＝ **dead**（明确死，换下一个候选）；
+     * - **null**（连接异常/超时）→ **unknown**（既不能证活也不能证死；调用方可在"没有更好
+     *   候选"时作 tentative 使用——最坏与裸 URL 同效，最好直接救活）。
+     *
+     * 不跟随重定向、不读 body、GET 一次；探活不消耗 token（X1：token 非一次性）。
+     * 超时 2s（回环请求通常 ~10ms；认领在 IO 线程，可短暂等待）。
+     */
+    fun probeTokenUrl(tokenUrl: String, timeoutMs: Int = 2000): Int? = runCatching {
+        val conn = (java.net.URL(tokenUrl).openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = false
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            useCaches = false
+        }
+        try {
+            conn.responseCode
+        } finally {
+            runCatching { conn.disconnect() }
+        }
+    }.getOrNull()
+
+    /** R17 便捷包装：303/302…（3xx）＝ 当前活进程的有效 token（供简化调用点）。 */
+    fun tokenUrlIsLive(tokenUrl: String, timeoutMs: Int = 2000): Boolean =
+        probeTokenUrl(tokenUrl, timeoutMs)?.let { it in 300..399 } == true
 }
 
 /** 从 dsh / 脚本输出里提取本地 URL 与 token */
@@ -1456,6 +1732,14 @@ object UrlScanner {
     /** 脚本就绪标记：`[start-dsh] READY url=http://127.0.0.1:3080/?token=XXX` */
     private val MARKER_URL = Regex("""(?i)READY\s+url=(\S+)""")
 
+    /**
+     * BL-109（R15）：脚本的**兜底**就绪标记 `[start-dsh] READY port=<n>`。
+     * 触发场景：端口可达但 20s 内没捕到 token URL（dsh 换过日志格式等）——脚本报端口，
+     * 宿主以 cookie 路径接手（应用内 WebView 有持久 cookie，与 loadBestUrl 的无 token 分支同形态）。
+     * 与 [MARKER_URL] 分开解析：URL 解析器保持"只认 url="的语义，既有测试契约不破坏。
+     */
+    private val MARKER_PORT = Regex("""(?i)READY\s+port=(\d+)""")
+
     /** 只要 host:port（用于 start-dsh.sh 打印的 `listening http://127.0.0.1:8080` 之类） */
     private val ANY_URL = Regex("""https?://(?:[\w\-.]+|\d+\.\d+\.\d+\.\d+):(\d+)""")
 
@@ -1464,6 +1748,10 @@ object UrlScanner {
 
     fun findMarkerUrl(line: String): String? =
         MARKER_URL.find(line)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** 解析 `READY port=<n>`（>0 才返回；见 [MARKER_PORT]） */
+    fun findMarkerPort(line: String): Int? =
+        MARKER_PORT.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()?.takeIf { it > 0 }
 
     fun portOf(url: String): Int? = runCatching {
         val p = java.net.URI(url).port
@@ -1477,15 +1765,74 @@ object UrlScanner {
 /** 进程与 pid 文件相关的小工具（孤儿进程清理用） */
 object ProcessUtil {
 
-    data class PidMeta(val pid: Long, val port: Int)
+    /**
+     * pid 文件内容。
+     *
+     * ★ BL-135（R16/fix4）：新增 [url] 字段（默认 null，旧文件反序列化天然兼容 —— GSON 对缺字段
+     * 置 null）。这是"认领孤儿后手里没有 token"问题的修复载体：dsh 的 token 是**进程级**的，
+     * 只在该进程启动时打印过一次（`dsh web: http://127.0.0.1:P/?token=X`），App 重启认领孤儿时
+     * 无法从任何地方恢复它（日志已脱敏、dsh 自身不落盘 URL）—— 于是认领态的 state.url 只能是
+     * 裸 URL，外跳浏览器（首访无 cookie）必然 401。把**最后一个带 token 的 URL** 随 pid 文件
+     * 一起持久化（该文件的生命周期与进程一一对应：写于 fork/就绪、删于停止/退出/清理），
+     * 认领时读回即可让外跳/重载拿到有效 token。
+     *
+     * 安全口径：文件在实例私有目录（`<filesDir>/dsh/instances/<id>/dsh.pid`），与
+     * `dsh-node.pid`/实例日志同级，不新增暴露面；token 换代后旧值随文件删除/覆盖而消失。
+     */
+    data class PidMeta(val pid: Long, val port: Int, val url: String? = null)
 
-    fun writePidFile(instanceId: String, pid: Long, port: Int) {
+    fun writePidFile(instanceId: String, pid: Long, port: Int, url: String? = null) {
+        // BL-046：失败必须留痕（R12-A2-8 点名）—— 这条文件是"孤儿认领/清理"的唯一凭证，
+        // 静默失败 = 该实例的后台残留从此无人能认领/清理，事后只能靠"端口被占"反推。
+        // 控制流不变（失败照旧吞掉，不抛给调用方）。
         runCatching {
             val f = DshPaths.instancePidFile(instanceId)
             f.parentFile?.mkdirs()
-            // 不写 token/URL，只写 pid 与端口（够用且不落敏感信息）
-            JsonUtils.GSON.toJson(PidMeta(pid, port)).let { f.writeText(it) }
+            // BL-135：url 只存**带 token 的**那种（调用方保证）；裸 URL / null 一律不存
+            //（裸 URL 存进去对认领无益，反而让"文件里有没有可用的 token"这个判据变模糊）。
+            JsonUtils.GSON.toJson(PidMeta(pid, port, url?.takeIf { UrlScanner.tokenOf(it) != null }))
+                .let { f.writeText(it) }
+        }.onFailure { e ->
+            DshLogBus.appendFor(
+                instanceId,
+                "[runtime] writePidFile failed for pid=$pid port=$port: ${e.message}; " +
+                    "orphan adoption/cleanup will not be available for this instance"
+            )
         }
+    }
+
+    /**
+     * R17（H1/H2/A1 根治）：**当前进程 token URL 侧车文件的读写**（认领恢复的第二恢复源）。
+     *
+     * 写点：`onProcessLine` 抓到带 token URL 时（不依赖 pid 解析成功 —— 那是 pid 文件 url 字段
+     * 覆盖不到的真机常态）；PID 文件 url 字段仍是第一恢复源（同一次写入也照写）。
+     * 读点：`adoptOrphan` 在 pid 文件 url 与 start-log 扫描之后、回落裸 URL 之前。
+     * 删除点：stop/退出/killStale 的收尾（与 pid 文件同批）——防"死进程的旧 token 冒充"。
+     * 读到后一律经探活（三步链的最后一道闸）。
+     */
+    fun writeTokenUrlFile(instanceId: String, url: String) {
+        runCatching {
+            val f = DshPaths.instanceTokenUrlFile(instanceId)
+            f.parentFile?.mkdirs()
+            f.writeText(url)
+        }.onFailure { e ->
+            DshLogBus.appendFor(
+                instanceId,
+                "[runtime] writeTokenUrlFile failed: ${e.message}; token recovery after process " +
+                    "death will rely on the start logs only"
+            )
+        }
+    }
+
+    fun readTokenUrlFile(instanceId: String): String? {
+        val f = DshPaths.instanceTokenUrlFile(instanceId)
+        if (!f.isFile) return null
+        return runCatching { f.readText().trim() }.getOrNull()
+            ?.takeIf { it.isNotEmpty() && UrlScanner.tokenOf(it) != null }
+    }
+
+    fun deleteTokenUrlFile(instanceId: String) {
+        runCatching { DshPaths.instanceTokenUrlFile(instanceId).delete() }
     }
 
     fun readPidFile(instanceId: String): PidMeta? {
@@ -1493,6 +1840,80 @@ object ProcessUtil {
         if (!f.isFile) return null
         return runCatching { JsonUtils.fromNonNullJson(f.readText(), PidMeta::class.java) }.getOrNull()
     }
+
+    /**
+     * R17（H1/H2 根治）：从 start-dsh.sh 的**实时日志文件**里恢复带 token 的 URL 候选。
+     *
+     * 背景：`start-dsh.sh`（fix2 至今逐版同构）把 node 的原始输出写进
+     * `${TMPDIR}/dsh-start-<pid>.log`（脚本退出时删除）；`/tmp` 在宿主侧映射到
+     * `<cacheDir>/dsh/tmp`（见 ProotCommand 的 `--bind`），tmp 不可写时落到
+     * `$INSTANCE_DIR/dsh-start-<pid>.log`（宿主侧 = 实例目录）。node 打印的那一行
+     * `dsh web: http://127.0.0.1:P/?token=X` 因此**在 App 私有目录里有一份明文**——
+     * 进程活着（认领场景）时这份文件也活着。
+     *
+     * 恢复出的候选**必须再经 [Probe.tokenUrlIsLive] 探活**（303=有效）才可采信：
+     * 文件可能是上一代次残留。本函数只负责"找出全部候选、新的在前"，不负责判定。
+     *
+     * 读取有界（每个文件最多读 4MiB：token 行出现在输出前段；超大文件只读头部，
+     * 避免把长会话期间的输出整读进内存）。去重、按文件 mtime 降序（新的更可能是活代次），
+     * 总量上限 [MAX_TOKEN_URL_CANDIDATES]。
+     *
+     * @param tmpDir 宿主侧 `cacheDir/dsh/tmp`（[DshPaths.TMP_DIR]）
+     * @param instanceDir 宿主侧实例目录（[DshPaths.instanceDir]；脚本的 fallback 落点）
+     * @param expectedPort 只接受**监听端口等于它**的候选 —— `/tmp` 是跨实例共享的，
+     *   别的实例的日志文件也在那里；不过滤就可能把别的实例的 token URL 写进本实例的
+     *   state/pid 文件（串台）。认领场景"本实例的活进程"必然监听 [PidMeta.port]，
+     *   按端口过滤是精确且廉价的隔离判据。
+     */
+    fun recoverTokenUrlsFromStartLogs(tmpDir: File, instanceDir: File, expectedPort: Int): List<String> {
+        val files = mutableListOf<File>()
+        runCatching {
+            tmpDir.listFiles { f -> f.isFile && f.name.startsWith("dsh-start-") && f.name.endsWith(".log") }
+                ?.let { files += it }
+        }
+        runCatching {
+            instanceDir.listFiles { f -> f.isFile && f.name.startsWith("dsh-start-") && f.name.endsWith(".log") }
+                ?.let { files += it }
+        }
+        if (files.isEmpty()) return emptyList()
+        val out = LinkedHashSet<String>()
+        files.sortedByDescending { it.lastModified() }
+            .take(MAX_START_LOG_FILES)
+            .forEach { file ->
+                if (out.size >= MAX_TOKEN_URL_CANDIDATES) return@forEach
+                runCatching {
+                    val len = file.length()
+                    val text = if (len <= MAX_START_LOG_READ_BYTES) {
+                        file.readText()
+                    } else {
+                        // 超大：只读头部（token 行在输出前段）
+                        java.io.RandomAccessFile(file, "r").use { raf ->
+                            val buf = ByteArray(MAX_START_LOG_READ_BYTES)
+                            val n = raf.read(buf)
+                            String(buf, 0, n, Charsets.UTF_8)
+                        }
+                    }
+                    // 逐行扫（与 onProcessLine 同一解析器，口径一致）；端口过滤防跨实例串台
+                    text.lineSequence().forEach { line ->
+                        UrlScanner.findAuthenticatedUrl(line)?.let { url ->
+                            if (UrlScanner.portOf(url) == expectedPort && out.size < MAX_TOKEN_URL_CANDIDATES) {
+                                out += url
+                            }
+                        }
+                    }
+                }
+            }
+        return out.toList()
+    }
+
+    /** 恢复候选的上限（探活有超时代价，数量要有界） */
+    private const val MAX_TOKEN_URL_CANDIDATES = 6
+
+    /** 一次恢复最多扫几个日志文件（按 mtime 新的在前） */
+    private const val MAX_START_LOG_FILES = 8
+
+    /** 单文件最多读多少字节（token 行在前段；防超大文件整读） */
+    private const val MAX_START_LOG_READ_BYTES = 4 * 1024 * 1024
 
     /**
      * 删除实例的 proot pid 文件（K03 compare-and-delete）。
@@ -1592,6 +2013,14 @@ object ProcessUtil {
      * App 冷启时清理"上次进程被系统杀掉后留下的孤儿"。
      * 只清理 cmdline 里确实是我们这个实例的 proot 进程，避免误伤。
      *
+     * ★ BL-046 判定（读全调用链后定）：SIGKILL 直发**保持不变**，只补失败日志。依据：
+     * 唯一调用点是 [DshRuntime.start] fork 前的清理段，且紧下一行就是 [DshRuntime.terminateNodeProcess]
+     * —— "proot 被 SIGKILL 来不及 kill_all_tracees、rootfs 内 node 可能残留"这一已知缺口，
+     * 有 `dsh-node.pid` 这条确定性兜底（R12-A2-8 原文也据此把它定性为"兜底清理"）。升级为
+     * "SIGQUIT→等→KILL"三段式只在"node pid 文件也缺失"的边角上多救一层，代价却是给启动路径
+     * 加一段秒级等待（与 BL-047"启动别被清理拖住"的方向相反）；且该边角的后果（孤儿 node
+     * 占端口）已有端口避让（`resolveLaunchPort`）兜底，有界。故行为不动，仅加日志（R-LOG）。
+     *
      * ★ 这两行保持**全局**：它属于"pid 文件 + 孤儿进程"这套跨实例的清理机制
      *   （`removePidFileByPid` 会扫所有实例目录找同一个 pid），是启动器在整理**进程现场**，
      *   而不是某个实例自己跑出来的输出。放到实例流里会让实例页混进"别人的 pid 被忽略"这种
@@ -1607,6 +2036,11 @@ object ProcessUtil {
         if (cmd.contains("proot") && cmd.contains(instanceId)) {
             DshLogBus.append("[runtime] 清理实例 $instanceId 的残留进程 pid=${meta.pid}")
             runCatching { android.os.Process.sendSignal(meta.pid.toInt(), 9) }
+                .onFailure { e ->
+                    DshLogBus.append(
+                        "[runtime] killStale SIGKILL failed for pid=${meta.pid} (instance=$instanceId): ${e.message}"
+                    )
+                }
         } else {
             DshLogBus.append("[runtime] pid=${meta.pid} 已不属于本实例，忽略")
         }

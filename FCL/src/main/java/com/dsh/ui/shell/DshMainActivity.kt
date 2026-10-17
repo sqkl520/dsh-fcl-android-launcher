@@ -13,13 +13,15 @@ import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
-import com.mio.util.ImageUtil
-import com.tungsten.fclauncher.utils.FCLPath
-import com.tungsten.fcllibrary.component.theme.ThemeEngine
-import com.dsh.ui.DshWebViewActivity
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshMainBinding
+import com.dsh.ui.DshWebViewActivity
+import com.mio.util.AnimUtil
+import com.mio.util.AnimUtil.Companion.interpolator
+import com.mio.util.ImageUtil
+import com.tungsten.fclauncher.utils.FCLPath
 import com.tungsten.fcllibrary.component.FCLActivity
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import com.tungsten.fcllibrary.component.view.FCLMenuView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +93,21 @@ class DshMainActivity : FCLActivity(), DshShellHost {
             binding.instances, binding.versions, binding.setting
         )
         menus.forEachIndexed { index, menu ->
+            // ★ A1（R15，#8b 动画对齐起步）：点击左侧菜单项播放选中动画（旋转 360°+缩放回弹），
+            //   与 FCL 基线 MainActivity:565-571 的 playMenuAnim 逐字一致（时长沿用本主题的
+            //   animationSpeed*100ms，插值器用 OvershootInterpolator 制造回弹）。
+            //   触发时机也与基线一致：**每次点击都播**（含重复点击已选中项）。
+            //   ⚠️ R15-B 锐评证伪修正（2026-10-15）：`setSelected(true)` **不能省** ——
+            //   FCLMenuView.init() 内部的点击监听器（setSelected(true)）会被这里的
+            //   setOnClickListener **替换**掉，不补这一行则 onSelectListener 永不触发、
+            //   菜单点击不再切页（外壳唯一导航入口失效，而单测全绿看不见）。
+            //   基线两行（playMenuAnim + setSelected(true)）必须整体移植。
+            //   已选中时 setSelected(true) 是 no-op（oldSelect==true 不回调）—— 与基线的
+            //   "重复点击只播动画"行为一致。
+            menu.setOnClickListener {
+                playMenuAnim(menu)
+                menu.setSelected(true)
+            }
             menu.setOnSelectListener { selected ->
                 uiManager.switchTo(index)
                 menus.forEach { if (it !== selected && it.isSelected) it.setSelected(false) }
@@ -116,6 +133,16 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         binding.instances.setSelected(true)
         binding.title.refresh(uiManager.titleOf(0).toString())
 
+        // ★ BL-095（R15）：系统重建（切语言 recreate / 进程恢复）时恢复上次所在的 tab。
+        //   旧行为：ViewPager2 自己被 isSaveEnabled=false 关掉了状态保存（DshUIManager），
+        //   onCreate 又固定 setSelected(0)，于是"在设置里切语言"会把用户弹回实例页。
+        //   这里在 onCreate 末尾把恢复的 tab 落回去（菜单选中 + pager 位置 + 标题已由
+        //   pageSelectedListener 统一刷新）。savedInstanceState 为 null（首次创建）时保持原行为。
+        savedInstanceState?.getInt(STATE_CURRENT_TAB, -1)?.takeIf { it in menus.indices }?.let { restoreTab ->
+            menus[restoreTab].setSelected(true)
+            uiManager.switchTo(restoreTab)
+        }
+
         // ⚠️ **刻意不接** `DshMultiPageUI.setOnTempPageTitleChanged`。
         // 临时页打开/关闭时，页面会把它的标题**上报**出来，但外壳**故意不渲染**：
         // 这是 FCL 原味 —— 临时页不覆盖 tab 栏、也不改 Activity 标题。
@@ -126,11 +153,19 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         //   · EXTRA_OPEN_INSTANCE_ID → 直接压出那个实例的详情页（WebView 的「查看日志」用它）
         //   · EXTRA_OPEN_TAB        → 只切到某个 tab（不带实例上下文时用）
         // 两者同时给时**实例优先**：实例详情本身就要先切到「实例」tab，再切别的 tab 会把刚压的栈清掉。
-        val pendingInstance = intent?.getStringExtra(EXTRA_OPEN_INSTANCE_ID)
-        if (!pendingInstance.isNullOrEmpty()) {
-            openInstanceDetailAt(pendingInstance, intent?.getIntExtra(EXTRA_OPEN_INSTANCE_TAB, -1) ?: -1)
-        } else {
-            intent?.getIntExtra(EXTRA_OPEN_TAB, -1)?.takeIf { it >= 0 }?.let { openTab(it) }
+        // ★ BL-095（R15）：只在**首次创建**（savedInstanceState == null）时消费 intent。
+        //   intent 会跨越 rebuild（切语言 recreate / 配置变更）一直挂在 Activity 上 ——
+        //   旧实现无条件重放，于是"经 WebView→看日志 进来的详情页"在用户返回关闭它、
+        //   随后在设置里切语言触发 recreate 时**凭空重开**（R12-B4-4 真机反例）。
+        //   savedInstanceState != null = 这是一次"系统重建"，界面已在 ViewPager 缓存/恢复语义里，
+        //   不该再按旧意图压栈。
+        if (savedInstanceState == null) {
+            val pendingInstance = intent?.getStringExtra(EXTRA_OPEN_INSTANCE_ID)
+            if (!pendingInstance.isNullOrEmpty()) {
+                openInstanceDetailAt(pendingInstance, intent?.getIntExtra(EXTRA_OPEN_INSTANCE_TAB, -1) ?: -1)
+            } else {
+                intent?.getIntExtra(EXTRA_OPEN_TAB, -1)?.takeIf { it >= 0 }?.let { openTab(it) }
+            }
         }
 
         setupRightPanel()
@@ -212,9 +247,10 @@ class DshMainActivity : FCLActivity(), DshShellHost {
             val inst = panelInstance ?: return@setOnClickListener
             // ★ 本判据与 renderRightPanel 的 `running` 一字不差（BL-126）：文案/图标显示「停止」
             //   时点击就必须是停止 —— 两边同取 runningInstanceId()（含 Starting），不许漂移。
-            val running = DshRuntime.runningInstanceId() == inst.id
-            if (running) {
-                DshRuntime.stop()
+            // ★ BL-044（R15）：停走 stopIf —— 判据与执行之间的 TOCTOU 由它内部再校验一遍归属
+            //   （判据双保险；不满足则无操作，不会停错实例）。
+            if (DshRuntime.runningInstanceId() == inst.id) {
+                DshRuntime.stopIf(inst.id)
             } else {
                 DshLauncher.startInstance(
                     activity = this,
@@ -461,6 +497,21 @@ class DshMainActivity : FCLActivity(), DshShellHost {
      */
     private var lastRootBackAt: Long = 0L
 
+    /**
+     * A1（R15）：点击左侧菜单项时播放的选中动画（旋转 360° + 缩放回弹）。
+     *
+     * 逐字移植 FCL 基线 `MainActivity.playMenuAnim`（:565-571）：时长沿用本主题的
+     * `animationSpeed*100ms`（「动画速度」设置真实生效处之一，BL-123 家族）；
+     * 重复点击可无限触发（每次全新 ObjectAnimator，与基线一致）。
+     */
+    private fun playMenuAnim(view: FCLMenuView) {
+        val speed = ThemeEngine.getInstance().getTheme().animationSpeed
+        AnimUtil.playRotation(view, speed * 100L, 0f, 360f)
+            .interpolator(android.view.animation.OvershootInterpolator()).start()
+        AnimUtil.playScaleX(view, speed * 100L, 1f, 2f, 1f).start()
+        AnimUtil.playScaleY(view, speed * 100L, 1f, 2f, 1f).start()
+    }
+
     private fun onBackNoHistory() {
         if (DshWebViewActivity.isAnyAlive) {
             // ★ R14-V2B 新问题-2：页面复用（REORDER 保活）让 WebView 页在任务里长期存活，
@@ -494,6 +545,18 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         }
     }
 
+    /**
+     * ★ BL-095（R15）：保存当前 tab。ViewPager2 自身的状态保存被 DshUIManager 关掉了
+     * （isSaveEnabled=false），外壳层的"用户在哪个 tab"需要自己保存，否则切语言 recreate
+     * 后固定落回实例页。
+     */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (::uiManager.isInitialized) {
+            outState.putInt(STATE_CURRENT_TAB, uiManager.currentPosition)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (shouldPlayVideo() && !binding.videoView.isPlaying) {
@@ -515,6 +578,9 @@ class DshMainActivity : FCLActivity(), DshShellHost {
     companion object {
         /** 详情页用它请求外壳打开指定 tab（见 [DshShellHost] 的 TAB_* 常量） */
         const val EXTRA_OPEN_TAB = "dsh_open_tab"
+
+        /** BL-095：savedInstanceState 里保存的"当前 tab"（ViewPager2 自身状态被关闭，外壳自存） */
+        private const val STATE_CURRENT_TAB = "dsh_current_tab"
 
         /** R14-V2B 新问题-2：首页「再按一次返回退出」的窗口（毫秒） */
         private const val ROOT_BACK_EXIT_WINDOW_MS = 2000L

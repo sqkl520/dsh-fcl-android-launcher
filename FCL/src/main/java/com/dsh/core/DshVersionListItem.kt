@@ -46,11 +46,13 @@ data class DshVersionListItem(
         }
 
         /** KB 档改一位小数（BL-031③）：整数除法 1500B 会显示成"1 KB"，截断近半。 */
+        // ★ BL-034（R15 编排收口）：显式钉 Locale.US —— 默认 locale 下小数点是逗号（1,5 MB），
+        //   体积数字会被本地化得不可读/不可复制。与 DshPaths.formatSize 同一修法。
         private fun formatSize(bytes: Long): String = when {
             bytes <= 0 -> "—"
             bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
-            else -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
+            bytes < 1024 * 1024 -> "%.1f KB".format(java.util.Locale.US, bytes / 1024.0)
+            else -> "%.1f MB".format(java.util.Locale.US, bytes / 1024.0 / 1024.0)
         }
     }
 }

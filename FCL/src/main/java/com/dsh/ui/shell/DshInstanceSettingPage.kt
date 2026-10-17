@@ -460,7 +460,26 @@ class DshInstanceSettingPage(
             .show()
     }
 
+    /**
+     * 运行时自检（BL-096，R15 补防重）。
+     *
+     * 现状（修前）：只弹一次"正在自检…"toast，随后最长 [DshBootstrap] 的 60s 超时期间无进度、
+     * 按钮不禁用；连点会串多个协程、叠多个结果对话框。
+     * 修后：一个 `verifying` 标志守卫——进行中再点直接忽略（并复用既有"正在自检"文案给反馈），
+     * 结果对话框弹出后清标志。标志只在主线程读写（本页 UI 协程都在 Main）。
+     *
+     * 为什么不做"按钮置灰/行忙态"：FCL 控件无 disabled 视觉（BL-020 家族），置灰反而回到
+     * "看着能点、点了没反应"；用 toast 明确回应更诚实，且零布局改动。
+     */
+    private var verifying = false
+
     private fun verifyRuntime() {
+        if (verifying) {
+            // 进行中：明确告知而不是静默吞掉（用户连点说明在等反馈）
+            toast(context.getString(R.string.dsh_verify_running))
+            return
+        }
+        verifying = true
         toast(context.getString(R.string.dsh_verify_running))
         scope.launch {
             val report = withContext(Dispatchers.IO) { DshBootstrap.verify(context) }
@@ -473,6 +492,7 @@ class DshInstanceSettingPage(
                 .setNegativeButton(context.getString(R.string.dialog_positive), null)
                 .create()
                 .show()
+            verifying = false
         }
     }
 

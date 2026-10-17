@@ -157,12 +157,12 @@ class W3CTest {
             val m = "w3c-fail-marker-${System.nanoTime()}"
             DshLogBus.append(m)
 
-            // 3 次 flush = 该文件的 3 次尝试（K09 尾补排会把失败批次放回 pendingForFile，
-            // 每次 flush 先清 pendingForFile 再写，失败即回队 —— 所以每次 flushNow 都是一次尝试）
-            DshLogBus.flushNow() // attempt 1：告警 "kept for retry" + 回队
-            DshLogBus.flushNow() // attempt 2：静默回队
-            DshLogBus.flushNow() // attempt 3：到达上限 → "giving up" + 丢弃批次
+            // 3 次尝试（R15-A/BL-079 修正后：失败批从队首重入 FIFO，同一 drain 单内立即重试，
+            // 上限 FILE_WRITE_FAIL_LIMIT=3 —— 所以**第一次** flushNow 就完成了 3 次尝试；
+            // 后两次 flushNow 只用于观察状态收敛，不再触发新尝试）
+            DshLogBus.flushNow() // attempt 1→3：kept for retry → … → giving up + 丢弃批次
             DshLogBus.flushNow() // 只发布快照，不再触碰文件
+            DshLogBus.flushNow() // 同上（多调一次确认无副作用）
 
             val err = DshLogBus.lastFileWriteError
             assertNotNull("落盘失败必须被记录（BL-075 核心）", err)

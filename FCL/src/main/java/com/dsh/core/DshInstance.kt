@@ -8,43 +8,58 @@ import com.google.gson.annotations.SerializedName
  *
  * 用 kotlinx.serialization 还是 Gson？FCL 两者都在用；这里选 Gson，与
  * [com.tungsten.fcl.setting.Profile] 一致，且 [DshRegistry] 已用 Gson 注解，统一技术栈。
+ *
+ * ## 字段可变性约定（Round 15 批 B，BL-100 —— 审计注释）
+ * 本类的 `var` 字段（name / dshVersion / profile / port / model / updatedAt / state / lastError）
+ * 对**外部只读**：持有 [DshInstances.instances] 里实例对象的调用方**不得**直接改写字段。
+ * 直接改写既不落盘、也不发射 StateFlow（收集者看不到），重启即丢 —— 这正是审查发现 A4-4 的
+ * 静默数据丢失面。**一切修改必须经 [DshInstances]**（update / updateConfig / markState /
+ * rename 等 —— 内部统一"copy 后入表"并以复制品发射）。
+ *
+ * 为什么字段暂时是 `var` 而不是 `val`：
+ * 1. Gson 反序列化需要（`gson.fromJson(element, DshInstance::class.java)`）；
+ * 2. [DshInstances.parseManifest] 的字段级回填在**尚未发布**的本地对象上做防御性赋值
+ *    （state/profile/model 防 null；那些对象这时没有任何外部持有者，不适用上述约定）。
+ * 把整个类收成不可变是后续批次（批 C）的事；本轮先以本注释钉死"谁能写、写走哪条路"。
  */
 data class DshInstance(
     /** 稳定唯一 id（生成后不变，用作目录名），如 "inst-1700000000000-3-7f2a" */
     val id: String,
 
-    /** 用户可见名称，可改 */
+    /** 用户可见名称，可改（外部只读，写经 DshInstances） */
     var name: String,
 
-    /** 已安装的 dsh 版本号，如 "0.1.5-rc.2"；未安装完成时为 null */
+    /** 已安装的 dsh 版本号，如 "0.1.5-rc.2"；未安装完成时为 null（外部只读，写经 DshInstances） */
     @SerializedName("dshVersion")
     var dshVersion: String? = null,
 
-    /** 启动用的 profile：web(带UI) / headless(一次性)。默认 web。 */
+    /** 启动用的 profile：web(带UI) / headless(一次性)。默认 web。（外部只读，写经 DshInstances） */
     var profile: String = "web",
 
     /**
      * Web UI 监听端口。
      * **改进点**：0 表示"由系统分配"（dsh 支持 `--port 0`，会打印真实端口，[DshRuntime] 会回读并写回本字段）。
      * 新建实例默认 0，彻底避免"自选端口被别的 App 占了"导致的启动失败。
+     *
+     * 外部只读，写经 DshInstances。
      */
     var port: Int = 0,
 
-    /** 默认模型 id（deepseek-flash / deepseek-v4-pro） */
+    /** 默认模型 id（deepseek-flash / deepseek-v4-pro）（外部只读，写经 DshInstances） */
     var model: String = MODEL_FLASH,
 
     /** 创建时间戳（排序用） */
     val createdAt: Long = System.currentTimeMillis(),
 
-    /** 最近一次变更时间戳 */
+    /** 最近一次变更时间戳（外部只读，写经 DshInstances） */
     var updatedAt: Long = System.currentTimeMillis(),
 
-    /** 安装状态 */
+    /** 安装状态（外部只读，写经 DshInstances） */
     var state: State = State.NOT_INSTALLED,
 
     /**
      * 最近一次失败原因（安装/启动），用于在列表里直接给出可操作的提示，
-     * 而不是只丢一句"详见日志"。
+     * 而不是只丢一句"详见日志"。（外部只读，写经 DshInstances）
      */
     var lastError: String? = null
 ) {

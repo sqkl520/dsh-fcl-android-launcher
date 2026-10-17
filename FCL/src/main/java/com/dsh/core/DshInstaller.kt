@@ -129,6 +129,38 @@ class DshInstaller(
     /** 单飞闸门：把"查是否在跑 + 登记"合成一次原子操作 */
     private val gate = SingleFlight()
 
+    /**
+     * BL-043②：把"闸门 + [running] 登记 + 实例终态写"的所有权变更收进同一把锁的临界区。
+     *
+     * 四处临界区（缺一不可）：[install] 的"占闸 + 登记 + 启动"、任务体终态裁决
+     * （[resolveInstallOutcome]/[resolveInstallFailure]，含其中的状态写入）、任务体 finally 的
+     * "摘登记 + 判归属 + 放闸 + flush"、[cancel] 的"守卫复核 + 放闸 + 清状态"。没有它时，
+     * 被取消的旧任务 finally 落在新任务"占闸成功、尚未登记"的窗口里会误摘登记并误放**新**闸门
+     * （K14 活体路径），且 cancel 与终态裁决可以互相覆盖（刚 READY 就被标回 NOT_INSTALLED）。
+     * 完整推演见 [install] 与 [cancel] 的方法注释。
+     *
+     * 锁内只有同步的内存操作与小文件读（终态裁决判"已装完"时读一个 package.json，亚毫秒级），
+     * 不等待 IO、不等待任何协程（state 写与 [DshLogBus] 的锁都是无环的叶子锁）—— 不会死锁，
+     * 也不会把用户操作阻塞到可感知的量级。
+     */
+    private val ownershipLock = Any()
+
+    /**
+     * BL-053 节流状态，按实例分开（同时装两个实例时，一个的输出高峰不该压掉另一个的发射窗口）。
+     *
+     * · [lastLogEmitMs]：上次 [Progress.Log] 发射时刻（毫秒；0/缺省 = 尚未发射过）。
+     * · [pendingLogLines]：节流抑制期的尾部行缓冲（有界，上限 [PENDING_LOG_MAX_LINES]，
+     *   超出的从旧到新丢 —— 采样语义：只保"最后几行"）。收尾 [flushPendingInstallLog]
+     *   补发，保证安装结尾的几行不丢。
+     *
+     * 线程约定：onLine 正常情况下与 runInstall 同线程（proot 输出在协程线程上同步读），
+     * 例外是看门狗线程的超时行（单次事件）。deque 自带的 synchronized 防御那一手；
+     * "同一行只进一条流"由 [DshLogBus.appendFor]（全量通道、永不节流）保证，
+     * 本节流只影响 [Progress.Log] 这个 UI 采样通道。
+     */
+    private val lastLogEmitMs = ConcurrentHashMap<String, Long>()
+    private val pendingLogLines = ConcurrentHashMap<String, ArrayDeque<String>>()
+
     /** 已被用户取消的实例：取消后 proot 会以非 0 退出，不能被误报成"安装失败(BROKEN)" */
     private val cancelled = ConcurrentHashMap.newKeySet<String>()
 
@@ -273,89 +305,106 @@ class DshInstaller(
     /**
      * 安装指定版本到实例。会把实例状态置为 INSTALLING，成功后置 READY 并记录**真实**版本。
      *
+     * ## BL-043②：为什么"占闸 + 登记 + 启动"必须是一段临界区
+     *
+     * 修复前的三行（占闸 → 以后某个时刻登记 → start）与任务体 finally 的
+     * "摘登记 → 放闸" 交错时，存在一条真正能把单飞打穿的路径（K14 活体路径）：
+     *
+     * ```
+     * 旧任务 A（被取消，阻塞在 proot 上还没跑到 finally）
+     * ── cancel() 放闸（让用户可以马上重装）──►
+     * 新任务 B：gate.tryAcquire 成功 ………（窗口）……… running[id] = jobB
+     *                    ▲
+     * 旧任务 A 的 finally 恰好落在这里：
+     *   running.remove(id, jobA) —— 此刻表里还是 jobA（B 尚未登记）→ 误判"仍归我管"
+     *   → gate.release(id) 放掉的是 **B 刚占到的闸门**
+     * ```
+     *
+     * 之后任意第三方安装请求都能再次 tryAcquire 成功 —— 两个 npm 同时写同一个
+     * node_modules（正是单飞要拦的事）。把四处所有权变更（此处、任务体终态裁决与 finally、
+     * [cancel]）收进同一个 [ownershipLock] 临界区后，"B 的占闸与登记"和"A 的摘登记与放闸"
+     * 不可能交错：要么 A 先（放掉的是自己那口闸、B 之后正常拿新的），要么 B 先（A 的 remove
+     * 失败、不碰任何新状态），没有第三种结局。
+     *
      * @return true 表示本次已受理；false 表示该实例已有安装在跑（会被忽略）
      */
     fun install(instance: DshInstance, version: String): Boolean {
-        if (!gate.tryAcquire(instance.id)) {
-            // 实例级：说的是"这个实例已有安装在跑"，用户点开它的日志页该看到这次请求为什么被忽略
-            DshLogBus.appendFor(instance.id, "[install] ${instance.name} 已有安装任务在进行，忽略重复请求")
-            return false
+        synchronized(ownershipLock) {
+            if (!gate.tryAcquire(instance.id)) {
+                // 实例级：说的是"这个实例已有安装在跑"，用户点开它的日志页该看到这次请求为什么被忽略
+                DshLogBus.appendFor(instance.id, "[install] ${instance.name} 已有安装任务在进行，忽略重复请求")
+                return false
+            }
+            errorSummaries.remove(instance.id)
+            errorTails.remove(instance.id)
+            // BL-053：节流状态与共享状态同一所有权规则 —— 新安装从零开始。旧任务 drain 中
+            // 的迟到行已被 [onInstallLine] 的归属门拦住，不会再写这两张表（见字段注释）。
+            pendingLogLines.remove(instance.id)
+            lastLogEmitMs.remove(instance.id)
+            // F2-8（BL-048）：目标版本只存在于本次请求里 —— 存下来供 [fail] 写进 Progress.Failed
+            // （新建实例的 dshVersion 快照为 null，界面收不到版本就清不掉「安装中」标记）。
+            // 与其它共享状态同一套所有权规则：入口 put，任务体 finally 里"仍归我管"才 remove。
+            installVersions[instance.id] = version
+            DshInstances.markState(instance.id, DshInstance.State.INSTALLING, version = version, error = null)
+            updateStatus(
+                InstallStatus(instance.id, version, DshUiText.getString(com.dsh.fcl.androidlauncher.R.string.dsh_stage_prepare, "install failed"))
+            )
+            // start = LAZY：先把 job 登记进 running 再 start()，确保"任务体"不可能先跑完、
+            // 再被这里把已经结束的 job 写回表里（那会让 isInstalling 永远为真）。
+            // 注意：登记与 start 都必须和上面的占闸留在**同一个**临界区里（理由见方法头）。
+            val job = DshAppScope.scope.launch(start = CoroutineStart.LAZY) {
+                installJobBody(instance, version, coroutineContext[Job])
+            }
+            running[instance.id] = job
+            // ★ cancelled 标记清除放在**登记之后**（顺序不可调）：被取消旧任务的 drain 尾行
+            //   在 [onInstallLine] 的归属门里读"running 还是不是我 + 有没有取消标记"，
+            //   而那个检查不开锁 —— 若这里提前清掉 cancelled，"cancelled 已清、running 还指着
+            //   旧任务"的区间里旧尾行会被误当成活跃任务写共享状态（幽灵条目）。放在登记之后：
+            //   该区间里 running 已指向新任务 → 归属门恒假；登记之前 cancelled 仍在 → 归属门
+            //   也恒假。两个区间拼起来无缝隙。
+            cancelled.remove(instance.id)
+            job.start()
         }
-        cancelled.remove(instance.id)
-        errorSummaries.remove(instance.id)
-        errorTails.remove(instance.id)
-        // F2-8（BL-048）：目标版本只存在于本次请求里 —— 存下来供 [fail] 写进 Progress.Failed
-        // （新建实例的 dshVersion 快照为 null，界面收不到版本就清不掉「安装中」标记）。
-        // 与其它共享状态同一套所有权规则：入口 put，任务体 finally 里"仍归我管"才 remove。
-        installVersions[instance.id] = version
-        DshInstances.markState(instance.id, DshInstance.State.INSTALLING, version = version, error = null)
-        updateStatus(
-            InstallStatus(instance.id, version, DshUiText.getString(com.dsh.fcl.androidlauncher.R.string.dsh_stage_prepare, "install failed"))
-        )
-        // start = LAZY：先把 job 登记进 running 再 start()，确保"任务体"不可能先跑完、
-        // 再被这里把已经结束的 job 写回表里（那会让 isInstalling 永远为真）。
-        val job = DshAppScope.scope.launch(start = CoroutineStart.LAZY) {
-            // 本次安装的"身份"：running[instanceId] 里登记的也是它，用来判断共享状态是否还归我管
-            val myJob = coroutineContext[Job]
-            try {
-                val ok = runInstall(instance, version)
-                if (!isCurrentOwner(instance.id, myJob)) {
-                    // 本次任务已经被"取消后重新发起的那次安装"接管：再写状态就是改别人的数据
-                    // （旧实现会把新安装的实例标成 BROKEN、把进度写成失败，界面显示"安装失败"而其实在装）
-                    // 实例级：讲的是**这个实例**的这次安装的结局（被后一次接管），属于它的日志
-                    DshLogBus.appendFor(instance.id, "[install] ${instance.name} 本次安装已被更新的一次安装接管，忽略本次结果")
-                    return@launch
-                }
-                if (cancelled.contains(instance.id)) {
-                    // 用户取消了：不能用 npm 的失败输出把实例标成 BROKEN。
-                    // 但如果文件其实已经装完整（取消来得太晚），按磁盘事实标记 READY，
-                    // 否则状态会卡在"安装中"直到下次启动 App 才被 repair() 纠正。
-                    val resolved = readInstalledVersion(instance)
-                    if (resolved != null) {
-                        DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
-                        DshLogBus.appendFor(instance.id, "[install] ${instance.name} 取消时其实已装完：dsh $resolved")
-                        // ★ 这里再报一条 DONE，而不是让"已取消"当成最终结论：
-                        //   取消那一刻报的 CANCELLED 描述的是**用户动作**，而磁盘事实是"它其实装完了"。
-                        //   两条都是真事，按事件记录（[DshTasks.finished] 是事件列表，不是状态表），
-                        //   最新的在前，用户先看到的是真正的结局；若只留"已取消"，实例卡片显示
-                        //   READY、任务区显示"已取消"，两处对不上反而更费解。
-                        DshTasks.report(doneTask(instance, resolved))
-                    } else {
-                        // 取消的"常态"路径：CANCELLED 已经由 [cancel] 在用户点击那一刻报过了，
-                        // 这里**不再重复上报** —— 重复报只会让任务区为同一次取消出现两行一样的"已取消"。
-                        DshLogBus.appendFor(instance.id, "[install] ${instance.name} 的安装已取消，忽略本次结果")
-                    }
-                } else if (ok) {
-                    val resolved = readInstalledVersion(instance)
-                    if (resolved == null) {
-                        // 退出码 0 但装不完整：明确报损坏，别让用户以为能用了
-                        fail(instance, DshUiText.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_incomplete, "install failed"))
-                    } else {
-                        DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
-                        _progress.value = Progress.Done(resolved)
-                        finishStatus(instance.id)
-                        // 实例级：装完是这个实例状态跃迁的关键一行（"什么时候能启动了"）
-                        DshLogBus.appendFor(instance.id, "[install] ${instance.name} 安装完成：dsh $resolved")
-                        // 终态上报：任务区要能看到"安装完成 dsh <版本>"，而不是行一消失什么都不剩
-                        DshTasks.report(doneTask(instance, resolved))
-                    }
-                } else {
-                    fail(instance, errorSummary(instance.id))
-                }
-            } catch (t: Throwable) {
-                if (!isCurrentOwner(instance.id, myJob)) {
-                    DshLogBus.appendFor(instance.id, "[install] ${instance.name} 本次安装已被接管，忽略异常：${t.message ?: t}")
-                } else if (!cancelled.contains(instance.id)) {
-                    fail(instance, t.message ?: t.toString())
-                } else {
-                    DshLogBus.appendFor(instance.id, "[install] ${instance.name} 的安装已取消（${t.message ?: t}）")
-                }
-            } finally {
-                // ★ 只有"登记表里还是我"时才清理共享状态。
-                // cancel() 会立刻放掉单飞闸门（让用户可以马上重装），新的安装随后接管 running[instanceId]；
-                // 旧任务若仍然无条件 release / remove，就会把**新任务**的闸门放掉（于是能再起一个 npm，
-                // 两个进程同时写同一个 node_modules），并抹掉新任务的错误摘要与取消标记。
+        return true
+    }
+
+    /**
+     * 安装任务体的协程主体（从 [install] 抽出，便于把整个"占闸 + 登记"动作收进临界区，
+     * 见 [install] 的 BL-043② 说明）。行为与原内联 lambda 逐字一致。
+     *
+     * ★ BL-043①/②：**终态裁决（[resolveInstallOutcome]/[resolveInstallFailure]）与 finally 的
+     *   "摘登记 + 放闸"全部持 [ownershipLock]**，与 [cancel] 的"守卫复核 + 清状态 + 放闸"、
+     *   [install] 的"占闸 + 登记"全序化。这是"cancel 不能把刚 READY 的实例标回 NOT_INSTALLED"
+     *   的最后一段拼图：只靠守卫读两遍还不够 —— 守卫通过之后，本任务恰好写完 READY 再被
+     *   cancel 的 NOT_INSTALLED 覆盖，仍会丢结果。同锁后两种顺序都是确定的：
+     *   要么裁决先落（cancel 复核时 statuses 已清 → no-op），要么 cancel 先（裁决看到
+     *   cancelled 标记 → 转"其实已装完/已取消"分支），没有"互相覆盖"的第三种结局。
+     *   锁内的磁盘读（[readInstalledVersion] 小文件）亚毫秒级，对 cancel 点击无可感影响；
+     *   锁序上 ownershipLock 永远最外层（内层只有 DshLogBus/StateFlow 叶子锁，无环）。
+     *
+     * @param myJob 本次任务的 Job 身份（登记表 [running] 里登记的也是它），
+     *              用来判断共享状态是否还归本次任务管（[isCurrentOwner]）
+     */
+    private suspend fun installJobBody(instance: DshInstance, version: String, myJob: Job?) {
+        try {
+            val ok = runInstall(instance, version, myJob)
+            synchronized(ownershipLock) { resolveInstallOutcome(instance, version, myJob, ok) }
+        } catch (t: Throwable) {
+            synchronized(ownershipLock) { resolveInstallFailure(instance, myJob, t) }
+        } finally {
+            // ★ 只有"登记表里还是我"时才清理共享状态。
+            // cancel() 会立刻放掉单飞闸门（让用户可以马上重装），新的安装随后接管 running[instanceId]；
+            // 旧任务若仍然无条件 release / remove，就会把**新任务**的闸门放掉（于是能再起一个 npm，
+            // 两个进程同时写同一个 node_modules），并抹掉新任务的错误摘要与取消标记。
+            // ★ BL-043②：这段"摘登记 + 判归属 + 放闸"与 [install] 的"占闸 + 登记"共用
+            //   [ownershipLock] 临界区 —— 否则两者之间那条"B 已占闸、尚未登记"的窗口里，
+            //   这里的 remove(id, jobA) 会误判"仍归我管"并把 B 的闸门放掉（完整推演见 [install]）。
+            synchronized(ownershipLock) {
                 if (running.remove(instance.id, myJob)) {
+                    // BL-053：收尾 flush —— 节流期间被抑制的尾行在这里补发（"最后几行不丢"）。
+                    // 放在"仍归我管"分支里：被接管时 pending 留给新任务的收尾统一 flush，
+                    // 避免旧任务把新任务缓冲里的行一起清掉（跨任务少几条采样，全量日志不受影响）。
+                    flushPendingInstallLog(instance.id)
                     cancelled.remove(instance.id)
                     errorSummaries.remove(instance.id)
                     errorTails.remove(instance.id)
@@ -364,19 +413,111 @@ class DshInstaller(
                 }
             }
         }
-        running[instance.id] = job
-        job.start()
-        return true
+    }
+
+    /**
+     * 终态裁决（成功后写 READY / 取消后按磁盘事实处置 / 失败走 [fail]）。
+     *
+     * 由 [installJobBody] 在 [ownershipLock] **临界区内**调用（理由见 [installJobBody] 头注释：
+     * 与 [cancel] 的状态写互斥，"刚 READY 就被标回 NOT_INSTALLED"在此彻底关闭）。
+     * 逻辑与抽出前的内联版本逐字一致，只多了一处：取消且已装完的分支补 [finishStatus] ——
+     * 取消后的迟到 STAGE 行可能把条目加回，不补清尾会永远留一行"安装中"投影。
+     */
+    private fun resolveInstallOutcome(instance: DshInstance, version: String, myJob: Job?, ok: Boolean) {
+        if (!isCurrentOwner(instance.id, myJob)) {
+            // 本次任务已经被"取消后重新发起的那次安装"接管：再写状态就是改别人的数据
+            // （旧实现会把新安装的实例标成 BROKEN、把进度写成失败，界面显示"安装失败"而其实在装）
+            // 实例级：讲的是**这个实例**的这次安装的结局（被后一次接管），属于它的日志
+            DshLogBus.appendFor(instance.id, "[install] ${instance.name} 本次安装已被更新的一次安装接管，忽略本次结果")
+            return
+        }
+        if (cancelled.contains(instance.id)) {
+            // 用户取消了：不能用 npm 的失败输出把实例标成 BROKEN。
+            // 但如果文件其实已经装完整（取消来得太晚），按磁盘事实标记 READY，
+            // 否则状态会卡在"安装中"直到下次启动 App 才被 repair() 纠正。
+            // ★ BL-054：判定改为 [readInstalledVersion] 的完整判据（package.json + lib/bin.js
+            //   + 与本次请求版本相符）——"已装完"必须是"装的是要的那个版本且能启动"。
+            val resolved = readInstalledVersion(instance, version)
+            if (resolved != null) {
+                DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
+                finishStatus(instance.id)
+                DshLogBus.appendFor(instance.id, "[install] ${instance.name} 取消时其实已装完：dsh $resolved")
+                // ★ 这里再报一条 DONE，而不是让"已取消"当成最终结论：
+                //   取消那一刻报的 CANCELLED 描述的是**用户动作**，而磁盘事实是"它其实装完了"。
+                //   两条都是真事，按事件记录（[DshTasks.finished] 是事件列表，不是状态表），
+                //   最新的在前，用户先看到的是真正的结局；若只留"已取消"，实例卡片显示
+                //   READY、任务区显示"已取消"，两处对不上反而更费解。
+                DshTasks.report(doneTask(instance, resolved))
+            } else {
+                // 取消的"常态"路径：CANCELLED 已经由 [cancel] 在用户点击那一刻报过了，
+                // 这里**不再重复上报** —— 重复报只会让任务区为同一次取消出现两行一样的"已取消"。
+                // ★ 清尾（BL-043① 守卫判据的保真配套；同 BL-104 的"尾行重写 statuses"面）：
+                //   取消之后、proot 死透之前到达的迟到 STAGE 行会把刚清掉的条目加回来
+                //   （[onInstallLine] 的归属门已拦一道，这里是终态兜底）—— 不清掉的话任务行投影
+                //   会永远画着一行"安装中"，也是"该实例还有安装任务在跑"这一守卫判据的失真源。
+                finishStatus(instance.id)
+                DshLogBus.appendFor(instance.id, "[install] ${instance.name} 的安装已取消，忽略本次结果")
+            }
+        } else if (ok) {
+            val resolved = readInstalledVersion(instance, version)
+            if (resolved == null) {
+                // 退出码 0 但装不完整：明确报损坏，别让用户以为能用了
+                fail(instance, DshUiText.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_incomplete, "install failed"))
+            } else {
+                DshInstances.markState(instance.id, DshInstance.State.READY, resolved)
+                _progress.value = Progress.Done(resolved)
+                finishStatus(instance.id)
+                // 实例级：装完是这个实例状态跃迁的关键一行（"什么时候能启动了"）
+                DshLogBus.appendFor(instance.id, "[install] ${instance.name} 安装完成：dsh $resolved")
+                // 终态上报：任务区要能看到"安装完成 dsh <版本>"，而不是行一消失什么都不剩
+                DshTasks.report(doneTask(instance, resolved))
+            }
+        } else {
+            fail(instance, errorSummary(instance.id))
+        }
+    }
+
+    /** [resolveInstallOutcome] 的异常孪生：runInstall 抛出时的终态裁决（同样在 [ownershipLock] 内）。 */
+    private fun resolveInstallFailure(instance: DshInstance, myJob: Job?, t: Throwable) {
+        if (!isCurrentOwner(instance.id, myJob)) {
+            DshLogBus.appendFor(instance.id, "[install] ${instance.name} 本次安装已被接管，忽略异常：${t.message ?: t}")
+        } else if (!cancelled.contains(instance.id)) {
+            fail(instance, t.message ?: t.toString())
+        } else {
+            DshLogBus.appendFor(instance.id, "[install] ${instance.name} 的安装已取消（${t.message ?: t}）")
+        }
     }
 
     /**
      * 取消某实例的安装（界面上的"取消"）：取消协程 + 杀掉**本实例**正在跑的 proot 子进程。
      *
+     * ★ BL-043① **入口守卫**：任务行是"投影"—— [DshTasks.tasks] 每帧从 [statuses] 重算，
+     *   而任务到达终态后投影要等下一轮收集才摘行，中间隔着若干帧。那几帧里用户点下的"取消"
+     *   会落到一个**已经没有在跑的安装任务**的实例上：旧代码无条件把它标回 NOT_INSTALLED，
+     *   把刚写下的 READY（或 BROKEN 的失败展示）抹掉。
+     *
+     *   判据（[canCancelInstall] 纯函数）两条都要：
+     *   1. [statuses] 里该实例仍有进行中条目 —— 它就是任务行投影的数据源，"投影上还画着
+     *      一行可取消的任务"等价于"statuses 里还在"；
+     *   2. [running] 里仍有登记的任务 —— 防"statuses 幽灵条目"（取消清空后、proot 收尾前
+     *      迟到的 STAGE 行会重新 updateStatus 加回一条；终态各分支已补 [finishStatus] 清尾，
+     *      此条为双保险，也覆盖"条目在但任务早已不在"的一切未知路径）。
+     *   gate 不做判据：cancel 会**立刻**放闸（让用户能马上重装），"已取消、旧任务还在收尾"
+     *   的窗口里 gate 已经为空。
+     *
+     *   守卫读两遍（入口一次、[ownershipLock] 内复核一次）：任务体终态裁决同样持锁
+     *   （见 [installJobBody]），复核通过后"statuses 在 + 任务在登记表"这份事实在锁内
+     *   不会再被任务体改成相反 —— 不存在"守卫通过后被终态抢先"的窗口。
+     *
      * ★ 注意：这里**不**把 [running] 里的登记删掉 —— 登记同时代表"共享状态（错误摘要、闸门）
      * 当前归哪个任务管"。让它自己在 finally 里收尾（[isCurrentOwner] 判断），
      * 既保留"取消时其实已装完 → 标 READY"的判定，也避免旧任务的收尾动作伤到下一次安装。
      *
-     * ★ **本轮补上的终态上报**（治"取消后界面还显示安装中"）：
+     * ★ BL-043②：下面"标记 + 取消 job + 放闸 + 杀进程 + 清状态"整段收进 [ownershipLock] ——
+     *   改的正是"闸门 + 登记 + 实例终态"的所有权状态；与 [install] 的"占闸 + 登记"、
+     *   任务体终态裁决/finally 共用同一临界区后，所有写者全序化（完整推演见 [install]）。
+     *
+     * ★ **上一轮补上的终态上报**（治"取消后界面还显示安装中"）：
      *   1. 目标版本要在**清 [statuses] 之前**读出来 —— 那一步正是把版本信息抹掉的那一步，
      *      读晚了就只能发一条 `version == null` 的取消事件，界面无从知道该清哪个版本的标记。
      *   2. 发 [Progress.Cancelled]：订阅 [progress] 的界面（下载页）等的是**事件**，
@@ -385,18 +526,42 @@ class DshInstaller(
      *      没有它，任务行在取消的瞬间直接消失（进行中列表是每帧重算的投影），用户看不出发生了什么。
      */
     fun cancel(instanceId: String) {
-        // 先取版本：下面清 statuses 之后就再也拿不到了（见方法注释第 1 点）
-        val version = _statuses.value[instanceId]?.version
+        // BL-043①：入口守卫（判据与两遍读的理由见方法注释）。
+        val status = _statuses.value[instanceId]
+        if (!canCancelInstall(hasRunningInstall(status), hasLiveInstallTask(instanceId))) {
+            logIgnoredCancel(instanceId, "no install task in progress")
+            return
+        }
         val error = DshUiText.getString(com.dsh.fcl.androidlauncher.R.string.dsh_install_cancelled, "install failed")
-        // 先打标记再取消：任务体是阻塞在 proot 上的（协程取消打断不了阻塞调用），
-        // 它会等到进程被杀、runInstall 返回非 0 之后才继续；如果没有这个标记，
-        // 用户点"取消"会看到实例变成 BROKEN（"安装失败"）而不是"已取消"。
-        cancelled.add(instanceId)
-        running[instanceId]?.cancel()
-        gate.release(instanceId)
-        killActive(instanceId)
-        _statuses.update { it - instanceId }
-        DshInstances.markState(instanceId, DshInstance.State.NOT_INSTALLED, error = error)
+        // 版本在**锁内复核后的 status** 上现读（见方法注释第 1 点）——从入口读到的那份可能已在
+        // "取消后秒重装"的接管中过期（读到 V1、取消的却是 V2 的任务，终态事件就会带错版本，
+        // 下载页清不掉 V2 的「安装中」标记）。锁内读取则与 was-cancelled 的任务版本一致。
+        var version: String? = null
+        var cancelledNow = false
+        synchronized(ownershipLock) {
+            // 锁内复核：挡"守卫通过后、动手前任务体恰好完成终态裁决"的最后一帧
+            val current = _statuses.value[instanceId]
+            if (canCancelInstall(hasRunningInstall(current), hasLiveInstallTask(instanceId))) {
+                version = current?.version
+                // 先打标记再取消：任务体是阻塞在 proot 上的（协程取消打断不了阻塞调用），
+                // 它会等到进程被杀、runInstall 返回非 0 之后才继续；如果没有这个标记，
+                // 用户点"取消"会看到实例变成 BROKEN（"安装失败"）而不是"已取消"。
+                cancelled.add(instanceId)
+                running[instanceId]?.cancel()
+                gate.release(instanceId)
+                // 杀进程与状态清理也留在锁内：release 之后新安装随时可能占闸登记（若从中
+                // 断开，这里的 killActive/清 statuses 会误伤新任务或抹掉它的条目）。
+                killActive(instanceId)
+                _statuses.update { it - instanceId }
+                DshInstances.markState(instanceId, DshInstance.State.NOT_INSTALLED, error = error)
+                cancelledNow = true
+            }
+        }
+        if (!cancelledNow) {
+            // 与入口守卫同一口径：写英文诊断、不碰任何状态（终态裁决已经落地，本次点击即迟到帧）
+            logIgnoredCancel(instanceId, "install already finished")
+            return
+        }
         _progress.value = Progress.Cancelled(version)
         DshTasks.report(
             DshTask(
@@ -414,6 +579,31 @@ class DshInstaller(
     /** 该实例当前的安装登记是否仍是 [job] 本人（没有被 cancel 之后的新安装接管） */
     private fun isCurrentOwner(instanceId: String, job: Job?): Boolean =
         job != null && running[instanceId] === job
+
+    /**
+     * 本次任务是否仍是该实例的**活跃**安装者：登记表里还是它、且未被取消。
+     * [onInstallLine] / [runInstall] 的入口状态更新用它做归属门（见 [onInstallLine] 的说明）。
+     */
+    private fun isActiveInstallOwner(instanceId: String, job: Job?): Boolean =
+        job != null && running[instanceId] === job && !cancelled.contains(instanceId)
+
+    /** BL-043①：该实例是否仍有进行中的安装条目（判据之一，见 [cancel]） */
+    private fun hasRunningInstall(status: InstallStatus?): Boolean = status?.running == true
+
+    /** BL-043①：该实例是否仍有登记在册的安装任务（判据之二，见 [cancel]） */
+    private fun hasLiveInstallTask(instanceId: String): Boolean = running.containsKey(instanceId)
+
+    /**
+     * BL-043①：被守卫拦下的取消——写一条英文诊断（R-LOG），**不碰任何状态**。
+     * 实例还在就写进它自己的流（用户点开日志能看到这次点击为什么没反应）；实例已被删除就只进
+     * 全局流 —— 对已删实例 appendFor 会按需重建它的内存流（与 BL-080 的效率口径一致），
+     * 一次必然 no-op 的迟到点击不值得留下一条孤儿流。
+     */
+    private fun logIgnoredCancel(instanceId: String, reason: String) {
+        val instance = DshInstances.byId(instanceId)
+        val line = "[install] cancel ignored for ${instance?.name ?: instanceId}: $reason"
+        if (instance != null) DshLogBus.appendFor(instanceId, line) else DshLogBus.append(line)
+    }
 
     /**
      * 安装失败。
@@ -480,6 +670,26 @@ class DshInstaller(
 
     private fun updateStatus(status: InstallStatus) {
         _statuses.update { it + (status.instanceId to status) }
+    }
+
+    /**
+     * R15-B #2（2026-10-15 锐评修正）：**归属校验与状态写入收进同一 [ownershipLock] 临界区**。
+     *
+     * 旧写法是"先 [isActiveInstallOwner] 判、再 [updateStatus] 写"两步（check-then-act）——
+     * 两步之间 [cancel] 可以持锁插入（它把"清 statuses"整段放在锁内），于是取消刚落地的条目
+     * 会被这里补写回去，任务区闪回一帧"安装中"的幽灵条目。把判据和写入合进同一临界区后，
+     * 取消要么排在本次写入之前（写入时 guard 已为 false，跳过）、要么排在之后（写入先落地、
+     * 取消再清掉），不存在"先清后补"的交错。
+     *
+     * [statusSupplier] 惰性取值：guard 通过才构造 [InstallStatus]（不在会被丢弃的路径上做垃圾）。
+     * @return true = 写入完成；false = 已不属于本任务（取消/接管/终态），**什么都没做**
+     */
+    private fun updateStatusIfOwned(instanceId: String, job: Job?, statusSupplier: () -> InstallStatus): Boolean {
+        synchronized(ownershipLock) {
+            if (!isActiveInstallOwner(instanceId, job)) return false
+            updateStatus(statusSupplier())
+            return true
+        }
     }
 
     /**
@@ -666,7 +876,7 @@ class DshInstaller(
     private fun npmErrorCode(raw: String): String? =
         NPM_ERROR_CODE_RE.find(raw)?.groupValues?.get(1)
 
-    private suspend fun runInstall(instance: DshInstance, version: String): Boolean {
+    private suspend fun runInstall(instance: DshInstance, version: String, myJob: Job?): Boolean {
         errorSummaries.remove(instance.id)
         errorTails.remove(instance.id)
         val script = "${ProotCommand.GUEST_ROOT}/scripts/setup-node-dsh.sh"
@@ -675,13 +885,17 @@ class DshInstaller(
         //   与磁盘检查跑两次（bebug 里 resolv.conf 成对行的来源）。外层无额外 UI 价值——错误摘要
         //   与日志都已改读内部预检回传的结果（见下的 fallback 支线与 -1 收口）。
 
-        updateStatus(
+        // BL-104 防幽灵：若用户在上一次 updateStatus（install() 入口）之后、这里之前已经取消，
+        // 这条"准备"状态会把 cancel 刚清掉的条目加回去（任务区闪回一帧"安装中"）。
+        // ★ R15-B #2 修正：判据与写入合并进 [updateStatusIfOwned] 的同一临界区（与 cancel 的
+        //   "清状态"持同一把 [ownershipLock]）——"取消刚落、这里补写"的交错窗口从此关闭。
+        updateStatusIfOwned(instance.id, myJob) {
             InstallStatus(
                 instance.id, version,
                 DshUiText.getString(com.dsh.fcl.androidlauncher.R.string.dsh_stage_prepare, "install failed"),
                 fraction = 0.05
             )
-        )
+        }
 
         // 宿主侧确保实例目录结构存在
         DshPaths.instanceDir(instance.id).mkdirs()
@@ -702,7 +916,11 @@ class DshInstaller(
         //      要写 500 MB 上下；写满盘时同样只会剩下那句泛化文案）。
         val shortfall = checkInstallSpace(instance, version)
         if (shortfall != null) {
-            errorSummaries[instance.id] = shortfall
+            // 归属门（与 [onInstallLine] 同一纪律）：被取消/被接管的旧任务不许再把失败摘要
+            // 写进共享表 —— 新任务若随后失败，errorSummary 会读到这条陈旧文本（污染）。
+            if (isActiveInstallOwner(instance.id, myJob)) {
+                errorSummaries[instance.id] = shortfall
+            }
             // 实例级：这是"这个实例这次装不上"的原因，装它的人该在自己的日志里看到
             DshLogBus.appendFor(instance.id, "[install] 空间不足，已跳过 npm：$shortfall")
             return false
@@ -743,7 +961,7 @@ class DshInstaller(
                             writeInstallPidFile(instance, pid)
                         }
                     }
-                ) { line -> onInstallLine(instance, version, line) }
+                ) { line -> onInstallLine(instance, version, line, myJob) }
                 if (direct != null) {
                     direct
                 } else {
@@ -751,7 +969,10 @@ class DshInstaller(
                     //   真机实现自己在 run() 内部做预检。替身没有内部预检，这次补调是它唯一的预检。
                     val pre = ProotCommand.preflight(context, DshPaths.ROOTFS_DIR, script)
                     if (!pre.ok) {
-                        errorSummaries[instance.id] = pre.reason ?: "预检失败（原因未知）"
+                        // 归属门同 [onInstallLine]：旧任务的晚到失败不许写进新任务的摘要
+                        if (isActiveInstallOwner(instance.id, myJob)) {
+                            errorSummaries[instance.id] = pre.reason ?: "预检失败（原因未知）"
+                        }
                         DshLogBus.appendFor(instance.id, "[install] Preflight failed: ${pre.reason}")
                         -1
                     } else {
@@ -762,13 +983,16 @@ class DshInstaller(
                                 "DSH_VERSION" to version,
                                 "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache"
                             ),
-                            onLine = { line -> onInstallLine(instance, version, line) }
+                            onLine = { line -> onInstallLine(instance, version, line, myJob) }
                         )
                     }
                 }
             }
         } catch (t: Throwable) {
-            errorSummaries[instance.id] = t.message ?: t.toString()
+            // 归属门同 [onInstallLine]：被接管/被取消的旧任务不许覆写新任务的失败摘要
+            if (isActiveInstallOwner(instance.id, myJob)) {
+                errorSummaries[instance.id] = t.message ?: t.toString()
+            }
             return false
         } finally {
             // ★ F2-6（BL-041）：安装的所有终态（成功/失败/取消/异常/早退）都把本次的 pid 文件清掉 ——
@@ -780,21 +1004,45 @@ class DshInstaller(
         // ★ R-14：看门狗超时（ProotProcessExecutor 约定返回 -2）时给可读文案，
         // 否则 errorSummary 只会落到泛化的\"安装失败\"，用户完全不知道是卡死/超时。
         if (exit == ProotProcessExecutor.TIMEOUT_EXIT_CODE) {
-            errorSummaries[instance.id] = DshUiText.getString(
-                com.dsh.fcl.androidlauncher.R.string.dsh_install_timeout,
-                "Install timed out",
-                INSTALL_TIMEOUT_MS / 60_000
-            )
+            // 归属门同 [onInstallLine]
+            if (isActiveInstallOwner(instance.id, myJob)) {
+                errorSummaries[instance.id] = DshUiText.getString(
+                    com.dsh.fcl.androidlauncher.R.string.dsh_install_timeout,
+                    "Install timed out",
+                    INSTALL_TIMEOUT_MS / 60_000
+                )
+            }
         }
         return exit == 0
     }
 
-    private fun onInstallLine(instance: DshInstance, version: String, line: String) {
-        // 实例级：这是**这个实例的** npm / setup 脚本输出（安装进度、下载日志、失败摘要的原文）。
-        // 装 A 的时候日志页就该只看到 A 的 npm 输出 —— 原来两条实例同时装时这里全混在一条流里。
+    private fun onInstallLine(instance: DshInstance, version: String, line: String, myJob: Job?) {
+        // 实例级全量通道：这是**这个实例的** npm / setup 脚本输出（安装进度、下载日志、失败摘要
+        // 的原文）。装 A 的时候日志页就该只看到 A 的 npm 输出 —— 原来两条实例同时装时这里全混在
+        // 一条流里。日志流**不节流**：日志页要看的是完整输出，节流只降 UI 采样通道（下一段）。
         DshLogBus.appendFor(instance.id, line)
-        _progress.value = Progress.Log(line)
+        // ★ 归属门（BL-043① 判据保真的配套；同 BL-104 的"被杀任务体仍处理 npm 尾行重写 statuses"面）：
+        //   被取消 / 被接管之后迟到的输出行**只进日志**，不再写共享状态 —— 否则会把 [cancel]
+        //   刚清掉的条目（幽灵"安装中"投影，任务行永远摘不掉、取消守卫判据失真）或新任务的
+        //   错误摘要改回来。正常的在跑任务 [isActiveInstallOwner] 恒为真，行为与改造前一致。
+        if (!isActiveInstallOwner(instance.id, myJob)) return
+        // ★ BL-053（K34 残余）：[Progress.Log] 是 StateFlow —— 每行写一次会让每个订阅者
+        //   （下载页 VM 的 collect → rebuild()）按 npm 的输出频率被唤醒（安装高峰每秒几十行）。
+        //   这里按 [shouldEmitLog] 节流：普通行约 [LOG_THROTTLE_MIN_INTERVAL_MS] 一行；
+        //   重要行（[isImportantInstallLine]：STAGE / FAILED / npm 错误 / 预检失败前缀）
+        //   不受窗口限制、立即发射 —— 用户点开界面时错误行必须马上看得见。
+        //   （重要行各自另有的路径不受影响：STAGE 走 [Progress.Stage]、错误行走 [errorTails]，
+        //   这两条都不经过本节流 —— 本节的抑制只影响 Log 采样通道。）
+        //   被抑制的行不丢：进 pending 缓冲，由 [flushPendingInstallLog] 在收尾补发。
         val trimmed = line.trim()
+        val important = isImportantInstallLine(trimmed)
+        val now = System.currentTimeMillis()
+        if (shouldEmitLog(now, lastLogEmitMs[instance.id] ?: 0L, important)) {
+            lastLogEmitMs[instance.id] = now
+            _progress.value = Progress.Log(line)
+        } else {
+            bufferPendingLogLine(instance.id, line)
+        }
         when {
             trimmed.startsWith("[setup] STAGE=") -> {
                 // ★ 脚本给的是**稳定 key**（`[setup] STAGE=<key> [args]`），不是给人看的句子。
@@ -805,7 +1053,10 @@ class DshInstaller(
                 // ★ BL-018：阶梯百分比（npm 以 CI=true 运行无百分比可采，按阶段给单调递增的阶梯）。
                 //   映射在 [stageFraction] 纯函数里（可单测），认不出 key 返回 null → 界面保持无限动画。
                 val stage = stageText(raw)
-                updateStatus(InstallStatus(instance.id, version, stage, fraction = stageFraction(raw)))
+                // ★ R15-B #2 修正：判据+写入同临界区（与 [cancel] 的清状态同锁）
+                updateStatusIfOwned(instance.id, myJob) {
+                    InstallStatus(instance.id, version, stage, fraction = stageFraction(raw))
+                }
                 _progress.value = Progress.Stage(stage)
             }
             // npm 失败信息可能跨行，保留尾部若干行做摘要。
@@ -822,6 +1073,31 @@ class DshInstaller(
             //   这里收进尾部——失败摘要链经 errorSummary → 原样回放仍能带出可读原因，不回落泛化文案。
             trimmed.startsWith(PREFLIGHT_FAIL_PREFIX) -> rememberFailureLine(instance.id, trimmed)
         }
+    }
+
+    /** 节流抑制期：把被抑制的行收进该实例的 pending 缓冲（有界，超上限丢最旧） */
+    private fun bufferPendingLogLine(instanceId: String, line: String) {
+        val deque = pendingLogLines.getOrPut(instanceId) { ArrayDeque() }
+        synchronized(deque) {
+            deque.addLast(line)
+            while (deque.size > PENDING_LOG_MAX_LINES) deque.removeFirst()
+        }
+    }
+
+    /**
+     * 收尾 flush（BL-053）：把节流期间被抑制的尾行补发到 [Progress.Log]。
+     *
+     * 由 [installJobBody] 的 finally 调用（成功/失败/取消/异常都经过）——"最后几行不丢"。
+     * 合并成**一条**发射而不是逐行重放：这些行的完整原文早已逐行进过 [DshLogBus]（日志页
+     * 拿得到全文），采样通道补一条"尾部快照"即可；逐行重放会把收尾时刻变回一次行洪，
+     * 正是节流要消除的东西。清空该实例的节流状态，下一次安装从零开始。
+     */
+    private fun flushPendingInstallLog(instanceId: String) {
+        val deque = pendingLogLines.remove(instanceId) ?: return
+        lastLogEmitMs.remove(instanceId)
+        val lines = synchronized(deque) { deque.toList().also { deque.clear() } }
+        if (lines.isEmpty()) return
+        _progress.value = Progress.Log(lines.joinToString("\n"))
     }
 
     /**
@@ -890,15 +1166,26 @@ class DshInstaller(
      * 此时实例目录里并没有 node_modules（真正的包在 rootfs 的 `/opt/dsh-preinstalled`）。
      * 只查实例路径会把「刚刚装成功」的实例判成 `dsh_install_incomplete` → BROKEN，
      * 且重装会一直重复同一结果（阶段 D-1 引入的回归）。
+     *
+     * ★ BL-054：判定内核改为 [isInstallComplete] 纯函数（package.json 可读 + `lib/bin.js`
+     *   存在 + 与 `requestedVersion` 相符）。`lib/bin.js` 缺失从"只警告"升级为**否定判据** ——
+     *   `setup-node-dsh.sh` 的 verifying-install 段自己就以它为准（missing-bin-js → FAILED），
+     *   启动链（start-dsh.sh）也以它为入口 —— 能读出版本号却起不来的包，不能算"装完"。
+     *   请求版本为 null（旧调用点/版本未知）时跳过版本比对，行为与旧实现一致。
+     *
+     * @param requestedVersion 本次请求的目标版本（[resolveFailVersion] 的取值链）；null = 不比对
+     * @return 版本号（判定"安装完整"时）；不完整返回 null
      */
-    private fun readInstalledVersion(instance: DshInstance): String? {
+    private fun readInstalledVersion(instance: DshInstance, requestedVersion: String?): String? {
         val dir = DshPaths.effectiveDshDir(instance.id)
-        val version = readVersionFromPackageJson(File(dir, "package.json"))
-        if (version != null && !File(dir, "lib/bin.js").isFile) {
-            // 实例级：缺入口文件是**这个实例**装坏了（"能读出版本却启动不了"的原因就在这行）
+        val fromDisk = readVersionFromPackageJson(File(dir, "package.json"))
+        if (fromDisk != null && !File(dir, "lib/bin.js").isFile) {
+            // 实例级：缺入口文件是**这个实例**装坏了（"能读出版本却启动不了"的原因就在这行）。
+            // 警告与否定判据分开写：isInstallComplete 还管"版本不匹配"，那种情况不该打这条字面
+            // 为"缺少 lib/bin.js"的警告（DshInstances.repair 自会校准到真实版本）。
             DshLogBus.appendFor(instance.id, "[install] 警告：${instance.name} 缺少 lib/bin.js（$dir）")
         }
-        return version
+        return if (isInstallComplete(dir, requestedVersion)) fromDisk else null
     }
 
     companion object {
@@ -1097,6 +1384,81 @@ class DshInstaller(
             "verifying-install" -> 0.90
             else -> null
         }
+
+        // --- BL-043/053/054 的纯判断内核（public，便于 JVM 单测；class 头那套理由） ----------
+
+        /**
+         * BL-054：`dir` 里是不是一份**完整**的 dsh 包（[readInstalledVersion] 的判定内核）。
+         *
+         * 判据三条全过才算完整：
+         * 1. `package.json` 能读出非空 version（这是"装到了"的最低证据）；
+         * 2. `lib/bin.js` 存在 —— 缺失是**否定判据**（不再是旧版的"只警告"）。依据：
+         *    `setup-node-dsh.sh` 的 verifying-install 段自己就以它为准（missing-bin-js → FAILED），
+         *    `start-dsh.sh` 也以它为入口解析起点 —— 能读出版本号却起不来的包不能算"装完"；
+         * 3. [requestedVersion] 非 null 时须与磁盘版本**字面相等**（`latest` 除外，见下）——
+         *    晚取消"其实已装完"的场景里，装的必须是**用户要的那个版本**。这一条同时修掉旧判定
+         *    的一个误标：实例自己没有包、`effectiveDshDir` 回退到 rootfs **预装**包时，旧代码会
+         *    把预装版本标成"其实已装完"（哪怕用户要的是另一个版本）；[DshInstances.repair]
+         *    的口径正是"预装只在它 == 实例目标版本时才算数"，现在两边一致。
+         *
+         * ★ `latest` 按**跳过比对**处理：它是界面上的"最新版"（脚本对 latest 按字面命中预装分支；
+         *   registry 列表里 version 字段始终是精确版本，latest 只是 tag），装到哪个精确版本都算
+         *   完成。当前 UI 路径不会把 latest 传进 [install]（下载页永远传 entry.version），
+         *   这里是防御 —— 与 [nodeModulesBudgetBytes] 对 latest 的处理同一口径。
+         *
+         * @param requestedVersion 本次请求的目标版本；null / "latest" = 跳过版本比对（只验完整性）
+         * @return true = 完整可启动（版本相符）；false = 不完整 / 版本不符 / 读不到
+         */
+        fun isInstallComplete(dir: File, requestedVersion: String?): Boolean {
+            val version = readVersionFromPackageJson(File(dir, "package.json")) ?: return false
+            if (!File(dir, "lib/bin.js").isFile) return false
+            if (requestedVersion != null && requestedVersion != "latest" && version != requestedVersion) return false
+            return true
+        }
+
+        /**
+         * BL-053：这一行是否属于"重要行"（节流必须让路、立即发射）——
+         * [isNpmErrorLine]（npm 错误）/ `[setup] FAILED` / `[setup] STAGE=` / `[setup] DONE` /
+         * [PREFLIGHT_FAIL_PREFIX] 与本类内各分支及脚本协议（STAGE/FAILED/DONE 三条机器可读
+         * 输出，见 `setup-node-dsh.sh` 头部约定）一一对应。STAGE 行同时驱动 [Progress.Stage]、
+         * DONE 行是安装完成的第一现场、错误行要马上可见 —— 都不等节流窗口。
+         */
+        fun isImportantInstallLine(trimmedLine: String): Boolean =
+            trimmedLine.startsWith("[setup] STAGE=") ||
+                trimmedLine.startsWith("[setup] FAILED") ||
+                trimmedLine.startsWith("[setup] DONE") ||
+                trimmedLine.startsWith(PREFLIGHT_FAIL_PREFIX) ||
+                isNpmErrorLine(trimmedLine)
+
+        /**
+         * BL-053：节流决策内核（`onInstallLine` 每行调用一次）。
+         *
+         * 规则：重要行**永远发射**；普通行距上次发射 ≥ [LOG_THROTTLE_MIN_INTERVAL_MS] 才发射。
+         * 窗口从"上次**发射**时刻"起算（重要行也刷新 lastEmit —— 它自己就是一次发射）。
+         * 首次发射（lastEmitMs == 0）：立即放行 —— 安装开头第一行就该看得见。
+         *
+         * @param nowMs 当前毫秒（注入以便单测）
+         * @param lastEmitMs 上次发射时刻；0 = 还没发射过
+         * @param important 是否重要行（[isImportantInstallLine]）
+         */
+        fun shouldEmitLog(nowMs: Long, lastEmitMs: Long, important: Boolean): Boolean =
+            important || lastEmitMs == 0L || nowMs - lastEmitMs >= LOG_THROTTLE_MIN_INTERVAL_MS
+
+        /**
+         * BL-043①：cancel 入口守卫的判据（两条都要，理由见 [cancel] 的方法注释）。
+         * 抽成纯函数是为了可单测 —— 守卫本身挂在 [DshInstances] 等进程级单例上，单测构造不出来。
+         *
+         * @param statusRunning [statuses] 里该实例是否仍有进行中条目
+         * @param taskRegistered [running] 里该实例是否仍有登记的任务
+         */
+        fun canCancelInstall(statusRunning: Boolean, taskRegistered: Boolean): Boolean =
+            statusRunning && taskRegistered
+
+        /** BL-053：普通行的节流窗口（100ms ≈ 10Hz）—— 安装高峰每秒几十行 → 最多 10 次 StateFlow 写 */
+        const val LOG_THROTTLE_MIN_INTERVAL_MS = 100L
+
+        /** BL-053：pending 缓冲上限（只保尾部；收尾 flush 合并成一条发射） */
+        const val PENDING_LOG_MAX_LINES = 50
     }
 }
 

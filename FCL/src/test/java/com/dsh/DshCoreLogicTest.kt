@@ -163,6 +163,21 @@ class DshCoreLogicTest {
         assertNull(UrlScanner.portOf("no url here"))
     }
 
+    // --- BL-109：READY port= 兜底解析（R15） ---------------------------------
+
+    /** `READY port=<n>`：正常解析；url= 行不误命中；非法/零值不返回。 */
+    @Test
+    fun parsesReadyPortFallbackMarker() {
+        assertEquals("解析 READY port=3080", 3080, UrlScanner.findMarkerPort("[start-dsh] READY port=3080"))
+        assertEquals("大小写不敏感", 46501, UrlScanner.findMarkerPort("[start-dsh] ready PORT=46501"))
+        assertNull("url= 行不命中 port 解析", UrlScanner.findMarkerPort("[start-dsh] READY url=http://127.0.0.1:3080/?token=x"))
+        assertNull("port=0 视为无效", UrlScanner.findMarkerPort("[start-dsh] READY port=0"))
+        assertNull("非数字不解析", UrlScanner.findMarkerPort("[start-dsh] READY port=abc"))
+        assertNull("普通行不命中", UrlScanner.findMarkerPort("[runtime] 启动 dsh 完成"))
+        // 与 findMarkerUrl 的分工契约（findMarkerUrl 保持"只认 url="，不被 BL-109 改变）
+        assertNull("findMarkerUrl 对 port= 行仍为 null（契约冻结）", UrlScanner.findMarkerUrl("[start-dsh] READY port=3080"))
+    }
+
     // --- 日志脱敏（token 不能进日志/日志文件） -----------------------------
 
     @Test
@@ -546,5 +561,74 @@ class DshCoreLogicTest {
         File(dir, "package.json").writeText("{\"name\":\"@deepseek-ai/dsh\",\"version\":\"$version\"}")
         File(dir, "lib").mkdirs()
         File(dir, "lib/bin.js").writeText("// fake entry\n")
+    }
+
+    // --- K14（R15）：SingleFlight owner 版（无归属校验的旧 API 的加固替代） ------
+
+    /**
+     * owner 版基本语义：占坑成功 → 重复占坑被拒 → **持凭据释放**后恢复可占。
+     */
+    @Test
+    fun singleFlightOwnerAcquireReleaseAcquire() {
+        val gate = com.dsh.core.SingleFlight()
+        val owner = gate.tryAcquireOwner("inst-1")
+        assertTrue("首次占坑应返回凭据", owner != null)
+        assertTrue("重复占坑必须被拒（返回 null）", gate.tryAcquireOwner("inst-1") == null)
+        assertTrue("坑里应可见该 key", gate.isRunning("inst-1"))
+        assertTrue("持凭据释放应成功", gate.releaseOwner(owner!!))
+        assertTrue("释放后应可再次占坑", gate.tryAcquireOwner("inst-1") != null)
+    }
+
+    /**
+     * **K14 的核心**：过期凭据（旧任务持有的那份）不得释放新任务占的坑。
+     * 场景：旧任务收尾时新任务已接管同名 key —— 无归属校验的旧 API 会把新任务的坑误删
+     * （两个 npm 同时写 node_modules 的活体路径），owner 版必须对此 no-op。
+     */
+    @Test
+    fun singleFlightStaleOwnerCannotReleaseNewHolder() {
+        val gate = com.dsh.core.SingleFlight()
+        val stale = gate.tryAcquireOwner("inst-1")
+        assertTrue(stale != null)
+        gate.releaseOwner(stale!!) // 旧任务主动释放
+        val fresh = gate.tryAcquireOwner("inst-1") // 新任务接管
+        assertTrue(fresh != null)
+        assertTrue("过期凭据释放必须无效（no-op false）", !gate.releaseOwner(stale))
+        assertTrue("新任务的坑必须仍在", gate.isRunning("inst-1"))
+        assertTrue("新任务自己释放应成功", gate.releaseOwner(fresh!!))
+    }
+
+    /**
+     * 新旧 API 混用互斥语义一致：旧 API 占的坑，owner 版占不进去；反之亦然。
+     * （DshInstaller 用旧 API、新代码用 owner 版，混用期的正确性依赖这条。）
+     */
+    @Test
+    fun singleFlightLegacyAndOwnerApisAreMutuallyExclusive() {
+        val gate = com.dsh.core.SingleFlight()
+        assertTrue("旧 API 占坑", gate.tryAcquire("inst-x"))
+        assertTrue("owner 版必须进不来", gate.tryAcquireOwner("inst-x") == null)
+        gate.release("inst-x")
+        val o = gate.tryAcquireOwner("inst-x")
+        assertTrue("owner 版占坑", o != null)
+        assertTrue("旧 API 必须进不来", !gate.tryAcquire("inst-x"))
+        gate.releaseOwner(o!!)
+    }
+
+    /** owner 版并发抢同一 key：无论多少线程，**只能有一个**拿到凭据。 */
+    @Test
+    fun singleFlightOwnerIsAtomicUnderConcurrency() {
+        val gate = com.dsh.core.SingleFlight()
+        val threads = 16
+        val start = java.util.concurrent.CountDownLatch(1)
+        val winners = java.util.concurrent.atomic.AtomicInteger(0)
+        val workers = (0 until threads).map {
+            Thread {
+                start.await()
+                if (gate.tryAcquireOwner("inst-shared") != null) winners.incrementAndGet()
+            }
+        }
+        workers.forEach { it.start() }
+        start.countDown()
+        workers.forEach { it.join() }
+        assertEquals("并发占坑只应有一个赢家", 1, winners.get())
     }
 }
