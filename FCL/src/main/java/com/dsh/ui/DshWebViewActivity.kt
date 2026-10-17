@@ -30,6 +30,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
 import com.dsh.core.DshRuntime
+import com.dsh.core.UrlScanner
 import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.FCLActivity
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
@@ -159,6 +160,16 @@ class DshWebViewActivity : FCLActivity() {
      */
     private var crashRebuildsResetAt: Long = 0L
 
+    /**
+     * R16/fix4（BL-140）：**本次页面加载**是否已经为"老 WebView 上 SPA 崩坏"弹过升级提示。
+     *
+     * 为什么需要去重：`onConsoleMessage` 里一条崩溃往往连打多条同因消息（bebug (2) 里同一
+     * 加载出现 boot 脚本 + plugin 装载两条 `is not a function`），不去重就会连弹两框。
+     * 语义 = "每次加载最多提示一次"（`onPageStarted` 重置）—— 用户重新加载页面后若仍崩，
+     * 再提示一次是合理的（他可能没看到/没行动）。
+     */
+    private var crashHintShownForThisLoad = false
+
     /** WebView 在原布局里的容器与布局参数（onCreate 时捕获，崩溃重建按原位插回新实例） */
     private var webViewContainer: ViewGroup? = null
     private var webViewLayoutParams: ViewGroup.LayoutParams? = null
@@ -276,7 +287,12 @@ class DshWebViewActivity : FCLActivity() {
             }
 
             override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
-                msg?.let { logWeb("[web] ${it.message()} @${it.sourceId()}:${it.lineNumber()}") }
+                msg?.let {
+                    logWeb("[web] ${it.message()} @${it.sourceId()}:${it.lineNumber()}")
+                    // R16/fix4（BL-140）：老 WebView 上 SPA 崩坏的信号（is not a function 类）
+                    // → 补弹一次带升级指引的对话框（每次加载最多一次，见字段注释）。
+                    maybeShowCrashUpgradeHint(it.message())
+                }
                 return true
             }
         }
@@ -299,6 +315,8 @@ class DshWebViewActivity : FCLActivity() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 if (isLoopback(url)) {
                     pageFailed = false
+                    // R16/fix4（BL-140）：新一次加载 → 重新给崩溃提示一次机会
+                    crashHintShownForThisLoad = false
                     showWeb()
                 }
             }
@@ -434,6 +452,41 @@ class DshWebViewActivity : FCLActivity() {
             .setPositiveButton(getString(R.string.dialog_positive), null)
             .create()
             .show()
+    }
+
+    /**
+     * R16/fix4（BL-140）：老 WebView 上 SPA 崩坏时补弹一次"升级 WebView"指引。
+     *
+     * 背景（V6 结论）：[loadUrlChecked] 的一次性放行（[compatOk]）意味着用户在对话框里选过
+     * "仍要继续"后，之后所有加载（状态回放/新 token URL/崩溃重建/401 重载）直连 loadUrl
+     * 不再弹框 —— 而 114 这类老 WebView 上 dsh 0.2.x 的 SPA **必崩**（`Promise.withResolvers`
+     * 需 119+ 等，bebug (2) 实锤），用户于是只剩白屏/连不上，既不知情也无出口。
+     *
+     * 本函数在 `onConsoleMessage` 里被调用：仅当 **当前 WebView 确实过旧**
+     * （[DshWebViewCompat.webViewMajorBelow]）+ 消息命中崩溃判据
+     * （[isOldWebViewSpaCrash]）+ **本次加载尚未弹过**（[crashHintShownForThisLoad]）时，
+     * 弹 [DshWebViewCompat.showCrashUpgradeHint]（带升级指引 + 外部浏览器出口）。
+     *
+     * 为什么前提条件是"WebView 过旧"：`is not a function` 在**新** WebView 上也可能因 dsh
+     * 前端 bug 出现，那种情况给"升级 WebView"是错误指引（用户已经最新）；过旧前提把误报面
+     * 收窄到"本来就在兼容告警名单里"的设备。
+     *
+     * 弹框是 UI 操作：`onConsoleMessage` 在 WebView 内部线程的 UI 回调（主线程）上执行，
+     * 直接调安全（项目内弹框惯例同 [maybeShowFirstRunKeyHint]）。
+     */
+    private fun maybeShowCrashUpgradeHint(consoleMessage: String) {
+        if (crashHintShownForThisLoad) return
+        if (!isOldWebViewSpaCrash(consoleMessage)) return
+        val versionName = runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
+        if (!DshWebViewCompat.webViewMajorBelow(versionName)) return
+        crashHintShownForThisLoad = true
+        // 外部浏览器出口：与 ensureSupported 的负选同款 —— 用点击时刻 fresh URL（拿不到时
+        // 按 state 现值跳；再拿不到就不显示出口按钮，见 showCrashUpgradeHint 的 onExternal 可空）。
+        val fresh = (DshRuntime.state.value as? DshRuntime.State.Running)?.url
+        val onExternal = fresh?.let { url -> { openExternalFresh(url) } }
+        // R17：本提示的典型现场恰是"用户开着日志覆盖层排查崩坏原因"——先收日志层再弹，
+        // 与 loadUrlChecked 的 onDialogWillShow 同款（两处出口都要；用户可能从任一路径触发）。
+        DshWebViewCompat.showCrashUpgradeHint(this, onExternal, onDialogWillShow = { closeLogOverlay() })
     }
 
     /**
@@ -705,7 +758,12 @@ class DshWebViewActivity : FCLActivity() {
                 compatOk = true
                 if (!webViewDead) webView.loadUrl(url)
             },
-            onExternal = { openExternalFresh(url) }
+            onExternal = { openExternalFresh(url) },
+            // R17（作者反馈"弹出 webview 过旧提示时应该退出日志界面"）：对话框弹出前先收日志
+            // 覆盖层 —— 排查时用户开着日志，对话框压在日志层上两个界面互相抢视线；
+            // 先退日志层，让用户直接面对"仍要继续 / 用外部浏览器打开"的决策。
+            // closeLogOverlay() 幂等（没开时是 no-op），版达标的静默放行路径不会走到这里。
+            onDialogWillShow = { closeLogOverlay() }
         )
     }
 
@@ -730,6 +788,17 @@ class DshWebViewActivity : FCLActivity() {
             logWeb("[web] external open: runtime not Running, falling back to snapshot url")
         }
         val url = fresh ?: snapshotUrl
+        // ★ R16/fix4（BL-135 第二道防线）：若外跳目标**无 token**（认领孤儿场景在旧 pid 文件
+        //   迁移期 / 任何回落裸 URL 的路径），浏览器首访无 cookie 必落 401 原文页
+        //   （reports/round16/V1；V0 实验 EXP2 精确复现）。这是"明知会 401 还让用户撞墙"的场景，
+        //   给一条明确日志（真机排障能对上号）；不阻断外跳 —— 浏览器里至少能看到 401 的
+        //   "reopen the URL"指引，且用户可能已在该端口有 cookie（那样裸 URL 也能进）。
+        if (UrlScanner.tokenOf(url) == null) {
+            logWeb(
+                "[web] external open without token: browser first visit will hit 401 " +
+                    "(adopt fallback / bare url); url=$url"
+            )
+        }
         val ok = runCatching {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }.isSuccess

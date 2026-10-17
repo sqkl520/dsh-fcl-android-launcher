@@ -10,9 +10,33 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.locks.ReentrantLock
+
+/**
+ * 日志行级别（K27）。
+ *
+ * 三档与 DshLogsUI 的三个过滤档位一一对应：
+ * - [INFO]  = `Filter.ALL` 可见（含命中 OK_RE 的"ok 档"行 —— 枚举刻意不设 OK 档，
+ *   UI 的第四种颜色由 DshLogsUI 自己保留口径，见其 `levelOf`）；
+ * - [WARN]  = `Filter.WARN` 及以上可见；
+ * - [ERROR] = 仅 `Filter.ERROR` 可见。
+ *
+ * 判定口径由 [DshLogBus.classifyLevel] 给出（正则逐字迁自 DshLogsUI，等价性由单测钉住）。
+ */
+enum class LogLevel(val code: Int) {
+    /** 其余行与 OK 档（`ok`/`ready`/`done`… 命中 OK_RE 的行）—— Filter.ALL 下可见、WARN 档起隐藏 */
+    INFO(0),
+
+    /** WARN_RE 命中且未命中 ERROR_RE 的行—— Filter.WARN / Filter.ERROR 都显示 */
+    WARN(1),
+
+    /** ERROR_RE 命中——仅 Filter.ERROR 显示 */
+    ERROR(2),
+}
 
 /**
  * dsh 运行/安装日志总线。
@@ -43,6 +67,12 @@ import java.util.concurrent.CopyOnWriteArraySet
  * 额外能力：日志同时追加到 `<filesDir>/dsh/logs/runtime.log`（超 1MB 自动截断保留尾部），
  * 每个实例另有自己的 `<filesDir>/dsh/logs/instance-<id>.log`（同一套轮转机制），
  * 这样"进程崩了 / 被系统杀了"之后还能拿到现场，而不是只有内存里那几百行。
+ *
+ * ## Round 15 追加（K27 / BL-079）
+ * - **K27**：每行入总线时预计算级别（[classifyLevel]，口径迁自 DshLogsUI），快照携带与
+ *   [Snapshot.lines] 同序等长的 [Snapshot.levels] —— UI 渲染热路径不再跑正则。
+ * - **BL-079**：落盘批次带序号（[FileWrite.seq]），锁内按序进单一 FIFO、出锁后由唯一的
+ *   排空者逐批落盘（见 [drainFileWrites]）——多路 flush 并发交错时，同一文件的行序也不会写出倒置。
  */
 object DshLogBus {
 
@@ -67,8 +97,21 @@ object DshLogBus {
      */
     private const val MAX_STREAMS = 32
 
-    /** 日志快照：UI 只比较 [revision]，避免无谓重绘 */
-    data class Snapshot(val revision: Long, val lines: List<String>) {
+    /**
+     * 日志快照：UI 只比较 [revision]，避免无谓重绘。
+     *
+     * **不变式（K27）**：[levels] 与 [lines] **同序等长**，`levels[i]` 即 `lines[i]` 的级别。
+     * 级别在行**入总线那一刻**预计算（append/stamp 路径逐行 [classifyLevel]，BL-075 告警注入路径
+     * 同样补齐），快照发布时与 [lines] 一起防御性拷贝 —— 所以发布后的 Snapshot 是自洽只读的，
+     * UI 侧可直接按 [levels] 过滤，无需再跑任何正则。
+     * [EMPTY]（以及任何用默认参数构造的旧式 Snapshot）两者都为空，满足不变式。
+     */
+    data class Snapshot(
+        val revision: Long,
+        val lines: List<String>,
+        /** 与 [lines] 同序等长；默认空列表保持旧构造点（含 [EMPTY]）兼容 */
+        val levels: List<LogLevel> = emptyList()
+    ) {
         companion object {
             val EMPTY = Snapshot(0L, emptyList())
         }
@@ -88,9 +131,79 @@ object DshLogBus {
      */
     private val fileIoLock = Any()
 
+    // --- BL-079：落盘批次按序排队 -------------------------------------------
+
+    /**
+     * BL-079: FIFO of drained batches awaiting a file write, drained by [drainFileWrites].
+     *
+     * A [FileWrite] is inserted here **inside the same [lock] critical section that drained it**
+     * from the in-memory rings (see [flush]) — so queue order is exactly the order the lines
+     * entered the buffers, globally. [drainFileWrites] then pops and writes one batch at a time
+     * (each write still under [fileIoLock]), which makes the on-disk line order the queue order:
+     * two racing flushes can no longer write their batches to the same file out of order (the old
+     * code serialized only the `appendText` call, not *which* batch got to append first).
+     *
+     * On the drain side the guarantee is deliberately as strong as the old inline writes: a
+     * flush/flushNow caller returns only once the queue is empty **and** no other drainer is mid
+     * batch — i.e. every batch enqueued before the call is on disk. Callers that find the queue
+     * already being drained park on [fileQueueIdle] (the drainer drains their batch too, FIFO)
+     * instead of writing concurrently.
+     *
+     * Why one global queue instead of one per file: every file write already serializes on
+     * [fileIoLock] (different files included), so per-file queues would buy no extra concurrency —
+     * only extra machinery. One queue keeps "insertion order == write order" trivially true.
+     *
+     * Guards / lock order (no cycles):
+     * - insertion ([enqueueFileWrite], caller holds [lock]): [lock] → [fileQueueLock];
+     * - [drainFileWrites]: [fileQueueLock] alone (claim/await/poll), then [fileIoLock] alone
+     *   (write); [fileQueueLock] is never held while acquiring [lock] or [fileIoLock].
+     */
+    private val fileQueueLock = ReentrantLock()
+
+    /**
+     * BL-079: signalled (signalAll) when [fileDraining] flips back to false — queue drained
+     * empty, or a drainer escaped with an exception and released its claim. Waiters in
+     * [drainFileWrites] re-check the flag on wake.
+     */
+    private val fileQueueIdle = fileQueueLock.newCondition()
+
+    private val fileWriteQueue = ArrayDeque<FileWrite>()
+
+    /**
+     * BL-079: true while some thread is draining [fileWriteQueue]. Claimed and released under
+     * [fileQueueLock]; the release-on-empty happens inside the same critical section as the
+     * empty poll **and after every polled batch has been written**, so a caller parked on
+     * [fileQueueIdle] can only proceed after all batches it could care about are on disk (no
+     * lost wake-up: the releaser signals in that same critical section).
+     */
+    private var fileDraining = false
+
+    /**
+     * BL-079: batch sequence — assigned under [lock] when a batch is enqueued, so sequence order
+     * == queue order == write order per file. Recorded on [FileWrite.seq] as the inspectable
+     * ordering token; the guarantee itself comes from the queue discipline above.
+     */
+    private var fileWriteSeq = 0L
+
+    /**
+     * Test-only (BL-079): batch seqs handed to the file writer, in write order, while
+     * [recordingDrainedSeqs] is on. Default off — production pays only a field read per batch,
+     * and the list stays empty (guarded by [fileQueueLock]; enabled via
+     * [startRecordingDrainedSeqsForTest]).
+     */
+    private var recordingDrainedSeqs = false
+    private val drainedSeqs = ArrayList<Long>()
+
     // --- 全局流（语义与改造前一致） -----------------------------------------
 
     private val buffer = ArrayList<String>(256)
+
+    /**
+     * K27: 与 [buffer] **同序等长的级别并行数组** —— 每条行进 [buffer] 的那一刻同步进这里
+     * （见 [appendGlobalLocked] / [handleFileWriteFailure] 的告警注入），[trimLocked] 同步裁剪。
+     * 不变式 levels.size == buffer.size 恒成立；快照发布时一起拷贝进 [Snapshot.levels]。
+     */
+    private val levels = ArrayList<LogLevel>(256)
 
     /** 本次刷新周期内新增、尚未落盘的行（全局） */
     private val pendingForFile = ArrayList<String>(64)
@@ -110,6 +223,10 @@ object DshLogBus {
      */
     private class InstanceStream {
         val buffer = ArrayList<String>(256)
+
+        /** K27: 与 [buffer] 同序等长的级别并行数组（不变式同全局流，见 DshLogBus.levels） */
+        val levels = ArrayList<LogLevel>(256)
+
         val pendingForFile = ArrayList<String>(64)
 
         /**
@@ -234,13 +351,41 @@ object DshLogBus {
         }
     }
 
+    /**
+     * R17（编排）：把"本进程是谁"写进日志流首 —— 每次进程启动调一次（幂等：同一进程重复调用
+     * 只写一次；同一条横幅重复出现即为"进程重启过"的天然标记）。
+     *
+     * 动因：R16/R17 两轮真机排查都卡在同一个问题——**不知道用户装的是哪个包**
+     * （fix3/fix4 均未发布，用户却测过 fix3 行为；排查时只能靠猜）。现在每次启动的第一行
+     * 就会写清：`launcher=0.1.6-SNAPSHOT-fix4 (code=110)`。以后任何一份日志贴出来，
+     * 第一行就能定位包与代次。
+     *
+     * 版本串与「关于页/系统应用信息」同源（[BuildConfig.VERSION_NAME]，含 fix 标签）。
+     * 写成 [append]（全局流）——它是 App 级事实，不属于任何实例。
+     */
+    private var versionBannerWritten = false
+
+    @JvmStatic
+    fun writeVersionBannerIfNeeded() {
+        synchronized(DshLogBus) {
+            if (versionBannerWritten) return
+            versionBannerWritten = true
+        }
+        val version = runCatching { com.dsh.fcl.androidlauncher.BuildConfig.VERSION_NAME }.getOrNull() ?: "?"
+        val code = runCatching { com.dsh.fcl.androidlauncher.BuildConfig.VERSION_CODE }.getOrDefault(0)
+        append("[app] launcher=$version (code=$code)")
+    }
+
     /** 追加一行到**全局**流（任意线程可调；内部串行化 + 合并刷新） */
     @JvmStatic
     fun append(line: String) {
         // 加工（脱敏 + 时间戳）在锁外做、入缓冲在锁内做 —— 与改造前一致，只是现在两处入口
         // 共用同一个 [stamp]，脱敏不可能被某条流绕过。
         val stamped = stamp(line)
-        synchronized(lock) { appendGlobalLocked(stamped) }
+        // K27: 级别在"入总线那一刻"预计算一次（每条消息一次）。必须在 [stamp] **之后**算：
+        // 脱敏可能改写命中内容（脱敏前后文本不同），UI 现有口径跑的就是入库后的最终文本。
+        val level = classifyLevel(stamped)
+        synchronized(lock) { appendGlobalLocked(stamped, level) }
         scheduleFlush()
     }
 
@@ -258,13 +403,16 @@ object DshLogBus {
         // ★ 同一行只加工一次，两条流拿到的是**同一个字符串**：分别加工的话两条流的时间戳会差
         //   几毫秒，按时间对照两边就对不上了。
         val stamped = stamp(line)
+        // K27: 同一行只算一次级别 —— 行字符串两条流共用（见上），级别同理共用，绝不分叉
+        val level = classifyLevel(stamped)
         synchronized(lock) {
             // 两条流都写：实例流是"这个实例的视角"，全局流是"所有事情的时间线"，缺一不可
-            appendGlobalLocked(stamped)
+            appendGlobalLocked(stamped, level)
             val st = streamFor(instanceId)
             st.buffer += stamped
+            st.levels += level
             st.pendingForFile += stamped
-            trimLocked(st.buffer)
+            trimLocked(st.buffer, st.levels)
             st.dirty = true
         }
         scheduleFlush()
@@ -275,6 +423,8 @@ object DshLogBus {
     fun clear() {
         synchronized(lock) {
             buffer.clear()
+            // K27: 级别并行数组与行缓冲**同生共死** —— 任何只清一边的写法都会破坏不变式
+            levels.clear()
             dirty = true
         }
         scheduleFlush()
@@ -290,6 +440,7 @@ object DshLogBus {
         synchronized(lock) {
             val st = streams[instanceId] ?: return
             st.buffer.clear()
+            st.levels.clear() // K27: 与 buffer.clear() 成对（不变式）
             st.dirty = true
         }
         scheduleFlush()
@@ -390,11 +541,42 @@ object DshLogBus {
      */
     private fun stamp(line: String): String = "${timeFormatter().format(Date())}  ${sanitize(line)}"
 
+    // --- K27：级别判定（口径迁自 DshLogsUI）-----------------------------------
+
+    /**
+     * K27: log level of one line — **口径迁自 DshLogsUI，语义等价由测试钉住**
+     * （`DshLogBusLevelTest` 的三个样例行逐条对照 UI 正则）。
+     *
+     * 与 DshLogsUI 现状的对照（逐字照抄其 companion object 的 `ERROR_RE` / `WARN_RE`，
+     * 判序照抄其 `matches()`；⚠️ 这些正则**禁止**在此处"顺手优化"——一改口径就分叉了）：
+     * - `ERROR_RE.containsMatchIn(line)` → [LogLevel.ERROR]（UI: `matches` 的 Filter.ERROR 判据）；
+     * - 否则 `WARN_RE.containsMatchIn(line)` → [LogLevel.WARN]（UI: Filter.WARN = ERROR || WARN）；
+     * - 其余 → [LogLevel.INFO]。
+     *
+     * 注意 UI 的 `levelOf` 还有一档 OK_RE（纯颜色用途），本枚举**刻意不设 OK 档**：
+     * 过滤集（ALL/WARN/ERROR 三个档位）不依赖 OK_RE，命中 OK 的行在过滤语义上就是普通行（INFO）；
+     * 行颜色仍由 UI 自己决定，本函数不接管颜色判定。
+     */
+    fun classifyLevel(line: String): LogLevel = when {
+        ERROR_RE.containsMatchIn(line) -> LogLevel.ERROR
+        WARN_RE.containsMatchIn(line) -> LogLevel.WARN
+        else -> LogLevel.INFO
+    }
+
+    /**
+     * K27: 以下两个正则**逐字照抄** DshLogsUI 的 `ERROR_RE` / `WARN_RE`（含 IGNORE_CASE），
+     * 是"口径等价"的物理载体 —— 修改它们等于单方面改变 UI 的过滤语义。
+     */
+    private val ERROR_RE =
+        Regex("""error|failed|failure|fatal|exception|denied|错误|失败|异常|拒绝|不可用""", RegexOption.IGNORE_CASE)
+    private val WARN_RE = Regex("""warn|警告|注意""", RegexOption.IGNORE_CASE)
+
     /** 写全局缓冲（调用方必须持有 [lock]） */
-    private fun appendGlobalLocked(stamped: String) {
+    private fun appendGlobalLocked(stamped: String, level: LogLevel) {
         buffer += stamped
+        levels += level
         pendingForFile += stamped
-        trimLocked(buffer)
+        trimLocked(buffer, levels)
         dirty = true
     }
 
@@ -402,10 +584,15 @@ object DshLogBus {
      * 环形裁剪：一次砍掉超出部分。
      * （`subList().clear()` 是单次数组搬移 O(移除数)，不是逐个 `removeAt(0)` 的 O(n²)；
      * 2000 行规模下也不会每行都搬移整表。）
+     *
+     * K27: 同步裁剪 [levels] —— 行缓冲与级别数组**只允许一起动**，这是不变式的维护点之一。
+     * 两者长度恒相等（每个入缓冲点都成对 append），所以按同一区间 `subList().clear()` 即可。
      */
-    private fun trimLocked(buf: ArrayList<String>) {
+    private fun trimLocked(buf: ArrayList<String>, lv: ArrayList<LogLevel>) {
         if (buf.size > MAX_LINES) {
-            buf.subList(0, buf.size - MAX_LINES).clear()
+            val remove = buf.size - MAX_LINES
+            buf.subList(0, remove).clear()
+            lv.subList(0, remove).clear()
         }
     }
 
@@ -499,8 +686,100 @@ object DshLogBus {
          */
         val stream: InstanceStream?,
         /** BL-075: instance id matching [stream] (null for the global stream) — requeue residency check */
-        val instanceId: String?
+        val instanceId: String?,
+        /**
+         * BL-079: batch sequence — assigned under [lock] at enqueue time (strictly increasing in
+         * queue order). The write order guarantee comes from the [fileWriteQueue] FIFO; this field
+         * is the *inspectable* ordering token (diagnostics + the FLUSH test asserts it is monotone
+         * inside a file's written batches).
+         */
+        val seq: Long
     )
+
+    /**
+     * BL-079: enqueue one drained batch for the [drainFileWrites] single-writer path.
+     * **Caller must hold [lock]** — that is what makes "insertion order == drain order == write
+     * order" hold even when two flushes race (see the [fileWriteQueue] field docs).
+     */
+    private fun enqueueFileWrite(w: FileWrite) {
+        fileQueueLock.lock()
+        try {
+            fileWriteQueue.addLast(w)
+        } finally {
+            fileQueueLock.unlock()
+        }
+    }
+
+    /**
+     * BL-079: drain [fileWriteQueue] — one batch at a time, authored by exactly one thread.
+     *
+     * Every batch write still serializes on [fileIoLock] (K11); the queue adds the missing piece:
+     * *which* batch goes first when concurrent flushes drained overlapping-time ranges. With the
+     * FIFO, per file the on-disk line order is the queue order — no more interleaved inversion of
+     * "later flush's batch written before earlier flush's batch" (BL-079).
+     *
+     * Strength: on return, every batch enqueued before the call is on disk. If another thread is
+     * already draining, this caller parks on [fileQueueIdle] (the active drainer drains our batch
+     * too — FIFO) instead of returning with the batch unwritten; when it wakes, it claims the
+     * (usually empty) queue, drains, and returns. The claim/release/signal all happen under
+     * [fileQueueLock] — no window where an enqueue could slip past a departing drainer unnoticed.
+     */
+    private fun drainFileWrites() {
+        // Phase 1: claim the drainer slot. If another thread is draining, park on [fileQueueIdle]
+        // (it drains our batch too — FIFO) and re-check when woken; the lock is released in every
+        // exit path (including an interrupt from `await`) and is NOT held while claiming is done.
+        fileQueueLock.lock()
+        try {
+            while (fileDraining) {
+                try {
+                    fileQueueIdle.await()
+                } catch (e: InterruptedException) {
+                    // Restore the flag and give up this drain pass: our batches were enqueued
+                    // before this call, and the active drainer (the only reason we are waiting)
+                    // still writes them; flush()'s tail re-arm keeps K09's no-strand guarantee.
+                    Thread.currentThread().interrupt()
+                    return
+                }
+            }
+            fileDraining = true
+        } finally {
+            fileQueueLock.unlock()
+        }
+        // Phase 2: we own the drainer slot ([fileDraining] == true). The lock is only held while
+        // touching the queue — never during a write (enqueuers must not stall on disk IO).
+        try {
+            while (true) {
+                fileQueueLock.lock()
+                val w = fileWriteQueue.pollFirst()
+                if (w == null) {
+                    // Release + wake inside the same critical section as the empty poll.
+                    // signalAll (not signal): a waiter can consume a lone signal via the
+                    // interrupt race in Phase 1 and leave the rest parked; waking all waiters
+                    // is cheap here (concurrent flushes are a handful at most) and closes that
+                    // lost-wake-up corner completely. Each woken waiter re-checks `fileDraining`
+                    // and either claims (usually finding the queue empty) or waits again.
+                    fileDraining = false
+                    fileQueueIdle.signalAll()
+                    fileQueueLock.unlock()
+                    return
+                }
+                // Test-only record, under the same lock as the poll (see [drainedSeqs]).
+                if (recordingDrainedSeqs) drainedSeqs.add(w.seq)
+                fileQueueLock.unlock()
+                appendToFile(w)
+            }
+        } catch (t: Throwable) {
+            // Unexpected escape while claimed (e.g. OOM inside appendToFile's array copies; the
+            // write path itself swallows IO failures). Release the claim + wake waiters so the
+            // queue can't wedge; guard against still holding the lock in the worst case.
+            if (fileQueueLock.isHeldByCurrentThread) fileQueueLock.unlock()
+            fileQueueLock.lock()
+            fileDraining = false
+            fileQueueIdle.signalAll()
+            fileQueueLock.unlock()
+            throw t
+        }
+    }
 
     /**
      * 一次刷新同时处理两条流：
@@ -522,53 +801,55 @@ object DshLogBus {
      *   be flushed.
      */
     private fun flush() {
-        var globalWrite: List<String> = emptyList()
-        var instanceWrites: List<FileWrite> = emptyList()
-
         synchronized(lock) {
             // K09: we are draining now — let a subsequent append arm a fresh flush.
             flushScheduled = false
             val anyInstanceDirty = streams.values.any { it.dirty }
-            // 两条流都没新内容：什么都不做（保持原来"无变化不刷"的语义，避免空转重绘）
-            if (!dirty && !anyInstanceDirty) return
+            // 两条流都没新内容：不发布任何快照、不入队任何批次（保持"无变化不刷"的语义），
+            // 但仍执行下面的排空 —— 正常情况下队列为空、是一次 lock+空轮询的开销；
+            // 万一上一轮排空被意外异常中断（批还留在队列里），这里就是它的自愈点
+            // （flushNow 的"到这为止全落盘"语义也因此更强）。
+            if (dirty || anyInstanceDirty) {
+                // ★ 实例文件只在**全局日志已绑定**时才写。理由：全局日志所在的目录就是实例日志的
+                //   目录（见 [instanceLogFile] 从 `DshPaths.LOG_FILE` 推导）；没绑定 = 路径系统还没
+                //   就绪，这时实例路径只能落到临时目录兜底，往那儿写日志没有用处（不是 App 私有目录，
+                //   UI 显示的"日志路径"也不指向它），只会在单测里凭空产生文件。
+                //   真机上两者是同一个时刻就绪的（`DshPaths.loadPaths` 结束前就 [attachFile]），
+                //   所以不影响行为。BL-079 后这行读取搬进 [lock]：只有锁内才能把"绑定状态 + 入队"
+                //   做成一个原子动作（见 [enqueueFileWrite] 的注释）。
+                val globalFile = logFile
 
-            if (dirty) {
-                dirty = false
-                revision++
-                _snapshot.value = Snapshot(revision, ArrayList(buffer))
-                globalWrite = ArrayList(pendingForFile)
-                pendingForFile.clear()
-            }
-
-            if (anyInstanceDirty) {
-                val writes = ArrayList<FileWrite>(streams.size)
-                for ((id, st) in streams) {
-                    if (!st.dirty) continue
-                    st.dirty = false
-                    st.revision++
-                    st.state.value = Snapshot(st.revision, ArrayList(st.buffer))
-                    val lines = ArrayList(st.pendingForFile)
-                    st.pendingForFile.clear()
-                    if (lines.isNotEmpty()) writes += FileWrite(fileFor(id), lines, st, id)
+                if (dirty) {
+                    dirty = false
+                    revision++
+                    // K27: levels 与 lines 在同一把 [lock] 下一起防御性拷贝，快照两列表永远成对
+                    _snapshot.value = Snapshot(revision, ArrayList(buffer), ArrayList(levels))
+                    val batch = ArrayList(pendingForFile)
+                    pendingForFile.clear()
+                    // BL-079: 全局批先入队（与旧实现的落盘调用顺序一致），实例批随后
+                    if (globalFile != null && batch.isNotEmpty()) {
+                        enqueueFileWrite(FileWrite(globalFile, batch, null, null, ++fileWriteSeq))
+                    }
                 }
-                instanceWrites = writes
+
+                if (anyInstanceDirty) {
+                    for ((id, st) in streams) {
+                        if (!st.dirty) continue
+                        st.dirty = false
+                        st.revision++
+                        st.state.value = Snapshot(st.revision, ArrayList(st.buffer), ArrayList(st.levels))
+                        val batch = ArrayList(st.pendingForFile)
+                        st.pendingForFile.clear()
+                        if (globalFile != null && batch.isNotEmpty()) {
+                            enqueueFileWrite(FileWrite(fileFor(id), batch, st, id, ++fileWriteSeq))
+                        }
+                    }
+                }
             }
         }
 
-        val globalFile = logFile
-        if (globalFile != null && globalWrite.isNotEmpty()) {
-            appendToFile(globalFile, globalWrite, stream = null, instanceId = null)
-        }
-        // ★ 实例文件只在**全局日志已绑定**时才写。理由：全局日志所在的目录就是实例日志的目录
-        //   （见 [instanceLogFile] 从 `DshPaths.LOG_FILE` 推导）；没绑定 = 路径系统还没就绪，
-        //   这时实例路径只能落到临时目录兜底，往那儿写日志没有用处（不是 App 私有目录，
-        //   UI 显示的"日志路径"也不指向它），只会在单测里凭空产生文件。
-        //   真机上两者是同一个时刻就绪的（`DshPaths.loadPaths` 结束前就 [attachFile]），所以不影响行为。
-        if (globalFile != null) {
-            for (w in instanceWrites) {
-                appendToFile(w.file, w.lines, stream = w.stream, instanceId = w.instanceId)
-            }
-        }
+        // 出锁后串行排空：写仍在 [fileIoLock] 内逐批进行，队列保证同文件行序单调（BL-079）
+        drainFileWrites()
 
         // K09: lines appended after we cleared `flushScheduled` above (during the drain tail or the
         // off-lock IO just done) only set `dirty`. With no further append to kick a new job they
@@ -598,13 +879,15 @@ object DshLogBus {
      *
      * @param stream 该批行所属的实例流；`null` = 全局流（重试要回对应流，不能串流）
      * @param instanceId [stream] 对应的实例 id（回队前校验流仍驻留用；全局流传 null）
+     *
+     * R15-A/BL-079 修正（2026-10-15 锐评）：失败重试改经 [requeueFileWrite] 从**队首**重入
+     * [fileWriteQueue]（保留原 seq），不再回 `pendingForFile` —— 后者绕过 FIFO 序号，
+     * 在"磁盘满 + 并发 flush"时会让重试批落在更新批之后，磁盘行序倒置。队列重入后：
+     * 同文件的写入顺序恒等于 seq 顺序。重试在同一 drain 单里立即进行（队首被重新取到），
+     * 由 [FILE_WRITE_FAIL_LIMIT] 封顶（3 次后丢弃），不会热循环。
      */
-    private fun appendToFile(
-        f: File,
-        lines: List<String>,
-        stream: InstanceStream?,
-        instanceId: String?
-    ) {
+    private fun appendToFile(w: FileWrite) {
+        val f = w.file
         val failure = runCatching {
             // K11: serialize file mutations on [fileIoLock], NOT the producer [lock]. flush() calls
             // this off-lock, but two overlapping flushes (e.g. flushNow() racing the scheduled job)
@@ -612,7 +895,7 @@ object DshLogBus {
             // (append/appendFor) never touch this monitor, so an oversized log can't stall them.
             synchronized(fileIoLock) {
                 f.parentFile?.mkdirs()
-                f.appendText(lines.joinToString("\n", postfix = "\n"))
+                f.appendText(w.lines.joinToString("\n", postfix = "\n"))
                 // ★ 单次进程生命周期内日志可能无限增长（长驻 agent 能连续跑几天），
                 // 光靠 attachFile 时截断是不够的：这里在每次落盘后检查一次，超限就只留尾部。
                 // 实例文件同理：历史遗留的超大文件会在它第一次被写入时被裁到尾部。
@@ -628,7 +911,21 @@ object DshLogBus {
             }
             return
         }
-        handleFileWriteFailure(f, lines, failure, stream, instanceId)
+        handleFileWriteFailure(w, failure)
+    }
+
+    /**
+     * R15-A/BL-079：把失败批**从队首**放回文件写入队列（保序重试）。
+     * 新一轮 drain 会最先取到它 —— 与"它后面还没写的新批"的相对顺序被保住（seq 仍最小）。
+     * 由 [handleFileWriteFailure] 在 [lock] 内调用（与 enqueue 同一把生产者锁，见队列文档）。
+     */
+    private fun requeueFileWrite(w: FileWrite) {
+        fileQueueLock.lock()
+        try {
+            fileWriteQueue.addFirst(w)
+        } finally {
+            fileQueueLock.unlock()
+        }
     }
 
     /**
@@ -649,12 +946,13 @@ object DshLogBus {
      *   requeue into); the lines themselves stay in the in-memory ring regardless.
      */
     private fun handleFileWriteFailure(
-        f: File,
-        lines: List<String>,
-        failure: Throwable,
-        stream: InstanceStream?,
-        instanceId: String?
+        w: FileWrite,
+        failure: Throwable
     ) {
+        val f = w.file
+        val lines = w.lines
+        val stream = w.stream
+        val instanceId = w.instanceId
         val path = f.absolutePath
         val desc = "log file write failed: $path (${failure.javaClass.simpleName}" +
             (failure.message?.let { ": $it" } ?: "") + ")"
@@ -682,26 +980,28 @@ object DshLogBus {
             val st = stream?.takeIf { instanceId != null && streams[instanceId] === it }
             if (warning != null) {
                 val stamped = stamp(warning)
+                // K27: 告警行是**第二条入库路径**（不走 append/appendFor），级别同样在此预计算，
+                // 并与行一起进、一起 trim —— 否则不变式在此破洞（这正是本任务的清单点 4）。
+                val level = classifyLevel(stamped)
                 if (st != null) {
                     // instance files: the instance view and the global timeline stay consistent
                     // (same contract as appendFor — the instance stream is a subset of global)
                     st.buffer += stamped
-                    trimLocked(st.buffer)
+                    st.levels += level
+                    trimLocked(st.buffer, st.levels)
                     st.dirty = true
                 }
                 buffer += stamped
-                trimLocked(buffer)
+                levels += level
+                trimLocked(buffer, levels)
                 dirty = true
             }
             if (!drop) {
-                if (st != null) {
-                    st.pendingForFile.addAll(0, lines)
-                    st.dirty = true
-                } else if (stream == null) {
-                    pendingForFile.addAll(0, lines)
-                    dirty = true // drives the K09 tail re-arm → retry ~FLUSH_INTERVAL_MS later
-                }
-                // stream != null but evicted: nothing to requeue into; only the file copy is lost
+                // R15-A/BL-079：保序重试 —— 从**队首**重入 FIFO（原 seq 保留），不再回
+                // pendingForFile（那条路绕过序号，磁盘满+并发 flush 时会把行序写反）。
+                // 流已淘汰（evicted）时文件副本仍应重试（它是"已发布快照"的落盘兜底），
+                // 只是没有内存流可回 —— 与旧实现"evicted 则丢弃"相比更保守（保文件序不丢内容）。
+                requeueFileWrite(w)
             }
         }
     }
@@ -760,4 +1060,40 @@ object DshLogBus {
 
     /** Test hook: current number of resident per-instance streams (K10 cap regression anchor). */
     fun streamCountForTest(): Int = synchronized(lock) { streams.size }
+
+    /**
+     * Test hook (BL-079): start recording the [FileWrite.seq] of every batch the writer actually
+     * drains (in drain order). The recorded list is the inspectable proof that the queue is
+     * drained in seq order (strictly increasing) — and thus that a file's written batch order is
+     * the buffer order. Production code must not call this; read via [drainedSeqsForTest].
+     */
+    fun startRecordingDrainedSeqsForTest() {
+        fileQueueLock.lock()
+        try {
+            drainedSeqs.clear()
+            recordingDrainedSeqs = true
+        } finally {
+            fileQueueLock.unlock()
+        }
+    }
+
+    /** Test hook (BL-079): seqs drained since [startRecordingDrainedSeqsForTest], in drain order. */
+    fun drainedSeqsForTest(): List<Long> {
+        fileQueueLock.lock()
+        try {
+            return ArrayList(drainedSeqs)
+        } finally {
+            fileQueueLock.unlock()
+        }
+    }
+
+    /** Test hook (BL-079): stop recording drained seqs (recording is off by default). */
+    fun stopRecordingDrainedSeqsForTest() {
+        fileQueueLock.lock()
+        try {
+            recordingDrainedSeqs = false
+        } finally {
+            fileQueueLock.unlock()
+        }
+    }
 }

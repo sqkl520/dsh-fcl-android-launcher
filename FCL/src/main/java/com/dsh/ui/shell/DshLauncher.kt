@@ -3,6 +3,7 @@ package com.dsh.ui.shell
 import android.content.pm.PackageManager
 import android.os.Build
 import com.dsh.core.DshInstance
+import com.dsh.core.DshLogBus
 import com.dsh.core.DshRuntime
 import com.dsh.core.DshRuntimeService
 import com.dsh.fcl.androidlauncher.R
@@ -26,6 +27,39 @@ import kotlinx.coroutines.withContext
  * 所有阻塞调用（killStale、ProcessBuilder.start）都在 IO 上执行。
  */
 object DshLauncher {
+
+    /**
+     * BL-086（R15）：最近一次"启动失败弹窗"的实例与时间戳（uptimeMillis）。
+     *
+     * 为什么需要：启动失败的出口有两条 —— ①本类的 [showProblem]（同步启动的 Failed/NotReady
+     * outcome）；②[com.dsh.ui.shell.DshInstancesUI] 的状态观察者（`State.Failed` 驱动，
+     * 兜看门狗等异步失败）。同步失败时 DshRuntime 先置 `State.Failed` 再返回 outcome，
+     * 两条链几乎同时弹框 → 用户连关两次。
+     *
+     * 策略：**以 DshRuntime 的状态为真源** —— [showProblem] 弹框前若发现"同实例的 Failed
+     * 刚被状态链弹过"（窗口 [FAIL_DEDUPE_WINDOW_MS] 内），跳过本类弹窗（状态链的弹窗带
+     * 相同的"查看日志/准备运行时"出口，语义等价）。反向同理：状态链弹框时检查本戳。
+     * 只在主线程读写（弹框本身在主线程；状态收集也在主线程）。
+     */
+    @Volatile
+    var lastProblemShownInstanceId: String? = null
+    @Volatile
+    var lastProblemShownAt: Long = 0L
+
+    /** 去重窗口：两条链的触发间隔在毫秒级（同一主线程 turn 前后的两次 collect/返回），2 秒足够宽 */
+    private const val FAIL_DEDUPE_WINDOW_MS = 2_000L
+
+    /** 供状态链（DshInstancesUI）查/写去重戳；[instanceId] 为 null（无归属）时不参与去重 */
+    fun problemJustShownFor(instanceId: String?): Boolean {
+        if (instanceId == null) return false
+        return lastProblemShownInstanceId == instanceId &&
+            android.os.SystemClock.uptimeMillis() - lastProblemShownAt <= FAIL_DEDUPE_WINDOW_MS
+    }
+
+    fun markProblemShown(instanceId: String?) {
+        lastProblemShownInstanceId = instanceId
+        lastProblemShownAt = android.os.SystemClock.uptimeMillis()
+    }
 
     /**
      * 启动一个实例。启动失败 / 未就绪时会在主线程弹对话框（原因 + 看日志 + 准备运行时）。
@@ -52,11 +86,11 @@ object DshLauncher {
                 }
                 is DshRuntime.StartOutcome.NotReady -> showProblem(
                     activity, activity.getString(R.string.dsh_start_not_ready), outcome.reason,
-                    onOpenLogs, onPrepareRuntime
+                    inst.id, onOpenLogs, onPrepareRuntime
                 )
                 is DshRuntime.StartOutcome.Failed -> showProblem(
                     activity, activity.getString(R.string.dsh_start_failed), outcome.reason,
-                    onOpenLogs, onPrepareRuntime
+                    inst.id, onOpenLogs, onPrepareRuntime
                 )
             }
         }
@@ -66,9 +100,17 @@ object DshLauncher {
         activity: FCLActivity,
         title: String,
         reason: String,
+        instanceId: String?,
         onOpenLogs: () -> Unit,
         onPrepareRuntime: () -> Unit,
     ) {
+        // BL-086：状态链（DshInstancesUI 的 State.Failed 观察者）刚弹过同实例的框 →
+        // 本框跳过（两条链都在主线程，戳的读写无并发；窗口 2s 覆盖毫秒级交错）。
+        if (problemJustShownFor(instanceId)) {
+            DshLogBus.append("[launcher] start problem dialog suppressed (already shown by state observer for $instanceId)")
+            return
+        }
+        markProblemShown(instanceId)
         FCLAlertDialog.Builder(activity)
             .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
             .setTitle(title)

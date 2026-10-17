@@ -42,6 +42,10 @@ public class FCLApp extends Application implements Application.ActivityLifecycle
         // DeepSeek Harness 启动器：初始化路径与实例仓库。
         // 只用 App 私有目录（filesDir/cacheDir），不需要任何存储权限；幂等。
         com.dsh.core.DshPaths.loadPaths(this);
+        // R17：把"本进程是谁"写进日志流首（launcher=0.1.6-SNAPSHOT-fixN (code=N)）——
+        // R16/R17 两轮真机排查都卡在"不知道用户装的是哪个包"，这行横幅让任何一份贴出来的
+        // 日志第一行就能定位包与代次。幂等（同进程只写一次；重复出现即"进程重启过"）。
+        com.dsh.core.DshLogBus.writeVersionBannerIfNeeded();
         com.dsh.core.DshInstances.init();
         // 任务聚合（首页"进行中任务"区）需要 Application Context 来取 installer 实例
         com.dsh.core.DshAppContextHolder.init(this);

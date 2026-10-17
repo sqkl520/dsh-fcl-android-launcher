@@ -158,8 +158,12 @@ object DshTasks {
     /** 开始聚合（幂等） */
     fun start(scope: CoroutineScope) {
         if (started) return
-        started = true
+        // K16：started 必须在 ctx 判空**之后**才置位。置位在前的话，context 尚未初始化时
+        // （例如 FCLApp.onCreate 在 DshAppContextHolder.init 之前调用 startDefault）这一句
+        // 会把聚合器永久锁死：之后再调 start() 都会在 `if (started) return` 处退出，
+        // 首页"进行中任务"聚合自此永不启动，且无任何日志痕迹。
         val ctx = DshAppContextHolder.context ?: return
+        started = true
         val installer = DshServices.installer(ctx)
         scope.launch {
             combine(

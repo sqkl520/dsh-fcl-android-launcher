@@ -123,8 +123,8 @@ class DshResourceFormatTest {
         // DshInstancesUI（任务区）：%1$s = 任务标题（"实例名 · 阶段"，实例名是用户起的）
         "dsh_task_cancelled_suffix" to arrayOf<Any>("dsh 0.1.5 · 安装中…"),
 
-        // DshWebViewCompat（R1b）：%1$d = 要求的最低 WebView 主版本号
-        "dsh_webview_compat_message" to arrayOf<Any>(116)
+        // DshWebViewCompat（R1b）：%1$d = 要求的最低 WebView 主版本号（R16/fix4 起为 119）
+        "dsh_webview_compat_message" to arrayOf<Any>(119)
     )
 
     @Test

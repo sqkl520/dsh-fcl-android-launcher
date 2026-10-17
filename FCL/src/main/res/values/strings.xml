@@ -275,7 +275,7 @@ Version %1$s</string>
     <string name="dsh_setup_state_ready">Ready</string>
     <string name="dsh_setup_state_running">In progress</string>
     <string name="dsh_setup_state_failed">Failed</string>
-    <string name="dsh_setup_hint_space">Keep about 2.2 GB free space; first run may take a few minutes.</string>
+    <string name="dsh_setup_hint_space">First-time setup needs about 1.5 GB free space; it may take a few minutes. If the runtime is already extracted, updating needs much less.</string>
     <string name="dsh_setup_enter">Enter</string>
     <string name="dsh_setup_running_now">Preparing runtime</string>
     <string name="dsh_tasks_header">In progress</string>
@@ -342,8 +342,8 @@ Version %1$s</string>
     <string name="dsh_bootstrap_data_dir_failed">Could not create the data directory: %1$s (out of space or permission denied)</string>
     <string name="dsh_bootstrap_missing_artifacts">Missing %1$s. These files should ship inside the APK under jniLibs/arm64-v8a — this is a packaging problem, so check that the build includes those native libraries.</string>
     <string name="dsh_bootstrap_artifact_no_exec">%1$s (no execute permission)</string>
-    <string name="dsh_bootstrap_no_space_extract">Not enough space: extracting the rootfs needs about %1$s, but only %2$s is free.</string>
-    <string name="dsh_bootstrap_no_space_replace">Not enough space: upgrading the rootfs needs about %1$s — the old and new copies both exist while it runs — but only %2$s is free.</string>
+    <string name="dsh_bootstrap_no_space_extract">Not enough space: extracting the rootfs needs about %1$s, but only %2$s is free. Free up some space and retry.</string>
+    <string name="dsh_bootstrap_no_space_replace">Not enough space: upgrading the rootfs needs about %1$s — the old and new copies both exist while it runs — but only %2$s is free. Free up some space and retry.</string>
     <string name="dsh_bootstrap_verify_failed_prefix">Self-check failed: %1$s</string>
     <string name="dsh_bootstrap_verify_ok">Everything looks good: proot and the rootfs are working</string>
     <string name="dsh_bootstrap_verify_proot_failed">proot exited with code %1$d: %2$s</string>
