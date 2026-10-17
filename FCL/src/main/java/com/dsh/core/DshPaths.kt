@@ -168,6 +168,24 @@ object DshPaths {
     fun instancePidFile(instanceId: String): File = File(instanceDir(instanceId), "dsh.pid")
 
     /**
+     * R17（H1/H2/A1 根治）：实例的**当前进程 token URL 侧车文件**（认领恢复的第二恢复源）。
+     *
+     * 为什么需要它（X4 红队 A1）：主恢复源 start-dsh.sh 的实时日志在 `<cacheDir>/dsh/tmp` ——
+     * **cacheDir 可被系统在任意时刻回收**（且脚本在 node 死亡路径会删日志）；pid 文件的 url
+     * 字段又依赖"pid 解析成功"（真机曾长期拿不到 pid）。本文件补上最后一块：
+     * - 落在**实例目录**（filesDir，系统不回收），与 `dsh-node.pid` 同级；
+     * - `onProcessLine` 抓到带 token URL 时**无条件写**（不依赖 pid 解析成功）；
+     * - 生命周期与实例绑定：停止/killStale 清理时删除；进程被系统杀（App 也死）时留存 ——
+     *   这正是认领场景要读的。
+     * - 读到后仍须**探活**（内容可能属上一代次死进程）——由 `DshRuntime.adoptOrphan` 把关。
+     *
+     * 内容 = 完整 URL（`http://127.0.0.1:<port>/?token=<token>`），纯文本单行。
+     * 安全口径同 [instancePidFile]（App 私有目录）；token 换代时被覆盖/随清理删除。
+     */
+    fun instanceTokenUrlFile(instanceId: String): File =
+        File(instanceDir(instanceId), "dsh-token-url.txt")
+
+    /**
      * 旧的运行期明文凭据文件（`credentials.env`）。
      *
      * ⚠️ **已废弃**：启动器不再管理 API Key（Key 归 dsh 自己管，存在实例 home 的
@@ -253,20 +271,36 @@ object DshPaths {
         stat.availableBytes
     }.getOrDefault(-1L)
 
-    /** 递归统计目录体积（IO 线程用；UI 展示"占用"） */
+    /**
+     * 递归统计目录体积（IO 线程用；UI 展示"占用"）。
+     *
+     * ★ BL-102：**不跟随目录符号链接**。`walkTopDown()` 默认把指向目录的 symlink 当目录递归
+     * （B1c 实测：造 link→real 环会重复计入甚至成环），而实例目录含 agent 可写的
+     * workspace/home —— 一个自引用链接就能让遍历膨胀。`onEnter` 对**起始目录也调用**、
+     * 返回 false 即剪枝（B1c 实验确认），对环天然安全；npm 默认 copy、node_modules 无正常
+     * symlink 需求，展示语义无损。Kotlin stdlib 无 `File.isSymbolicLink`，用 NIO
+     * （API 26+，与 minSdk 匹配无需守卫）。
+     */
     fun dirSize(dir: File): Long {
         if (!dir.exists()) return 0L
         var total = 0L
-        dir.walkTopDown().forEach { f -> if (f.isFile) total += f.length() }
+        dir.walkTopDown()
+            .onEnter { !java.nio.file.Files.isSymbolicLink(it.toPath()) }
+            .forEach { f -> if (f.isFile) total += f.length() }
         return total
     }
 
-    /** 可读的体积文本 */
+    /**
+     * 可读的体积文本。
+     *
+     * ★ BL-034：`"%.1f".format(...)` 默认用系统 locale，小数点会在部分 locale 下渲染成逗号
+     * （`1,5 MB`）—— 体积数字与文件名的可复制性都被破坏。显式钉 `Locale.US`。
+     */
     fun formatSize(bytes: Long): String = when {
         bytes < 0 -> "—"
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-        bytes < 1024L * 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
-        else -> "%.2f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
+        bytes < 1024L * 1024 * 1024 -> "%.1f MB".format(java.util.Locale.US, bytes / 1024.0 / 1024.0)
+        else -> "%.2f GB".format(java.util.Locale.US, bytes / 1024.0 / 1024.0 / 1024.0)
     }
 }

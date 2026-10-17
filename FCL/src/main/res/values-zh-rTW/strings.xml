@@ -253,7 +253,7 @@
     <string name="dsh_setup_state_ready">已就緒</string>
     <string name="dsh_setup_state_running">進行中</string>
     <string name="dsh_setup_state_failed">失敗</string>
-    <string name="dsh_setup_hint_space">首次準備需要約 2.2 GB 可用空間，耗時可能數分鐘。</string>
+    <string name="dsh_setup_hint_space">首次準備需要約 1.5 GB 可用空間，耗時可能數分鐘。已裝過的裝置升級所需空間遠小於此。</string>
     <string name="dsh_setup_enter">進入</string>
     <string name="dsh_setup_running_now">正在準備執行環境</string>
     <string name="dsh_tasks_header">進行中</string>

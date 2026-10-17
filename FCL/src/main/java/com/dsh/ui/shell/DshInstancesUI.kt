@@ -311,7 +311,10 @@ private class InstanceListPage(
 
         adapter = DshInstanceAdapter(
             onStart = ::startInstance,
-            onStop = { DshRuntime.stop() },
+            // ★ BL-044（R15）：用 stopIf 而不是 stop() —— stop() 停的是"当前在跑的那个"，
+            //   从行渲染到用户点击之间状态可能已换实例（TOCTOU：停 A 起 B 后旧帧里点"停止"
+            //   会停掉 B）。stopIf 在运行时校验归属，不符则无操作（与详情页同款修法）。
+            onStop = { DshRuntime.stopIf(it.id) },
             // 行的「更多 → 设置」：落在详情页的「配置」段（BL-084 —— 菜单写"设置"，
             // 用户预期看到名字/端口这些配置项；原来固定落「运行」段，与菜单语义矛盾，
             // 也与 DshInstanceDetailPage 那侧"「设置」菜单 → 配置 tab"的注释对不上）。
@@ -512,6 +515,16 @@ private class InstanceListPage(
         when (st) {
             is DshRuntime.State.Failed -> {
                 lastNotifiedState = st
+                // ★ BL-086（R15）：去重 —— 若 DshLauncher.showProblem 刚为**同实例**弹过框
+                //   （同步启动失败的两条链：状态链=本处、outcome 链=showProblem，毫秒级交错），
+                //   本次跳过，用户只看到一个「启动失败」框。打戳后由对方的
+                //   problemJustShownFor() 反向抑制。看门狗等纯异步失败不受影响
+                //  （没有 outcome 链同行，本处照常弹）。
+                if (DshLauncher.problemJustShownFor(st.instanceId)) {
+                    DshLogBus.append("[instances] failed dialog suppressed (already shown for ${st.instanceId})")
+                    return
+                }
+                DshLauncher.markProblemShown(st.instanceId)
                 FCLAlertDialog.Builder(host.activity)
                     .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
                     .setTitle(context.getString(R.string.dsh_start_failed))

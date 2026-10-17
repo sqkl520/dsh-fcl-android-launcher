@@ -47,17 +47,21 @@ object DshBootstrap {
     private const val ASSET_ROOT = "dsh"
 
     /**
-     * rootfs 解压后的**实测**体积（Debian bookworm arm64 + 官方 Node 22 + 预装 dsh，瘦身版 slim1）。
+     * rootfs 解压后的**门槛**体积（Debian bookworm arm64 + 官方 Node 22 + 预装 dsh，瘦身版 slim1）。
      *
-     * 实测来源：docs/ROOTFS.md §9「瘦身后（0.1.3 起）」—— 解压后合计 **904,335,360 B（≈862 MiB）**，
-     * tar.xz 压缩后 142 MB。assets 内 `rootfs/version` =
+     * 实测来源：docs/ROOTFS.md §9「瘦身后（0.1.3 起）」—— 解压后 apparent-size 合计
+     * **904,335,360 B（≈862 MiB）**，tar.xz 压缩后 142 MB。assets 内 `rootfs/version` =
      * `debian-bookworm-arm64-node22-dsh0.1.6-alpha.2-slim1`，正与该瘦身记录对应。
      *
-     * ★ K21 修正：旧值 1,650 MiB 是**瘦身前**的数字（当时解压后 ~1.5 GiB，取 1.65 留余量）。
-     *   瘦身后真实只有 862 MiB，旧值把空间门槛抬高近一倍，把本来够用的中低端机误拦在首启页。
-     *   项目惯例：阈值必须有实测依据 —— 这里直接钉死 docs/ROOTFS.md 记录的实测字节数。
+     * ★ K21 修正：旧值 1,650 MiB 是**瘦身前**的数字，把空间门槛抬高近一倍，误拦中低端机。
+     * ★ BL-072（R15）：apparent-size **低估实际占盘约 8%** —— 真机实测（
+     *   `docs/reports/round12/A6-bootstrap.md` A6-3）：34,050 文件 867,218,857 B，4K 块对齐后
+     *   961,220,608 B，加 4,865 个目录约 936 MiB（f2fs 实际只会更大）。门槛若按 apparent-size
+     *   会在窄空间带放行 → 中途 ENOSPC 留半成品。本常量改为**不小于实测的保守值 960 MiB**
+     *   （与"宁多勿少"同向：这是要拦"注定写满"的门槛，不是体积展示）。
+     *   项目惯例：阈值必须有实测出处。
      */
-    private const val ROOTFS_EXTRACTED_BYTES = 904_335_360L
+    private const val ROOTFS_EXTRACTED_BYTES = 960L * 1024 * 1024
 
     /**
      * 一个实例的 dsh 依赖树（node_modules）大致占用，实测 300~500 MB，取 600 MB 留余量。
@@ -277,6 +281,12 @@ object DshBootstrap {
             ) {
                 // 解压前才做空间检查，按"首装 / 升级分别需要多少可用空间"算
                 // （口径见 [requiredFreeBytes] —— 升级分支不再按两份 rootfs 的可用空间要求）。
+                // ★ BL-072（R15）：评估 free **之前**先把上次中断遗留的 `rootfs.tmp` 清掉 ——
+                //   它是可回收空间，不清就把它算进"已占用"，中断遗留越多越被误拦
+                //   （"明明删 .tmp 就够"的假失败）。原清理在 extractRootfs 内部（更晚），
+                //   现在提前到此；extractRootfs 里那处保留（幂等，且防其它调用路径）。
+                //   注：`.old` 不跨启动残留（解压成功路径末尾即删），优先级低，不动。
+                runCatching { File("${DshPaths.ROOTFS_DIR}.tmp").deleteRecursively() }
                 val replacing = DshPaths.rootfsLooksUsable()
                 val need = requiredFreeBytes(replacing)
                 val free = DshPaths.freeSpaceBytes()
