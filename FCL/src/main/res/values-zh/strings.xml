@@ -127,7 +127,7 @@
         <string name="dsh_notify_channel_desc">保活 dsh web 进程</string>
         <string name="dsh_notify_text_port">%1$s · 端口 %2$s · %3$s</string>
         <string name="dsh_notify_text">%1$s · %2$s</string>
-        <string name="dsh_reinstall_pick_version">还没有成功安装过任何版本，请到下载页选择一个版本。</string>
+        <string name="dsh_reinstall_pick_version">还没有成功安装过任何版本，请到「版本」页选择一个版本。</string>
         <string name="dsh_runtime_exited">dsh 进程已退出（退出码 %1$d）</string>
         <string name="dsh_saved">已保存</string>
         <string name="dsh_settings_model">模型</string>
@@ -354,4 +354,10 @@
     <string name="dsh_download_warning_stale">刷新失败，正在显示缓存数据</string>
     <string name="dsh_download_empty_prerelease">没有可显示的稳定版。打开「显示预览版」查看全部版本。</string>
     <string name="dsh_download_empty_all">没有可显示的版本，点右上角刷新重试。</string>
+    <!-- R18：配置页复制路径的确认提示（原先误用描述行文案，看起来像“又让我点一次”） -->
+    <string name="dsh_path_copied">路径已复制到剪贴板</string>
+    <!-- R18：重装前确认（与删除同级；说明会先停实例、重新下载依赖） -->
+    <string name="dsh_reinstall_confirm_message">要重新安装 %1$s 吗？将重新下载依赖。若实例正在运行，会先停止它。</string>
+    <!-- R18：改名/改端口在实例运行中修改后的提示（改动需重启才生效） -->
+    <string name="dsh_restart_to_apply">重启该实例后生效</string>
 </resources>

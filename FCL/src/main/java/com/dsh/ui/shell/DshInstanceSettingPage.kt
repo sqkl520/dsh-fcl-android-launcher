@@ -3,11 +3,14 @@ package com.dsh.ui.shell
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.dsh.core.DshBootstrap
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
+import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
 import com.dsh.core.DshServices
@@ -19,8 +22,17 @@ import com.tungsten.fcllibrary.component.dialog.EditDialog
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * 重装（BL-147）前等待旧进程离场的预算：上限与轮询间隔**照抄** [DshInstances.delete] 的
+ * `DELETE_WAIT_TIMEOUT_MS`（8s，与 `DshRuntime.stopAndWait` 的默认预算一致）/ `DELETE_WAIT_POLL_MS`
+ * （100ms）—— 那两个常量是 DshInstances 的 private，这里只复制数值与"轮询 + 超时"的姿态。
+ */
+private const val REINSTALL_STOP_WAIT_TIMEOUT_MS = 8_000L
+private const val REINSTALL_STOP_WAIT_POLL_MS = 100L
 
 /**
  * 实例详情里「运行」/「配置」两段的**行式设置列表**（[DshInstanceDetailPage] 的 tab 0 与 tab 2）。
@@ -73,6 +85,13 @@ class DshInstanceSettingPage(
 
     /** 体积是异步算出来的，缓存在这里供行绑定取值 */
     private var diskText: String = ""
+
+    /**
+     * 主线程 Handler（BL-148）：[DshInstances.delete] 的 onFinished 回调在 IO 线程（DshAppScope），
+     * toast 必须切回主线程。用独立 Handler 而**不是**页面 [scope]：删除一开始实例就同步摘出清单、
+     * 详情页随之退层被回收 —— 页面 scope 届时已被取消，挂着它的迟到反馈永远送不到用户眼前。
+     */
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /** 主题变化时重绘分割线（FCL 同款做法） */
     private val themeInvalidate = Runnable { binding.settingList.invalidate() }
@@ -358,6 +377,9 @@ class DshInstanceSettingPage(
                 } else {
                     DshInstances.updateConfig(i.id, name = text.trim())
                     reload()
+                    // BL-163：实例在跑时改名不会影响已启动的进程（运行复用启动时的快照），
+                    // 追加一句"重启后生效"，免得用户改完对着旧名字的界面以为没保存。
+                    toastRestartToApplyIfRunning(i.id)
                 }
             }
 
@@ -365,29 +387,62 @@ class DshInstanceSettingPage(
                 context.getString(R.string.dsh_settings_row_port),
                 if (i.port > 0) i.port.toString() else "",
                 allowEmpty = true
-            ) { text ->
-                // 空串是对这把输入框**合法**的输入（= 自动分配端口），所以这里必须
-                // 走 allowEmpty 通路收下它，再按 blank→0 解释（parsePortInput，fix2 / BL-090）。
-                val port = parsePortInput(text)
-                if (port == null) {
-                    toast(context.getString(R.string.dsh_port_invalid))
-                } else {
-                    DshInstances.updateConfig(i.id, port = port)
-                    reload()
-                }
-            }
+            ) { text -> commitPortValue(i, text) }
 
             DshInstanceSettingAdapter.Tag.PATH -> {
                 val path = DshPaths.instanceDir(i.id).absolutePath
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("dsh instance path", path))
-                toast(context.getString(R.string.dsh_settings_desc_path))
+                // BL-159b：旧文案是行的说明文字（"点击复制到剪贴板"）——复制**做完了**还提示
+                // "点击复制"是答非所问；改成明确的完成反馈。
+                toast(context.getString(R.string.dsh_path_copied))
             }
 
             // 打开界面：运行中/启动中/停止中才会走到这里（`editable` 按 running || isBusy() 设置）
             DshInstanceSettingAdapter.Tag.OPEN_WEB -> host.openWebView()
 
             else -> Unit
+        }
+    }
+
+    /**
+     * 端口输入落地（fix2 / BL-090 的解析口径不动；BL-159a 在此加"失败重开预填"）。
+     *
+     * 旧行为的断点：`parsePortInput` 返回 null 时只 toast 一句非法提示 —— 而 EditDialog 在回调前
+     * 已经 dismiss，用户的输入随之蒸发，想改只能从头再敲一遍。
+     * 现在失败后**重新打开编辑框并预填原输入**（[retry] 防重入：重开的那一次再失败就只 toast，
+     * 不会再开第三个框 —— 递归上限为 1，不存在无限套娃）。
+     */
+    private fun commitPortValue(i: DshInstance, text: String, retry: Boolean = true) {
+        // 空串是对这把输入框**合法**的输入（= 自动分配端口），所以这里必须
+        // 走 allowEmpty 通路收下它，再按 blank→0 解释（parsePortInput，fix2 / BL-090）。
+        val port = parsePortInput(text)
+        if (port == null) {
+            toast(context.getString(R.string.dsh_port_invalid))
+            if (retry) {
+                editText(
+                    context.getString(R.string.dsh_settings_row_port),
+                    text,
+                    allowEmpty = true
+                ) { again -> commitPortValue(i, again, retry = false) }
+            }
+        } else {
+            DshInstances.updateConfig(i.id, port = port)
+            reload()
+            // BL-153-UI/BL-163：运行中改端口不会重启进程（DshRuntime 复用已跑起来的那份），
+            // 不提示的话"改完没变化"会被当成没保存。非运行态不加这句，避免噪音。
+            toastRestartToApplyIfRunning(i.id)
+        }
+    }
+
+    /**
+     * BL-163 / BL-153-UI：实例**在跑**时改配置（改名/改端口）后追加"重启该实例后生效"。
+     * 判据与启动停止行/停止动作同源（[DshRuntime.activeInstanceId]，含 Starting/Stopping）——
+     * 只有运行时才会真的有"旧进程还按旧配置在跑"的分歧；没跑时改动即刻是下一场启动的全部事实。
+     */
+    private fun toastRestartToApplyIfRunning(id: String) {
+        if (DshRuntime.activeInstanceId() == id) {
+            toast(context.getString(R.string.dsh_restart_to_apply))
         }
     }
 
@@ -499,10 +554,21 @@ class DshInstanceSettingPage(
     /**
      * 重新安装。
      *
+     * 两道把关（BL-147）：
+     * 1. **安装中重复触发在确认框之前拦下**：判据用 installer 的单飞闸门真值（`isInstalling`），
+     *    **不用** `inst.state` —— 持久化状态可能滞后。提示口径与版本页的"已跳过"一致
+     *    （旧实现放行到 installer.install 才发现闸门被占：用户点了没反应，返回值被丢弃）。
+     * 2. **先确认、再处理运行中的旧进程、最后才发起安装**：见 [reinstallConfirmed]。
+     *
      * 没装成功过任何版本时**不直接跳走**，而是弹一个带「下载」按钮的确认框 —— 与实例列表页
      * 同一处理：跳走会把用户正在看的详情页顶掉，而且他没得选（必须先去版本页挑一个）。
      */
     private fun reinstall(i: DshInstance) {
+        // 安装中重复触发，按已跳过口径提示
+        if (DshServices.installer(context).isInstalling(i.id)) {
+            toast(context.getString(R.string.dsh_install_skipped, i.dshVersion ?: i.name))
+            return
+        }
         val version = i.dshVersion
         if (version == null) {
             FCLAlertDialog.Builder(host.activity)
@@ -517,8 +583,71 @@ class DshInstanceSettingPage(
                 .show()
             return
         }
-        DshServices.installer(context).install(i, version)
-        toast(context.getString(R.string.dsh_install_started, version))
+        // 确认姿态照抄 [confirmDelete]：ALERT 级、正键=动作名、负键取消。
+        // 正文（dsh_reinstall_confirm_message）已声明"运行中会先停止它" —— 停止的真实发生
+        // 在 [reinstallConfirmed]，文案与实际行为必须保持这一致。
+        FCLAlertDialog.Builder(host.activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+            .setTitle(context.getString(R.string.dsh_action_reinstall))
+            .setMessage(context.getString(R.string.dsh_reinstall_confirm_message, i.name))
+            .setPositiveButton(context.getString(R.string.dsh_action_reinstall)) {
+                reinstallConfirmed(i, version)
+            }
+            .setNegativeButton(context.getString(R.string.dialog_negative), null)
+            .create()
+            .show()
+    }
+
+    /**
+     * 确认后的重装流程（BL-147）：
+     *
+     * 1. 实例在跑（[DshRuntime.activeInstanceId]，含 Starting/Stopping）→ 先 [DshRuntime.stopIf]，
+     *    再**等它真的离场**才发起安装：npm 与活 node 并发写同一份 node_modules 会互相踩碎数据
+     *    （installer 的单飞闸门只防"安装 vs 安装"，防不了"安装 vs 运行"—— 这条边补在这里）。
+     *    等待姿态逐条照抄 [DshInstances.delete]：stopIf 的返回值**不作判据**（Stopping 期是
+     *    no-op、返回 false 不代表停完了），统一由轮询 `activeInstanceId()` 判"是否真的离场"；
+     *    上限 8s、间隔 100ms；超时也照常发起安装，只在实例日志里写明"进程未停干净"——
+     *    与 delete"停不动也硬删"同哲学：用户的意图已被确认，拦不动就把真相留在日志里。
+     * 2. 等待全在协程里做（本页 scope + delay 轮询，不阻塞 UI）；页面销毁时 scope 取消、
+     *    等待随之中止 —— 确认之后、发起安装之前用户退页，则这次重装作废（不会误发安装）。
+     */
+    private fun reinstallConfirmed(i: DshInstance, version: String) {
+        scope.launch {
+            if (DshRuntime.activeInstanceId() == i.id) {
+                // 停止原因用「重新安装」这句动作文案：没有专用键（也不新增），而它会显示在
+                // 任务区那条被取消的运行记录上 —— 比默认的「用户停止」更能说清这一停是为什么。
+                runCatching { DshRuntime.stopIf(i.id, context.getString(R.string.dsh_action_reinstall)) }
+                    .onFailure { e ->
+                        // stopIf 设计上不该抛；万一抛了也不能让这个协程死掉 —— 继续走下面的
+                        // 等待循环（与 DshInstances.delete 同款兜底）。
+                        DshLogBus.appendFor(i.id, "[setting] stopIf before reinstall failed: ${e.message}")
+                    }
+                var stopTimedOut = false
+                val waitDeadline = System.currentTimeMillis() + REINSTALL_STOP_WAIT_TIMEOUT_MS
+                while (DshRuntime.activeInstanceId() == i.id) {
+                    if (System.currentTimeMillis() >= waitDeadline) {
+                        stopTimedOut = true
+                        break
+                    }
+                    delay(REINSTALL_STOP_WAIT_POLL_MS) // 协程里轮询：让出线程，别忙等
+                }
+                if (stopTimedOut) {
+                    // 实例级日志：这条属于该实例的安装史，用户到它的日志页排障
+                    DshLogBus.appendFor(
+                        i.id,
+                        "[setting] stop timed out before reinstall for ${i.name}, installing anyway"
+                    )
+                }
+            }
+            val started = DshServices.installer(context).install(i, version)
+            if (started) {
+                toast(context.getString(R.string.dsh_install_started, version))
+            } else {
+                // 极窄竞态：等停止的窗口里别的入口（版本页等）先发起了同实例安装 ——
+                // installer 已把忽略原因写进实例日志，这里按"已跳过"口径给同样的反馈。
+                toast(context.getString(R.string.dsh_install_skipped, i.dshVersion ?: i.name))
+            }
+        }
     }
 
     private fun confirmDelete(i: DshInstance) {
@@ -532,7 +661,24 @@ class DshInstanceSettingPage(
                 // 而删除会把整个实例目录 deleteRecursively()，它自然一起消失。
                 // 删除是**同步**摘清单 + 异步删目录：实例一从清单消失，详情页订阅到就会退层，
                 // 本页随之被销毁 —— 所以这里不需要、也不该自己去关页面（那是详情页整层的事）。
-                DshInstances.delete(i.id)
+                //
+                // BL-148：列表页删除有 Toast、这里全程静默 —— 摘清单虽即时，目录删除在后台
+                // 要数秒，"点了删除什么都没发生"的观感就来自这段空窗。补上与列表页同源的
+                // dsh_delete_started；收尾再按结果补一条（见下）。
+                DshInstances.delete(i.id) { leftover ->
+                    // onFinished 不在主线程（DshAppScope 的 IO）→ 切主线程再 toast。
+                    // 用独立 [mainHandler] 而不是页面 scope：删除一开始实例就摘清单、详情页
+                    // 退层、本页 scope 被取消 —— 而收尾最快也在"等进程离场 + 删 ~300MB"之后，
+                    // 几乎必然晚于页面销毁，挂页面 scope 的迟到反馈永远到不了用户眼前。
+                    mainHandler.post {
+                        // 有文件残留才补：复用删除任务行的终态文案（与任务区同一句话，不新增键）。
+                        // 全删干净则不补 —— 开始那条 Toast + 任务区「已删除」已够。
+                        if (leftover) {
+                            toast(context.getString(R.string.dsh_task_deleted_with_leftover))
+                        }
+                    }
+                }
+                toast(context.getString(R.string.dsh_delete_started))
             }
             .setNegativeButton(context.getString(R.string.dialog_negative), null)
             .create()
