@@ -19,7 +19,9 @@
 > ⚠️ **这是一个用 AI 辅助开发（vibe coding）的个人项目，处于早期开发中** ——
 > 有任何问题欢迎提 Issues，如果喜欢就点个 Star 吧！
 >
-> 当前验证包：**`0.1.6-SNAPSHOT-fix5`**（真机验证中）。已发布的历史修复包见 Releases 页。
+> **公开可下载的最新包：`0.1.6-SNAPSHOT-fix4`**（见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)）。
+> 更新的修复包（fix5/fix6）正在真机验证中，验证通过后才会发布到 Releases。
+> 一律以 Releases 页为准 —— 装完请到**关于页核对版本号后缀**（如 `-fix4`）确认装对了包。
 
 ---
 
@@ -44,7 +46,8 @@
 
 1. 去 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 下载最新 APK
    （`dsh-fcl-android-launcher-*-arm64.apk`；文件名带 `-fixN` 的是当前验证包，装它）
-2. 在 arm64 安卓手机上安装（**未 root 也用**）；首次安装请预留约 **1.4 GB** 空闲空间
+2. 在 arm64 安卓手机上安装（**未 root 也用**）；首次安装请预留约 **1.5 GB** 空闲空间
+   （界面内提示同源，按实际门槛动态计算）
 3. 首次启动等待运行环境解压（几分钟，期间保持应用在前台）
 4. 去「版本」页安装一个 dsh → 回「实例」页启动 → 在 dsh 界面里填 API Key，开聊
    （API Key 完全由 dsh 自己管理：dsh 界面 → 设置 → 模型）
@@ -56,7 +59,7 @@
 | 打开界面看到 `dsh web authentication required` | 先在系统浏览器里清一次该站点（127.0.0.1）的缓存/cookie，再从应用内重新打开；最新验证包已针对此链路做了多轮修复，若仍复现请带日志反馈 |
 | 提示「WebView 过旧」 | 升级「Android System WebView」（部分设备为 Chrome）；急用时点「用外部浏览器打开」 |
 | 界面白屏 / 模型选不了 | 同上——多半是 WebView 内核过旧，dsh 新版前端需要 119+ |
-| 首次要等多久？要多大空间？ | 解压约需 1.4 GB 空闲、几分钟（视闪存速度）；解压期间保持前台或锁屏放置均可 |
+| 首次要等多久？要多大空间？ | 解压约需 1.5 GB 空闲、几分钟（视闪存速度）；解压期间保持前台或锁屏放置均可 |
 | 下载/安装中断了要重来吗？ | 不用——已下载的内容有缓存，重试不会从头再来 |
 | 品牌 / 包名 | debug 签名验证包，包名 `com.dsh.fcl.androidlauncher.debug`；正式包名与签名留待 1.0.0 |
 
