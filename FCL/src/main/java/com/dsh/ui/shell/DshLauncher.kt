@@ -159,11 +159,28 @@ object DshLauncher {
             .setPositiveButton(activity.getString(R.string.dsh_action_view_logs)) { onOpenLogs() }
             .setNeutralButton(activity.getString(R.string.dsh_action_prepare_runtime)) { onPrepareRuntime() }
             // BL-152-UI / P3-22（R18）：原为「确认/OK」且空回调 —— 名字易被读成"确认失败"，
-            // 且关框后 DshRuntime 停在 Failed（右面板一直显示失败原因）。改为「关闭」+ 复位：
-            // resetState 只在非 Running/Starting 时生效（同 DshInstancesUI 失败框的既有用法），
-            // 不会把并发启动起来的别的实例状态清掉。
+            // 且关框后 DshRuntime 停在 Failed（右面板一直显示失败原因）。改为「关闭」+ 复位。
+            //
+            // ★ R18 复核加固：`resetState()` 是**全局**复位（不区分归属，且对 Stopping 也会生效），
+            //   弹框挂起期间状态可能已被别的路径改写（并发启动另一个实例、通知栏发起停止等）。
+            //   这里先确认当前状态仍是**本实例的** Failed/Exited（即这条失败链自己的终态）
+            //   才复位；否则不动，只记一行英文诊断 —— 避免清掉别人的失败态、也避免把在途的
+            //   Stopping 提前置 Idle（那会让停止收尾协程的 finalize 分支被跳过）。
             .setNegativeButton(activity.getString(R.string.dsh_action_close)) {
-                runCatching { DshRuntime.resetState() }
+                val st = DshRuntime.currentState()
+                val owner = when (st) {
+                    is DshRuntime.State.Failed -> st.instanceId
+                    is DshRuntime.State.Exited -> st.instanceId
+                    else -> null
+                }
+                if (instanceId != null && owner == instanceId) {
+                    runCatching { DshRuntime.resetState() }
+                } else {
+                    DshLogBus.append(
+                        "[launcher] resetState skipped on close: current state is not this instance's " +
+                            "Failed/Exited (instance=$instanceId, state=${st.javaClass.simpleName})"
+                    )
+                }
             }
             .create()
             .show()
