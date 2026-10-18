@@ -127,7 +127,7 @@
         <string name="dsh_notify_channel_desc">Keeps the dsh web process alive</string>
         <string name="dsh_notify_text_port">%1$s · port %2$s · %3$s</string>
         <string name="dsh_notify_text">%1$s · %2$s</string>
-        <string name="dsh_reinstall_pick_version">No version has been installed successfully yet; pick one on the download page.</string>
+        <string name="dsh_reinstall_pick_version">No version has been installed successfully yet; pick one on the Versions tab.</string>
         <string name="dsh_runtime_exited">dsh process exited (code %1$d)</string>
         <string name="dsh_saved">Saved</string>
         <string name="dsh_settings_model">Model</string>
@@ -367,4 +367,10 @@ Version %1$s</string>
     <string name="dsh_download_warning_stale">Refresh failed; showing cached data</string>
     <string name="dsh_download_empty_prerelease">No stable versions to show. Turn on "Show previews" to see all versions.</string>
     <string name="dsh_download_empty_all">No versions available. Tap refresh to reload.</string>
+    <!-- R18：配置页复制路径的确认提示（原先误用描述行文案，看起来像"又让我点一次"） -->
+    <string name="dsh_path_copied">Path copied to clipboard</string>
+    <!-- R18：重装前确认（与删除同级；说明会先停实例、重新下载依赖） -->
+    <string name="dsh_reinstall_confirm_message">Reinstall %1$s? Dependencies will be downloaded again. If the instance is running, it will be stopped first.</string>
+    <!-- R18：改名/改端口在实例运行中修改后的提示（改动需重启才生效） -->
+    <string name="dsh_restart_to_apply">Takes effect after restarting the instance</string>
 </resources>

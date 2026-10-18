@@ -1,6 +1,7 @@
 package com.dsh.core
 
 import android.content.Context
+import com.dsh.fcl.androidlauncher.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,9 +28,9 @@ import kotlinx.coroutines.launch
  * 2. 订阅安装进度的那块界面（下载页的"安装中"标记）等的是一个**事件**，而取消路径当时
  *    什么事件都不发，于是标记永远留在原地，要重启 App 才恢复。
  *
- * 所以这里加上 [state]（终态维度）、[instanceId]（这条任务属于谁）、[error]、起止时间。
+ * 所以这里加上 [state]（终态维度）、[instanceId]（这条任务属于谁）、[error]、结束时间。
  *
- * ★ **新增字段全部带默认值**：[state] 默认 [State.RUNNING]，其余默认 null / 0。理由是现有构造点
+ * ★ **新增字段全部带默认值**：[state] 默认 [State.RUNNING]，其余默认 null。理由是现有构造点
  *   （[DshTasks] 内部那几处）大多在造"进行中"的任务，不该被迫逐个改；接口向后兼容之后，
  *   "哪些地方还没上报终态"就变成一件可以增量补的事，而不是一次大爆炸式改动。
  *
@@ -65,9 +66,7 @@ data class DshTask(
     val instanceId: String? = null,
     /** 失败原因；[state] == [State.FAILED] 时应当有值（其余状态允许为 null） */
     val error: String? = null,
-    /** 任务开始时刻（`System.currentTimeMillis()`）；0 = 没记（默认值，别拿它算耗时） */
-    val startedAt: Long = 0L,
-    /** 结束时刻；null = 还没结束。与 [startedAt] 配对，供界面显示"刚刚 / 3 分钟前" */
+    /** 结束时刻；null = 还没结束。供界面显示"刚刚 / 3 分钟前" */
     val finishedAt: Long? = null
 ) {
     enum class Kind {
@@ -187,7 +186,10 @@ object DshTasks {
                                 id = runtimeTaskId(runtime.instanceId),
                                 kind = DshTask.Kind.RUNTIME,
                                 title = runtime.name,
-                                stage = STAGE_STARTING,
+                                // BL-146：stage 直拼进任务行标题，必须按当前语言取词（原先是硬编码
+                                // 英文常量，中文界面露 "Starting"）。在这里现取不缓存 —— 投影每次
+                                // 重算都重新取词，用户切语言后的下一次重算即跟上；拿不到 Context 时回落英文。
+                                stage = DshUiText.getString(R.string.dsh_task_starting, "Starting…"),
                                 action = DshTask.Action.STOP,
                                 instanceId = runtime.instanceId
                             )
@@ -197,7 +199,7 @@ object DshTasks {
                                 id = runtimeTaskId(runtime.instanceId),
                                 kind = DshTask.Kind.RUNTIME,
                                 title = runtime.name,
-                                stage = STAGE_STOPPING,
+                                stage = DshUiText.getString(R.string.dsh_task_stopping, "Stopping…"),
                                 action = DshTask.Action.NONE,
                                 instanceId = runtime.instanceId
                             )
@@ -212,7 +214,7 @@ object DshTasks {
                                 id = deleteTaskId(id),
                                 kind = DshTask.Kind.DELETE,
                                 title = DshInstances.byId(id)?.name ?: id,
-                                stage = STAGE_DELETING,
+                                stage = DshUiText.getString(R.string.dsh_task_deleting, "Deleting…"),
                                 action = DshTask.Action.NONE,
                                 instanceId = id
                             )
@@ -314,7 +316,9 @@ object DshTasks {
     fun runtimeTaskId(instanceId: String): String = "runtime:" + instanceId
 
     private fun bootstrapTask(p: DshBootstrap.Progress?): DshTask {
-        // 文案由界面按 kind 本地化；这里只给"结构性"内容（阶段/明细/进度）
+        // 标题（「运行环境」）由界面按 kind 固定取 dsh_task_bootstrap 画（见 DshInstancesUI.titleText），
+        // 不直接渲染这里的 stage —— 但它是与"启动中/停止中/删除中"同族的写死英文常量（BL-146），
+        // 一并本地化：将来别处开始渲染它（或终态后缀改了展示方式）时不至于露英文。
         val stage: String
         val detail: String?
         val fraction: Double?
@@ -323,13 +327,13 @@ object DshTasks {
                 stage = p.text; detail = null; fraction = p.fraction
             }
             is DshBootstrap.Progress.Detail -> {
-                stage = STAGE_BOOTSTRAP_RUNNING; detail = p.detail; fraction = null
+                stage = bootstrapStageText(); detail = p.detail; fraction = null
             }
             is DshBootstrap.Progress.Failed -> {
                 stage = p.reason; detail = null; fraction = null
             }
             else -> {
-                stage = STAGE_BOOTSTRAP_RUNNING; detail = null; fraction = null
+                stage = bootstrapStageText(); detail = null; fraction = null
             }
         }
         return DshTask(
@@ -343,6 +347,17 @@ object DshTasks {
             // instanceId 保持 null：运行环境是所有实例共享的底座，不属于任何一个实例
         )
     }
+
+    /**
+     * 运行环境任务的兜底阶段文案（BL-146）。
+     *
+     * `Progress.Stage` 携带的 `p.text` 已是本地化文本（由 [DshBootstrap] 构造）；
+     * 这里补的是"Detail / 无进度"两个分支——原实现落在一个写死的英文常量上。
+     * 与 [DshUiText.getString] 的其余调用点同款：现取不缓存（用户运行中可切语言），
+     * 拿不到任何 Context（只该发生在测试/极早期）时回落英文。
+     */
+    private fun bootstrapStageText(): String =
+        DshUiText.getString(R.string.dsh_task_bootstrap, "Preparing runtime")
 
     private fun installTask(st: DshInstaller.InstallStatus): DshTask = DshTask(
         id = installTaskId(st.instanceId),
@@ -374,16 +389,15 @@ object DshTasks {
             DshTask.Kind.INSTALL ->
                 task.instanceId?.let { DshServices.installer(ctx).cancel(it) }
             DshTask.Kind.RUNTIME ->
-                task.instanceId?.let { DshRuntime.stopIf(it, "用户取消") }
+                // BL-156：停止原因会**原样显示**在任务区那一行（stop → reportRuntimeCancelled
+                // 把它当 stage），传中文字面量等于"英文界面下露中文"。按当前语言取词
+                // （与 DshRuntime.stopReasonDefault 同口径；拿不到 Context 时回落英文）。
+                task.instanceId?.let {
+                    DshRuntime.stopIf(it, DshUiText.getString(R.string.dsh_reason_user_stop, "Stopped by user"))
+                }
             else -> Unit
         }
     }
-
-    // 存档：这几个常量只在"无法从 Progress 拿到文案"时兜底，界面会按 kind 再取本地化字符串
-    private const val STAGE_BOOTSTRAP_RUNNING = "Preparing runtime"
-    private const val STAGE_STARTING = "Starting"
-    private const val STAGE_STOPPING = "Stopping"
-    private const val STAGE_DELETING = "Deleting"
 }
 
 /**

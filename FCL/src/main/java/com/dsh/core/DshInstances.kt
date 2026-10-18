@@ -347,6 +347,38 @@ object DshInstances {
             // 抢写盘 —— 这正是要修的 BL-036。
             // 若 activeInstanceId() 返回的是**别的实例**（单实例策略下罕见）：不等它、也不停它，
             // 直接删本实例（保留原有归属校验思想）。
+            // ★ BL-151（R18 = K13②/P5-6/P1-4）：删除实例必须先取消**进行中的安装**。
+            // 旧实现只停运行时（下面的 stopIf + 轮询），安装（npm 在 DshAppScope 里跑）完全没被
+            // 通知：npm 继续写 node_modules，随后 deleteRecursively() 与它抢盘 → 目录残留；
+            // 更糟的是残留目录会在"清单为空"的启动路径上被 adoptOrphanInstanceDirs 收编——
+            // 已删实例"复活"。cancel 与 stopIf 相互独立（cancel 杀的是 tag=id 的安装 proot，
+            // 见 DshInstaller.killActive→ProotProcessExecutor.destroyActive；运行期 proot 不在
+            // ProotProcessExecutor 的 actives 表里，不会被误杀），所以先 cancel 再 stopIf。
+            //
+            // ★ 实读结论（写这段代码前核对过 DshInstaller.cancel()，:528-577）：它**同步**发完
+            // 取消信号（标 cancelled + 取消 job + 放掉单飞闸门 + SIGQUIT 安装 proot 并挂一个
+            // 非阻塞的强杀升级线程）就返回 —— **不等待 npm 退出**。因此下面的等待循环必须在
+            // "运行时离场"之外再加"安装收尾"判据（见循环处注释）。
+            // cancel 可能抛（守卫竞态等）——runCatching 包住；失败也不中止删除。
+            val appCtx = DshAppContextHolder.context
+            val installer = appCtx?.let { DshServices.installer(it) }
+            val cancelNote = if (installer == null) {
+                "skipped (no app context)"
+            } else {
+                // "请求时有没有可取消的任务"只进日志：cancel 自身有守卫（无任务时 no-op 并记
+                // "[install] cancel ignored …"），这里先记下请求时的状态，便于排障时区分
+                // "本来就没有安装"与"cancel 没生效"。
+                val hadActiveInstall = installer.isInstalling(id) || installer.statusOf(id) != null
+                runCatching { installer.cancel(id) }.fold(
+                    onSuccess = {
+                        if (hadActiveInstall) "requested (in-flight install signalled)"
+                        else "no active install"
+                    },
+                    onFailure = { e -> "failed: ${e.message}" }
+                )
+            }
+            // ★ 保持全局（与 stopTimedOut 同一理由：该实例正在被删除，写进它的实例流没人能再看）。
+            DshLogBus.append("[instances] install cancel for ${inst?.name ?: id}: $cancelNote")
             val reason = DshAppContextHolder.context?.getString(R.string.dsh_reason_deleted)
                 ?: "Instance deleted"
             runCatching { DshRuntime.stopIf(id, reason) }.onFailure { e ->
@@ -355,8 +387,23 @@ object DshInstances {
                 DshLogBus.append("[instances] stopIf failed for $id: ${e.message}")
             }
             var stopTimedOut = false
+            // ★ BL-151：等待条件 = "运行时离场" **或** "安装收尾完成"（两者共用同一个 deadline，
+            // 总预算与旧实现完全相同，不叠加）。两条安装侧判据的分工：
+            // · [DshInstaller.isInstalling]（= 单飞闸门）在 cancel() 返回那一刻就被放掉 ——
+            //   拿它做唯一判据等于没等（cancel 不等 npm 退出，见上）。保留它只覆盖"取消没生效 /
+            //   删除期间又有任务占闸"这类窗口，是廉价的第一道检查；
+            // · "npm 真退了吗"由 [installProotStillAlive] 回答：读安装的 dsh-install.pid，
+            //   pid 存活且 cmdline 里同时有 proot 与本实例 id（与 BL-041 的孤儿清理
+            //   cleanupStaleInstallProcess 同一判据）。该文件在"pid 解析成功"时写入、
+            //   在 runInstall 的 finally（一切终态）compare-and-delete —— 文件还在且进程
+            //   活着 ⇔ npm 还在写盘；SIGQUIT→proot 退出→finally 删文件后循环自然退出。
+            //   连"App 上次被杀、留了活着的孤儿 npm"这种跨进程残留也一并挡住（它同样在写盘，
+            //   且不在本进程的 actives 里、cancel 杀不到它）。
+            // 超时处理沿用既有口径（硬删 + 全局日志），不是新语义。
             val waitDeadline = System.currentTimeMillis() + DELETE_WAIT_TIMEOUT_MS
-            while (DshRuntime.activeInstanceId() == id) {
+            while (DshRuntime.activeInstanceId() == id ||
+                installer?.isInstalling(id) == true || installProotStillAlive(id)
+            ) {
                 if (System.currentTimeMillis() >= waitDeadline) {
                     stopTimedOut = true
                     break
@@ -434,6 +481,30 @@ object DshInstances {
     /** 异步统计某实例占用体积（列表里显示，IO 线程） */
     fun diskUsageAsync(id: String, callback: (Long) -> Unit) {
         DshAppScope.scope.launch { callback(DshPaths.dirSize(DshPaths.instanceDir(id))) }
+    }
+
+    /**
+     * ★ BL-151（R18）：等待循环的安装侧判据 ——"这个 pid 是否仍是本实例的安装 proot"。
+     *
+     * 判据逐条镜像 [DshInstaller] 的孤儿清理（cleanupStaleInstallProcess）与 [ProcessUtil.killStale]
+     * 的身份核验：pid>0、进程存活、cmdline 同时含 `proot` 与本实例 id（防 pid 复用误认）。
+     * 抽成纯函数是为了能在 JVM 单测里钉住判据本身（真实判活/读 /proc 需要设备）。
+     */
+    fun isLiveInstallProot(pid: Long, alive: Boolean, cmdline: String?, instanceId: String): Boolean =
+        pid > 0 && alive && cmdline != null && cmdline.contains("proot") && cmdline.contains(instanceId)
+
+    /**
+     * 读本实例的 `dsh-install.pid`（BL-041 三闭环的同一文件），回答"安装 proot 是否还在跑"。
+     * 文件缺失/读不出/pid 不合法 → false（没有等待对象）；路径系统未就绪（JVM 单测等）→ false。
+     */
+    private fun installProotStillAlive(instanceId: String): Boolean {
+        if (!DshPaths.isLoaded) return false
+        val f = File(DshPaths.instanceDir(instanceId), DshInstaller.INSTALL_PID_FILE_NAME)
+        if (!f.isFile) return false
+        val pid = runCatching {
+            gson.fromJson(f.readText(), ProcessUtil.PidMeta::class.java)?.pid ?: 0L
+        }.getOrDefault(0L)
+        return isLiveInstallProot(pid, ProcessUtil.isAlive(pid), ProcessUtil.cmdline(pid), instanceId)
     }
 
     // --- 持久化（解析） -----------------------------------------------------

@@ -350,9 +350,19 @@ class DshInstanceAdapter(
         // 改法：这一态不再冒充可启动，而是改文案「去安装」+ 下载图标，点击切到「版本」页去挑一个
         // 版本装（onOpenVersions）。这是死按钮唯一说得通的出路 —— B1-1 的建议方向也是它。
         val notInstalled = !busy && !isRunning && inst.state == DshInstance.State.NOT_INSTALLED
-        // BL-020：busy 时 btn_start 直接 GONE —— FCL 容器无 disabled 视觉，isEnabled=false
-        // 只剩"看着能点、点了没反应"；安装/删除中本来就没有可启动的东西，藏掉最诚实。
-        b.btnStart.visibility = if (busy) View.GONE else View.VISIBLE
+        // BL-162（R18）：busy 时从"整块 GONE"改为**状态词按钮**（恒可见、位置固定）——
+        // 旧实现藏掉按钮会让卡片右侧整块消失、列表左右摆动（安装中/完成的瞬间跳动一次）；
+        // 详情页运行段对"安装中"早就用的是"状态词 + 点击静默"（见 DshInstanceSettingPage.runRows），
+        // 这里对齐同一形态：文案「安装中/删除中」，isEnabled=false（无按压反馈），点击静默。
+        // 修正 BL-020 当时的取舍：那时没有状态词，GONE 是唯一诚实选项；现在文案本身说明了
+        // "正在发生什么"，留着按钮位置反而更稳。
+        val busyLabel = when {
+            isDeleting -> R.string.dsh_state_deleting
+            status?.running == true || inst.state == DshInstance.State.INSTALLING ->
+                R.string.dsh_state_installing
+            else -> null
+        }
+        b.btnStart.visibility = View.VISIBLE
         b.btnStart.isEnabled = !busy && (isRunning || notInstalled ||
             inst.state == DshInstance.State.READY || canRetry)
 
@@ -361,6 +371,7 @@ class DshInstanceAdapter(
         // 所以这里三样都要分别维护：容器的点击、图标、文字。
         // ★ 文案来源没变，仍是那组 R.string.dsh_action_* —— 只是落到内部的 btn_start_text 上。
         val actionRes = when {
+            busyLabel != null -> busyLabel
             isRunning -> R.string.dsh_action_stop
             canRetry -> R.string.dsh_action_retry
             // BL-081：读 strings 确认过 —— dsh_action_download 的值是「下载/Download」（指向"下载"
@@ -373,6 +384,9 @@ class DshInstanceAdapter(
         b.btnStartText.setText(actionRes)
         b.btnStartIcon.setBackgroundResource(
             when {
+                // BL-162：忙态图标与状态词同源（删除中用垃圾桶、安装中用下载箭头）
+                busyLabel != null ->
+                    if (isDeleting) R.drawable.ic_baseline_delete_24 else R.drawable.ic_baseline_download_24
                 isRunning -> R.drawable.ic_baseline_close_24
                 canRetry -> R.drawable.ic_baseline_refresh_24
                 notInstalled -> R.drawable.ic_baseline_download_24
@@ -387,6 +401,9 @@ class DshInstanceAdapter(
         b.btnStartIcon.background?.setTint(ThemeEngine.getInstance().getTheme().getColor2())
 
         b.btnStart.setOnClickListener {
+            // BL-162：忙态按钮只是"状态指示"，点击静默（与详情页安装中的口径一致）。
+            // 显式挡一层：FCLButton 容器的 enabled 语义不保证与系统 View 完全一致。
+            if (busy) return@setOnClickListener
             when {
                 isRunning -> onStop(inst)
                 canRetry -> onReinstall(inst)

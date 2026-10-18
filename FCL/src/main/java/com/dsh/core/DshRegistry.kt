@@ -18,7 +18,6 @@ import java.util.concurrent.CompletableFuture
  */
 object DshRegistry {
 
-    const val PACKAGE_NAME = "@deepseek-ai/dsh"
     private const val ENCODED_NAME = "@deepseek-ai%2Fdsh"
     private const val REGISTRY_BASE = "https://registry.npmjs.org"
     private const val ABBREVIATED_ACCEPT = "application/vnd.npm.install-v1+json"
@@ -125,12 +124,6 @@ object DshRegistry {
             }
             .sortedWith { a, b -> compareSemver(b.version, a.version) } // 从新到旧
     }
-
-    /** dist-tags 里 latest 指向的版本（下载 UI 默认高亮项） */
-    fun latestTag(json: String): String? =
-        com.tungsten.fclcore.util.gson.JsonUtils
-            .fromNonNullJson(json, PackageDoc::class.java)
-            .distTags?.get("latest")
 
     /**
      * 语义版本比较（够用即可，支持 major.minor.patch 和 -prerelease 后缀）。

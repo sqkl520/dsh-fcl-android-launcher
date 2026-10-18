@@ -78,8 +78,18 @@ class DshAboutUI(context: Context) : DshPageUI(context, R.layout.ui_dsh_about) {
 
     private fun openLink(index: Int) {
         val url = links.getOrNull(index)?.url ?: return
-        runCatching {
+        // BL-157（R18）：无浏览器可跳时原本完全静默（点了毫无反应）。照
+        // DshWebViewCompat 的 BL-065 样板：日志 + 复制链接兜底 + Toast。
+        val ok = runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }.isSuccess
+        if (!ok) {
+            com.dsh.core.DshLogBus.append("[about] external open failed, no browser handler? url=$url")
+            runCatching {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("dsh link", url))
+            }
+            android.widget.Toast.makeText(context, R.string.open_link_failed, android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
