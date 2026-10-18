@@ -212,10 +212,15 @@ class DshDownloadViewModel(
                     rebuild()
                     emitDoneTick(mySeq, ok = false, warning = lastWarning)
                 } else {
+                    // BL-154（照 BL-092 对 warning 分支的同款口径）：Error 态只上**本地化短句**。
+                    // 原来直接把 e.message 抬上屏，用户看到的是「加载失败：timeout」
+                    // 「加载失败：Connection refused」这类英文原文。异常细节只进日志（下一行）。
                     _uiState.value = UiState.Error(
-                        e.message ?: DshAppContextHolder.context?.getString(R.string.dsh_download_fetch_failed)
-                            ?: "Failed to load the version list"
+                        DshUiText.getString(R.string.dsh_download_fetch_failed, "Failed to load the version list")
                     )
+                    // Error 路径原来没有日志行（fallback 路径的日志在上面 :211 处），补一行：
+                    // 异常详情（describeFailure 截断后的 e.message）唯一的上屏替代去处就是这里。
+                    DshLogBus.append("[download] refresh failed, no fallback (seq=$mySeq): ${describeFailure(e)}")
                     emitDoneTick(mySeq, ok = false)
                 }
                 tickSent = true

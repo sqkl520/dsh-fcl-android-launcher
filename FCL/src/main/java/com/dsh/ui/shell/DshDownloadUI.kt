@@ -16,6 +16,7 @@ import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.ActivityDshDownloadBinding
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -68,7 +69,15 @@ class DshDownloadUI(
         scope.launch { viewModel.refreshTicks.collect { onRefreshTick(it) } }
         scope.launch { viewModel.installingVersions.collect { adapter.submitInstalling(it) } }
         scope.launch {
-            installer.progress.collect { p ->
+            // BL-155：drop(1) 跳过**订阅瞬间的当前值** —— 与 VM 侧 :118 同款口径。
+            // progress 是 StateFlow：页面重建（ViewPager 滑动回收再创建）时重订阅会**回放**
+            // 最后一条 Done/Failed，导致重复弹「安装完成/安装失败」。这是 BL-116/RefreshTick
+            // 的同族问题（状态流回放旧值被当成新事件），drop(1) 正好消掉这条回放。
+            // 有意的取舍（P4-3 口径）：drop(1) 只丢"订阅时已在流里的值"（含重建前刚完成的安装），
+            // 本页面会话存活期间**新到达**的终态（无论由本页还是实例页触发安装）照常弹出。
+            // 订阅在 onCreate 内同步完成（scope 是 Main.immediate，主线程 launch 内联执行），
+            // 本页自己发起的安装不可能赶在订阅之前完成。
+            installer.progress.drop(1).collect { p ->
                 when (p) {
                     is com.dsh.core.DshInstaller.Progress.Done ->
                         toast(context.getString(R.string.dsh_install_done, p.version))
@@ -162,7 +171,10 @@ class DshDownloadUI(
                 binding.emptyHint.visibility = View.GONE
                 binding.versionList.visibility = View.GONE
                 binding.errorHint.visibility = View.VISIBLE
-                binding.errorHint.text = context.getString(R.string.dsh_download_error, state.message)
+                // R18/BL-154 追加修正：message 已是 VM 侧生成的完整本地化句
+                // （与 warning 分支 BL-092 同口径），再套 dsh_download_error 的
+                // 「加载失败：%1$s」会变成"加载失败：拉取版本列表失败"式双包装 —— 直显。
+                binding.errorHint.text = state.message
             }
         }
     }
@@ -177,9 +189,11 @@ class DshDownloadUI(
             }
             val dispatch = viewModel.installVersion(item)
             if (dispatch.started) {
-                toast(context.getString(R.string.dsh_install_started, item.version))
                 // ★ 只有**真的发起**了安装才弹「已开始安装」。
                 //   原来无条件弹：连点几次就排队弹出 N 个对话框（真机表现为"疯狂跳窗"）。
+                // ★ BL-155：这里原来还有一句「正在安装 xxx…」Toast（dsh_install_started）——
+                //   与对话框重复提示"开始了"，已删除。对话框文案已含版本名（%1$s = 实例名/版本），
+                //   信息不丢；"开始了"三处变一处（VM 的 installingVersions 置位 + 对话框）。
                 askOpenInstances(dispatch.instance?.name ?: item.version)
             } else {
                 // 没有真的发起安装（该版本已装好 / 已有安装在跑）：只提示，不弹窗

@@ -443,9 +443,24 @@ class DshLauncherSettingsPage(
         }.show()
     }
 
+    /**
+     * 运行时自检（BL-160，R18 补防重 —— 与实例详情页 `verifying` 守卫同款，见 BL-096）。
+     *
+     * 修前：每次点击都新起一个协程 + 弹一个结果框；自检最长 60s，连点会叠出多个对话框。
+     * 修后：进行中再点只回一句「正在自检…」toast（不静默吞掉——用户连点说明在等反馈）。
+     * 标志只在主线程读写（本页 UI 协程都在 Main）。
+     */
+    private var verifying = false
+
     private fun verifyRuntime() {
+        if (verifying) {
+            Toast.makeText(context, R.string.dsh_verify_running, Toast.LENGTH_SHORT).show()
+            return
+        }
+        verifying = true
         scope.launch {
             val report = withContext(Dispatchers.IO) { DshBootstrap.verify(context) }
+            verifying = false
             FCLAlertDialog.Builder(host.activity)
                 .setAlertLevel(
                     if (report.ok) FCLAlertDialog.AlertLevel.INFO else FCLAlertDialog.AlertLevel.ALERT

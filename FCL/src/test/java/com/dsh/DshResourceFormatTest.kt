@@ -78,6 +78,8 @@ class DshResourceFormatTest {
 
         // DshInstancesActivity
         "dsh_delete_message" to arrayOf<Any>("dsh 0.1.5"),
+        // R18：DshInstanceSettingPage 重装前确认（%1$s = 实例名）
+        "dsh_reinstall_confirm_message" to arrayOf<Any>("dsh 0.1.5"),
         "dsh_install_started" to arrayOf<Any>("0.1.5-rc.2"),
         "dsh_install_started_message" to arrayOf<Any>("dsh 0.1.5"),
 

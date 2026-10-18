@@ -569,14 +569,9 @@ private class InstanceListPage(
 
     /** 启动实例。复用 [DshLauncher]（与外壳右面板、实例详情页是**同一份**逻辑与参数） */
     private fun startInstance(inst: DshInstance) {
-        // BL-083：点击瞬间给一行反馈 —— 启动链的第一段（停旧实例，停旧最长 8s）里
-        // 卡片还是"启动"可点、任务区也没有行，用户以为没点中而重复点。任务行等
-        // DshRuntime 置到 Starting 才会出现（那是 stopAndWait **之后**的事），
-        // 这段窗口只有这里能填。用 toast 而不是任务行/卡片视觉：不加新的任务真值
-        // （任务区是 DshTasks 对四个模块状态流的**只读投影**，往里塞 UI 侧任务会多出
-        // 一个会在失败/切页时失配的状态）；toast 是纯旁路，最坏情况只是多冒一句。
-        // 文案复用现有 key，不新增 string。
-        Toast.makeText(context, R.string.dsh_webview_starting, Toast.LENGTH_SHORT).show()
+        // BL-161（R18）：点击瞬间的「启动中」反馈已**下沉**到 [DshLauncher.startInstance]
+        // （原 BL-083 只补了本页，详情页/右面板在"先停旧实例"窗口里没有反馈；三入口共用
+        // 同一份函数，下沉即一致，也避免本页重复弹两条）。
         DshLauncher.startInstance(
             activity = host.activity,
             inst = inst,

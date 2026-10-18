@@ -338,4 +338,24 @@ class DshInstancesPersistenceTest {
     /** 该目录下所有 `instances.json.corrupt-*` 备份文件。 */
     private fun corruptBackups(dir: File): List<File> =
         dir.listFiles { file -> file.name.startsWith("instances.json.corrupt-") }?.toList() ?: emptyList()
+
+    // --- BL-151（R18）：删除等待循环的"安装 proot 是否仍活着"纯判据 --------------
+
+    /**
+     * [DshInstances.isLiveInstallProot] 必须与 [com.dsh.core.DshInstaller] 孤儿清理
+     * （cleanupStaleInstallProcess）的判据逐条一致：pid>0、存活、cmdline 同时含 `proot`
+     * 与本实例 id。任何放宽都会让删除等在"别人的进程"上（每次删除平白多等 8s），
+     * 任何收紧都会让 npm 仍在写盘时 deleteRecursively 开删（BL-151 要修的正是它）。
+     */
+    @Test
+    fun isLiveInstallProotRequiresAllCriteria() {
+        val id = "inst-1700000000000-3-7f2a"
+        val good = "proot --link2symlink -r /data/x/rootfs INSTANCE_DIR=/data/x/instances/$id /bin/sh ..."
+        assertTrue("全判据满足 → 视为仍在跑（继续等待）", DshInstances.isLiveInstallProot(321, true, good, id))
+        assertFalse("pid<=0（没解析到 pid）→ 无等待对象", DshInstances.isLiveInstallProot(0, true, good, id))
+        assertFalse("进程已死 → 收尾完成", DshInstances.isLiveInstallProot(321, false, good, id))
+        assertFalse("cmdline 读不到（进程已消失/受限）→ 不算我们的", DshInstances.isLiveInstallProot(321, true, null, id))
+        assertFalse("不是 proot（pid 被复用）→ 不算", DshInstances.isLiveInstallProot(321, true, "node server.js", id))
+        assertFalse("是别的实例的 proot → 不算", DshInstances.isLiveInstallProot(321, true, good, "inst-other"))
+    }
 }

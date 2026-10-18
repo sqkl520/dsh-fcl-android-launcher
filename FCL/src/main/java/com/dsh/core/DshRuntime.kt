@@ -487,6 +487,24 @@ object DshRuntime {
         File(DshPaths.NPM_CACHE_DIR).mkdirs()
         File(DshPaths.TMP_DIR).mkdirs()
 
+        // ★ BL-149：起进程前轮转清理 dsh-start-*.log（**明文 token** 启动日志，见
+        //   [ProcessUtil.pruneStartLogs] 的完整语义）。放在这里的理由：
+        //   1) 脚本只在正常退出路径自删该文件，App/进程被 SIGKILL 后会残留 —— 宿主侧必须有
+        //      第二删除方，否则明文 token 无上限堆积；
+        //   2) 轮转的"最新 keep 份永不动"天然保护**正在写**的日志：本行之后 fork 的新进程
+        //      写出的日志必然是全场最新，下轮清理也只会留下它；
+        //   3) 清理是锦上添花，绝不许把启动带崩 —— runCatching 全包，失败只记英文诊断。
+        runCatching {
+            val pruned = ProcessUtil.pruneStartLogs(File(DshPaths.TMP_DIR), DshPaths.instanceDir(instance.id))
+            if (pruned > 0) {
+                DshLogBus.append(
+                    "[runtime] pruned $pruned stale dsh-start-*.log file(s) (token-bearing startup logs)"
+                )
+            }
+        }.onFailure { e ->
+            DshLogBus.append("[runtime] start-log pruning failed: ${e.message}; stale token logs will accumulate")
+        }
+
         // ★ 端口预检（B10 的第二半："端口被占时不要直接失败"）：实例端口是上次成功后回写的
         // 固定值，一旦被占（旧 node 还没退干净 / 别的 App 占了），node 起来就报 EADDRINUSE 然后
         // 整个失败。这里探测一次，被占就本次改用自动端口（0），并明确告诉用户为什么。
@@ -567,6 +585,12 @@ object DshRuntime {
             DshLogBus.appendFor(instance.id, "[runtime] 启动失败：$reason")
             _state.value = State.Failed(instance.id, instance.name, reason)
             _running.value = null
+            // ★ BL-152（core）：置 Failed 后必须补**任务终态上报**。任务区那条"启动中"是
+            //   [DshTasks.tasks] 对 State.Starting 的只读投影 —— 状态一落 Failed 它就从投影里
+            //   **消失**；不上报终态的话用户只看到"行没了"，分不清是起来了还是崩了。姿态与
+            //   本文件其余失败路径完全同款（[failAndCleanup]/[failRetry]/[onProcessExit] 都
+            //   经 [reportRuntime] 报 FAILED，内部用具名参数构造 DshTask，不耦合字段顺序）。
+            reportRuntime(instance.id, instance.name, DshTask.State.FAILED, reason, error = reason)
             return StartOutcome.Failed(reason)
         }
         handle = ProcessHandle(h, instance.id)
@@ -619,7 +643,32 @@ object DshRuntime {
     fun adoptOrphan(context: Context, instance: DshInstance): Boolean {
         appContext = context.applicationContext
         val meta = ProcessUtil.readPidFile(instance.id) ?: return false
-        if (!ProcessUtil.isAlive(meta.pid)) return false
+        if (!ProcessUtil.isAlive(meta.pid)) {
+            // ★ BL-149(b)：三个早退分支里**唯一确定是残留**的一条 —— pid 文件在、但这个 pid 的
+            //   进程已死。旧实现直接 return：死 pid 文件就此永久滞留（每次冷启白读、killStale
+            //   再扫一遍），其配套 token 侧车是**死代次**的 token（留着只会让下次认领多探一个
+            //   死候选、也在磁盘上多留一份明文凭据）。
+            //   这里做 compare-and-delete（K03 家族同款口径）：**回读一次** pid 文件，仅当其中
+            //   仍是认领时读到的这个 pid（没有被"停后秒启"的新进程覆盖）才删 —— 文件已变/
+            //   已不存在，一个都不动。两处删除（pid 文件 + 侧车）由**同一个 latest** 判断 gate。
+            //   故意不删 dsh-start-*.log：日志在共享 TMP_DIR 里、文件名不带实例身份，它可能是
+            //   别的活实例的恢复源（token 进程级、只此一份）；明文日志的堆积由
+            //   [ProcessUtil.pruneStartLogs] 的轮转规则统一处置。
+            //   另两个早退分支（没有 pid 文件 / 端口不通）保持不动 —— 进程可能活着，
+            //   删了会毁掉恢复源。
+            val latest = ProcessUtil.readPidFile(instance.id)
+            if (latest?.pid == meta.pid) {
+                // 文件操作一律 runCatching（清理是旁路，绝不许把认领流程带崩；侧车删除内部已包）
+                runCatching { DshPaths.instancePidFile(instance.id).delete() }
+                ProcessUtil.deleteTokenUrlFile(instance.id)
+                // ★ 保持全局：与认领族诊断同流（跨实例的冷启恢复动作，"这次冷启清理了什么"要在一起看）
+                DshLogBus.append(
+                    "[runtime] adoption skipped for ${instance.name}: pid ${meta.pid} is no longer alive; " +
+                        "removed stale pid file and token sidecar (start logs left to rotation)"
+                )
+            }
+            return false
+        }
         // 必须确认这个 pid 确实是"我们这个实例的 proot"，避免误杀/误认别的进程
         val cmdline = ProcessUtil.cmdline(meta.pid) ?: return false
         if (!cmdline.contains("proot") || !cmdline.contains(instance.id)) return false
@@ -717,12 +766,30 @@ object DshRuntime {
             val recovered = liveUrl
             if (recovered != null) {
                 UrlScanner.tokenOf(recovered)?.let { DshLogBus.registerSecret(it) }
-                ProcessUtil.writeTokenUrlFile(instance.id, recovered)
-                ProcessUtil.writePidFile(instance.id, meta.pid, port, recovered)
-                if (recovered != persistedUrl) {
+                // ★ BL-158（CAS）：探活/恢复是**秒级慢操作**，本回写段在锁外。窗口内用户完全可能
+                //   已手动启动了本实例（startLocked 已 fork 新进程并写了自己的 pid 文件）——
+                //   此时无条件回写会把**死 pid**（meta.pid）覆盖回新文件，孤儿保护失效
+                //   （下次冷启按死 pid 认领会失败，或更糟：按 meta.pid 去"清理"一个已复用的 pid）。
+                //   回写前重读一次 pid 文件做 compare-and-write（与 K03 家族同一判据口径）：
+                //   仅当 文件不存在（null）/ 仍是认领时的 pid / pid==0（占位）才写；
+                //   已被新进程接管（latest.pid 是别的值）→ 一个都不写，只记诊断。
+                //   注意 writeTokenUrlFile 没有 pid 概念，但同样受"新进程已接管"影响（新 run 的
+                //   侧车可能已被 onProcessLine 更新）——所以**一个 latest 判断同时 gate 两个写入**。
+                val latest = ProcessUtil.readPidFile(instance.id)
+                if (pidFileAllowsAdoptionWriteBack(latest?.pid, meta.pid)) {
+                    ProcessUtil.writeTokenUrlFile(instance.id, recovered)
+                    ProcessUtil.writePidFile(instance.id, meta.pid, port, recovered)
+                    if (recovered != persistedUrl) {
+                        DshLogBus.append(
+                            "[runtime] adopted ${instance.name}: live token url recovered from fallback source; " +
+                                "persisted to sidecar + pid file"
+                        )
+                    }
+                } else {
                     DshLogBus.append(
-                        "[runtime] adopted ${instance.name}: live token url recovered from fallback source; " +
-                            "persisted to sidecar + pid file"
+                        "[runtime] adopted ${instance.name}: write-back skipped — pid file already " +
+                            "replaced by a newer process (stored=${latest?.pid}, adopted=${meta.pid}); " +
+                            "recovery persisted nothing"
                     )
                 }
             }
@@ -1630,6 +1697,25 @@ fun pidFileBelongsTo(storedPid: Long?, expectedPid: Long): Boolean =
     storedPid == null || storedPid == expectedPid
 
 /**
+ * ★ BL-158：认领恢复**回写**的 compare-and-write 判据（纯函数，便于单测）。
+ *
+ * 场景：认领的探活/恢复是秒级慢操作、回写段在锁外；窗口内用户完全可能手动启动了本实例 ——
+ * 新进程已把自己的 pid 写进 pid 文件。此时若用**认领时的死 pid**（[adoptedPid]）无条件回写，
+ * 会把新文件覆盖回死 pid，孤儿保护失效（与 K03 的"误删新 pid 文件"同族的覆盖版）。
+ *
+ * 判据（与调用点 [DshRuntime.adoptOrphan] 的注释一致）：
+ * 仅当 文件不存在（[latestPid] == null，如清理竞态刚删过）／文件里仍是认领时的 pid ／
+ * 文件里是 0（占位，本代码库不会写出、视为可安全覆盖）时才允许写。
+ * 写出的两个持久化源（pid 文件 + token 侧车）由**这同一个判断** gate —— 侧车没有 pid 概念，
+ * 但它同样会被新 run 更新，分裂判断会让"pid 文件不动、侧车却被旧 token 覆盖"。
+ *
+ * 写成顶层函数而不是 private：单测 harness 不加载 android 依赖，顶层落在 `DshRuntimeKt`
+ * 静态方法上（同 [pidFileBelongsTo] / [canSendQuitSignal] 的惯例）。
+ */
+fun pidFileAllowsAdoptionWriteBack(latestPid: Long?, adoptedPid: Long): Boolean =
+    latestPid == null || latestPid == adoptedPid || latestPid == 0L
+
+/**
  * ★ BL-036：**含 Stopping** 的"运行时通道占用者"（[DshRuntime.activeInstanceId] 的纯函数核）。
  * 当前状态是 Starting/Running/Stopping 时返回其 instanceId；Idle/Failed/Exited 返回 null。
  *
@@ -1914,6 +2000,57 @@ object ProcessUtil {
 
     /** 单文件最多读多少字节（token 行在前段；防超大文件整读） */
     private const val MAX_START_LOG_READ_BYTES = 4 * 1024 * 1024
+
+    /** BL-149：`dsh-start-*.log` 的最长保留龄（7 天）；仅对"不在最新 keep 份"的文件生效（见 [pruneStartLogs]） */
+    private const val PRUNE_START_LOG_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
+
+    /**
+     * ★ BL-149：轮转清理 `dsh-start-*.log`（**明文 token 日志**，无上限残留的修复）。
+     *
+     * 事实：`start-dsh.sh` 把 node 的原始输出写 `${TMPDIR}/dsh-start-<pid>.log`（宿主侧 =
+     * [DshPaths.TMP_DIR]，cacheDir 下；tmp 不可写时回落**实例目录**）—— 脚本只在**正常退出**
+     * 路径自删（含超时/失败路径），被 SIGKILL（App 被杀、proot 被宿主 KILL）后残留；全仓此前
+     * 无第二删除方。该文件含 dsh 启动时打印的 `http://127.0.0.1:P/?token=X` **明文 token**
+     * （R17/fix5 起它同时是认领恢复的候选源之一，不能一禁了之，所以是"轮转"而不是"禁用"）。
+     *
+     * 语义（**双保险，顺序要紧**）：
+     * 1. 两类目录（共享 tmp + 本实例目录）的 `dsh-start-*.log` 合并，按 mtime **降序**；
+     * 2. 最新 [keep] 份**永不删** —— 正在跑的实例的日志必然在这一档里（它刚被创建/刚有输出写入，
+     *    全场最新），这一步就是"不删现场、不毁恢复源"的保证；
+     * 3. 只在 `drop(keep)` 的候选中**再**删 mtime 早于 7 天的 —— "keep 内永不按 7 天规则删"，
+     *    否则"启动很久、之后 node 无输出（mtime 陈旧）的**活**实例"的日志可能被当成老文件删掉
+     *    （毁掉它的恢复源）。顺带：最近写入的文件（10 分钟内）由 7 天规则自然覆盖 —— 不可能被删。
+     *
+     * 容错（全部静默 + 计数，绝不抛）：目录不存在 / `listFiles` 抛异常 / 文件被并发删除
+     * （`delete()` 返回 false、mtime 读成 0）都容忍；仅当 mtime **已知**（>0）且确实早于 7 天
+     * 才尝试删 —— "不确定就不删"。
+     *
+     * @return 实际删掉的份数（调用方据此决定要不要记一行日志）
+     */
+    fun pruneStartLogs(tmpDir: File, instanceDir: File, keep: Int = 6): Int {
+        val files = mutableListOf<File>()
+        runCatching {
+            tmpDir.listFiles { f -> f.isFile && f.name.startsWith("dsh-start-") && f.name.endsWith(".log") }
+                ?.let { files += it }
+        }
+        runCatching {
+            instanceDir.listFiles { f -> f.isFile && f.name.startsWith("dsh-start-") && f.name.endsWith(".log") }
+                ?.let { files += it }
+        }
+        if (files.size <= keep) return 0
+        val cutoff = System.currentTimeMillis() - PRUNE_START_LOG_MAX_AGE_MS
+        var deleted = 0
+        files.sortedByDescending { it.lastModified() }
+            .drop(keep.coerceAtLeast(0))
+            .forEach { f ->
+                runCatching {
+                    val m = f.lastModified()
+                    // m == 0：文件已被并发删掉（或 mtime 读不到）→ 跳过，不计数、不抛
+                    if (m > 0 && m < cutoff && f.delete()) deleted++
+                }
+            }
+        return deleted
+    }
 
     /**
      * 删除实例的 proot pid 文件（K03 compare-and-delete）。

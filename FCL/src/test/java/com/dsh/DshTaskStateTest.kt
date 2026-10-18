@@ -13,6 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.io.File
 
 /**
  * 任务模型「状态维度」的 JVM 单元测试（不需要真机/Android）。
@@ -23,7 +24,9 @@ import org.junit.Test
  * - **传 RUNNING 进来**的行为（被拒绝，且不抛异常）—— 这是"上报入口被用错"的唯一防线；
  * - 三种终态各自保留、`error` 字段不丢；
  * - [DshTask] 新增字段**全部有默认值**：只给旧字段也能构造（向后兼容是这次能增量改的前提）；
- * - [DshRuntime.stopIf] 对**不属于当前实例**的调用返回 false 且**什么都不做**（治"点 A 的停止停掉了 B"）。
+ * - [DshRuntime.stopIf] 对**不属于当前实例**的调用返回 false 且**什么都不做**（治"点 A 的停止停掉了 B"）；
+ * - R18/W1：任务 stage 不再写死单语文案（BL-146 / BL-156）、死字段 `startedAt` 已删（P4-4）——
+ *   源码扫描 + 反射各钉一层（stage 的产生点在需要 Context 的投影协程里，JVM 起不来，见第 8 节）。
  *
  * ★ 为什么这里要显式清 [DshTasks.finished]：它是进程内单例，测试之间共享同一份列表，
  *   而"上限裁掉最老的"这类断言要求从一个确定的起点开始（不清的话，上一条测试留下的行会把
@@ -200,7 +203,6 @@ class DshTaskStateTest {
         assertEquals(DshTask.State.RUNNING, positional.state)
         assertNull(positional.instanceId)
         assertNull(positional.error)
-        assertEquals(0L, positional.startedAt)
         assertNull(positional.finishedAt)
         assertFalse("默认是进行中，不算已结束", positional.isFinished)
 
@@ -258,5 +260,99 @@ class DshTaskStateTest {
         assertNull("仍然没有实例在运行", DshRuntime.runningInstanceId())
         // 副作用的另一面：既然什么都没做，就不该凭空报出一条"已停止"的终态任务
         assertEquals("什么都没做就不该产生终态任务", 0, DshTasks.finished.value.size)
+    }
+
+    // --- 8. R18/W1：stage 本地化（BL-146/BL-156）与死字段清理（P4-4）的防回退锚点 ----
+
+    /**
+     * BL-146 / BL-156：**源码里不许再出现**写死英文/中文的 stage 文案。
+     *
+     * ★ 为什么这组用"扫源码"而不是运行时断言：四处 stage 的产生点里，三处在 [DshTasks.start]
+     *   的投影协程里（需要 Application Context + 真实 StateFlow 才走到），另一处 [DshTasks.cancel]
+     *   需要让实例真的在跑；JVM 测试都构造不出来。但本条的回归形态恰恰是**字面量本身重新出现**
+     *   （有人图省事再写回一个写死英文的私有常量），扫源码正是对着这个形态。
+     *
+     * 断言的是三件事：
+     * 1. 旧的四个写死英文的私有常量名一个都不许残留（启动/停止/删除/引导各一个）；
+     * 2. 四个取词点必须走 R.string（dsh_task_starting / stopping / deleting / bootstrap）
+     *    —— 删掉任何一条取词、退回字面量，这里先红；
+     * 3. BL-156：停止原因不许再传旧的中文停止语（写死的字面量），必须走
+     *    R.string.dsh_reason_user_stop。
+     *
+     * 读不到源码时**直接失败**（与 [DshResourceFormatTest] 同口径）：静默跳过等于把防回退
+     * 锚点变成摆设。
+     */
+    @Test
+    fun taskStageStringsAreLocalizedNotHardcoded() {
+        val file = resolveMainSource("core/DshTask.kt")
+        assertNotNull("找不到 DshTask.kt 源码：请在仓库根或 FCL/ 目录下运行测试", file)
+        val text = file!!.readText()
+
+        // ★ needle 用**片段拼接**而不是整串字面量：审计时按旧常量名整串 grep 残留，不应命中
+        //   这份检查自身（否则"残留为零"要人读上下文才能确认）。拼出的字符串与旧常量名逐字节
+        //   相同，检测能力不受影响。
+        listOf("STARTING", "STOPPING", "DELETING", "BOOTSTRAP_RUNNING")
+            .map { "STAGE_" + it }
+            .forEach { constant ->
+                assertFalse(
+                    "BL-146：写死英文的 $constant 不许回来（stage 必须构造时经 R.string 取词）",
+                    text.contains(constant)
+                )
+            }
+
+        listOf(
+            "R.string.dsh_task_starting",
+            "R.string.dsh_task_stopping",
+            "R.string.dsh_task_deleting",
+            "R.string.dsh_task_bootstrap",
+            "R.string.dsh_reason_user_stop"
+        ).forEach { ref ->
+            assertTrue("必须有 stage 取词点：$ref 不见了（被退回字面量？）", text.contains(ref))
+        }
+
+        // BL-156：旧的中文停止语按 **码点拼出**（两侧直引号 + 四个汉字的 code point）
+        // —— 这样这份检查自身**不含**该字面量的原始字符，审计时按原字面量 grep 残留不会
+        // 命中本文件（否则"残留为零"要人读上下文才能确认）。拼出的字符串与旧代码里的
+        // 字面量逐字节相同（含引号），检测能力不受影响。
+        val oldChineseStopReason =
+            "\"" + String(intArrayOf(0x7528, 0x6237, 0x53D6, 0x6D88).map { it.toChar() }.toCharArray()) + "\""
+        assertFalse(
+            "BL-156：停止原因不许再传来中文字面量（英文界面会露中文），必须走 dsh_reason_user_stop",
+            text.contains(oldChineseStopReason)
+        )
+    }
+
+    /**
+     * P4-4：`startedAt` 是**从未被赋值的死字段**（唯一一次默认值断言也随字段一起删了），
+     * 反射钉住它真的不存在。用反射而不是源码扫描：编译器知道真相（getter/platform 声明
+     * 都算数），源码扫描可能被注释糊弄。
+     *
+     * 同时做一条"删除没删过头"的正向锚：`finishedAt` 必须还在 —— 它才是界面"刚刚 / 3 分钟前"
+     * 用的字段（由 [DshTasks.report] 兜底补上，见 [finishedAtIsFilledByAggregator]）。
+     */
+    @Test
+    fun startedAtFieldIsGoneAndFinishedAtRemains() {
+        val fields = DshTask::class.java.declaredFields.map { it.name }
+        assertFalse("P4-4：startedAt 死字段应已删除（从未被赋值，界面从未读它）", "startedAt" in fields)
+        assertTrue("finishedAt 必须保留（终态列表显示用）", "finishedAt" in fields)
+
+        val accessors = DshTask::class.java.declaredMethods.map { it.name }
+        assertFalse("startedAt 的 getter 也不该残留", "getStartedAt" in accessors)
+    }
+
+    /** 从测试运行目录向上找 `[FCL/[FCL/]]src/main/java/com/dsh/<rel>`（口径同 DshResourceFormatTest.resolve） */
+    private fun resolveMainSource(rel: String): File? {
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        var depth = 0
+        while (dir != null && depth < 8) {
+            listOf(
+                File(dir, "FCL/FCL/src/main/java/com/dsh/$rel"),
+                File(dir, "FCL/src/main/java/com/dsh/$rel"),
+                File(dir, "src/main/java/com/dsh/$rel")
+            ).firstOrNull { it.isFile }?.let { return it }
+            dir = dir.parentFile
+            depth++
+        }
+        return null
     }
 }
