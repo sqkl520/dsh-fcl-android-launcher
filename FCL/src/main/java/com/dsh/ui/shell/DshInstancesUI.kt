@@ -28,6 +28,7 @@ import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -113,6 +114,23 @@ class DshInstancesUI(
      * 同上，但指定落在哪一段（传 [DshInstanceDetailPage] 的 `TAB_*` 常量）。
      */
     fun showInstanceDetailAt(instanceId: String, tab: Int) {
+        // ★ R18 复核补丁（BL-150 延伸）：本页已被 ViewPager 回收（destroy → scope.cancel）时
+        //   不许再在死页上建详情页 —— 启动收尾弹框现在跑在**进程级**协程上（BL-150），可能在
+        //   页面回收之后才弹出；弹框挂在 Activity 窗口上仍然可点，而它的「查看日志」闭包捕获的
+        //   是**发起时的页面对象**。旧行为（收尾随页面 scope 一起取消）使这条路径不可达，
+        //   现在必须在入口挡掉：继续走会把新详情页压进一个已销毁的栈（show 是静默 no-op），
+        //   却照常登记进 [detailPages] 并让它的订阅协程活着 —— 无人再清点（泄漏），且用户
+        //   点了「查看日志」看不到任何反应。挡法：交给外壳从**存活**的实例页重走一遍
+        //   （外壳的 ensurePage 会按需重建本页）。代价：落段退化为「运行」（host 接口没有
+        //   带段落的详情入口），日志只差一次点击 —— 好过"没反应 + 泄漏一个页面"。
+        if (!scope.isActive) {
+            DshLogBus.append(
+                "[instances] detail request on destroyed page; rerouting via host (instance=$instanceId, tab=$tab)"
+            )
+            host.openInstanceDetail(instanceId)
+            return
+        }
+
         // ① 实例已经不存在（外壳手上可能攥着一个过期的 id：右面板缓存的选中项、通知栏、
         //    或者用户在别处刚把它删了）。**不压栈** —— 压进去只会得到一个立刻自我退层的空页，
         //    用户看到的是"点了一下、屏幕闪了一下、还在原地"，比直接说一句难查得多。
