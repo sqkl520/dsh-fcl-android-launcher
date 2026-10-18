@@ -360,6 +360,14 @@ object DshInstances {
             // 非阻塞的强杀升级线程）就返回 —— **不等待 npm 退出**。因此下面的等待循环必须在
             // "运行时离场"之外再加"安装收尾"判据（见循环处注释）。
             // cancel 可能抛（守卫竞态等）——runCatching 包住；失败也不中止删除。
+            //
+            // ★ 任务区关联影响（已核实：可接受，且不改 DshTask.kt）：cancel 收尾会向
+            // DshTasks.finished 上报一条 CANCELLED 行（DshInstaller.cancel :566-576），而此刻实例
+            // 已被摘出清单（byId == null → 标题回落到 version/id）——即"删除一个正在安装的实例"
+            // 会在任务区留下一条指向**已删实例**的"已取消"历史行。这在任务语义上是对的：
+            // finished 是**事件**历史而不是状态表，"这次删除顺带取消了安装"本身就是该留下的事件；
+            // 且它不会失控：上限 MAX_FINISHED=20 自动淘汰最老的，终态行在任务区一律无动作按钮、
+            // 整行无点击监听（TaskAdapter 对终态强制 Action.NONE 并清监听），点不出指向已删实例的界面。
             val appCtx = DshAppContextHolder.context
             val installer = appCtx?.let { DshServices.installer(it) }
             val cancelNote = if (installer == null) {
