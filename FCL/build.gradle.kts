@@ -39,6 +39,12 @@ android {
     val pwd = System.getenv("FCL_KEYSTORE_PASSWORD") ?: localProperty?.getProperty("pwd")
     val curseApiKey = System.getenv("CURSE_API_KEY") ?: localProperty?.getProperty("curse.api.key")
     val oauthApiKey = System.getenv("OAUTH_API_KEY") ?: localProperty?.getProperty("oauth.api.key")
+    // ★ T-D1 提前落地（2026-10-19，锐评"签名信任模型破产"整改）：出货签名密钥。
+    //   与 FCL 上游同 blob 的公开 debug-key.jks 不再用于出货（谁都能签同包名顶替更新）；
+    //   新私钥 release-key/dsh-release.jks 两仓均排除、只在本机与备份里（密码在
+    //   local.properties 的 dsh.pwd，该文件同样不入库）。环境变量 DSH_KEYSTORE_PASSWORD
+    //   优先（CI/换机场景），缺失时**只为 release 变体**报错（fordebug 调试包不受影响）。
+    val dshPwd = System.getenv("DSH_KEYSTORE_PASSWORD") ?: localProperty?.getProperty("dsh.pwd")
     // 版本号单一来源：根 gradle.properties 的 dshVersion / dshVersionCode
     // 缺了就直接报错，而不是悄悄用一个空版本号打包。
     val dshVersion = providers.gradleProperty("dshVersion").orNull
@@ -72,6 +78,19 @@ android {
             keyAlias = "FCL-Debug"
             keyPassword = "FCL-Debug"
         }
+        // ★ 出货签名（T-D1）：新私钥，两仓都排除（见 .git/info/exclude 与 ws-tools 的排除清单）。
+        //   密钥缺失（另一台机器/手机沙箱）→ 此配置为空，只有 release 变体会在**签名阶段**
+        //   以清晰错误失败；fordebug 调试包与纯编译校验不受影响（不读这把钥匙）。
+        //   密码缺失同理（storePassword=null → 签名阶段报 missing property，不挡其它变体）。
+        create("DshReleaseKey") {
+            val dshJks = file("../release-key/dsh-release.jks")
+            if (dshJks.exists()) {
+                storeFile = dshJks
+                storePassword = dshPwd
+                keyAlias = "dsh-release"
+                keyPassword = dshPwd
+            }
+        }
     }
 
     defaultConfig {
@@ -97,14 +116,23 @@ android {
     testBuildType = "fordebug"
 
     buildTypes {
+        // ★ T-D1（2026-10-19 提前落地）：**release = 出货变体**。
+        //   与旧形态的区别：正式包名（无 .debug 后缀）、非 debuggable（AGP 的 release
+        //   默认就是 false，此前出货走的是 fordebug 才带 debuggable）、新密钥签名。
+        //   注意：首次用本变体出货 = 包名与签名都变 —— 已装 .debug 验证包的用户需要
+        //   卸载重装（数据不迁移，这是 DEV-PLAN 决策 1 已知的代价，提前到 0.1.6 承受）。
         getByName("release") {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("FCLKey")
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("DshReleaseKey")
         }
         getByName("debug") {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("FCLKey")
         }
+        // ★ fordebug：保留为**内部调试通道**（此前它承担出货；T-D1 后出货走 release）。
+        //   价值：debuggable + run-as，抓日志/查 app 私有目录（tools/ondevice.md 的手册
+        //   依赖它）。包名带 .debug 后缀 → 与出货包可**并存安装**，互不顶替。
         create("fordebug") {
             initWith(getByName("debug"))
             applicationIdSuffix = ".debug"
