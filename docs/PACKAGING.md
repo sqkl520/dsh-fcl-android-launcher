@@ -26,10 +26,16 @@
 #       <仓库根>/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz   ← 142MB，不入 Git
 
 cd <仓库根>
-.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleRelease
 ```
 
-产物：`FCL/build/outputs/apk/fordebug/dsh-fcl-android-launcher-<ver>-arm64.apk`。
+产物：`FCL/build/outputs/apk/release/dsh-fcl-android-launcher-<ver>-arm64.apk`。
+
+> **T-D1（2026-10-19 起）**：出货走 **release 变体**（正式包名、非 debuggable、`release-key/dsh-release.jks`
+> 新私钥签名；密码在 `local.properties` 的 `dsh.pwd`，该文件与 `release-key/` 两仓均排除）。
+> `fordebug` 变体保留为**内部调试通道**（debuggable + `run-as` 抓日志，见 `tools/ondevice.md`），
+> 调用 `:FCL:assembleFordebug` 可单独出调试包。`build-apk.sh` 已切到 release 并带出货三查
+> （包名无 `.debug` / 非 debuggable / versionName 一致）。
 
 **打包注意**：
 - `build.gradle.kts` 已声明 `noCompress += listOf("xz")`，rootfs 在包内是 **STORED**（未压缩）——
@@ -135,6 +141,10 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 
 ## 密钥与令牌（安全约定）
 
+- **出货签名私钥不入库（T-D1，2026-10-19 起）**：`release-key/dsh-release.jks`（密码在
+  `local.properties` 的 `dsh.pwd`）——两仓的排除清单都加了 `/release-key/`；本机另有
+  `D:\Backup\dsh-release-key-2026-10-19\` 离线备份（换机/灾备时从备份恢复，不要只依赖一处）。
+  旧包签名用的 `debug-key.jks`（与 FCL 上游同 blob、密码公开）**只再用于 fordebug 调试通道**。
 - **API key 不再落盘、不再经启动器**：0.1.5 起 Key 完全由 dsh 自己管
   （启动器**不再保存、不再注入、不再在启动前检查**，旧版的 `credentials.env` / `credentials.enc`
   会在启动时自动删除，见 `RELEASES.md` 0.1.5 升级须知）。
