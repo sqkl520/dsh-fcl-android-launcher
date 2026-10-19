@@ -111,7 +111,17 @@ class DshInstaller(
         /** 0..1；无法估算时为 null */
         val fraction: Double? = null,
         val running: Boolean = true,
-        val error: String? = null
+        val error: String? = null,
+        /**
+         * R20：**实时活动行**（"现在正在抓哪个包"这类高频变化的短文本；无活动为 null）。
+         *
+         * 为什么需要：npm 在非 TTY 下（脚本里就是）默认一行不输出，`--loglevel=http` 之后
+         * 每个抓取打一行 `npm http fetch GET 200 <url> <ms>`。stage 是"阶段级"低频文案
+         * （几分钟不变），活动行是"秒级"滚动细节 —— 卡片/任务区拿它显示连续的下载活动，
+         * 用户能看着它动（真机反馈："屏幕上没有任何一处地方在动了，看起来像死机"）。
+         * 由 [extractNpmActivity] 从 http 行提炼（去掉长 URL 的 query、截短到路径尾部）。
+         */
+        val activity: String? = null
     )
 
     private val _progress = MutableStateFlow<Progress?>(null)
@@ -159,6 +169,13 @@ class DshInstaller(
      * 本节流只影响 [Progress.Log] 这个 UI 采样通道。
      */
     private val lastLogEmitMs = ConcurrentHashMap<String, Long>()
+
+    /**
+     * R20：每个实例上次**活动行**（[InstallStatus.activity]）写入的时刻。
+     * 与 [lastLogEmitMs] 同一理由按实例分开；窗口见 [ACTIVITY_THROTTLE_MS]。
+     * 安装收尾（[runInstall] 的 finally 与 [cancel]）与 [lastLogEmitMs] 一并清理。
+     */
+    private val lastActivityEmitMs = ConcurrentHashMap<String, Long>()
     private val pendingLogLines = ConcurrentHashMap<String, ArrayDeque<String>>()
 
     /** 已被用户取消的实例：取消后 proot 会以非 0 退出，不能被误报成"安装失败(BROKEN)" */
@@ -341,6 +358,7 @@ class DshInstaller(
             // 的迟到行已被 [onInstallLine] 的归属门拦住，不会再写这两张表（见字段注释）。
             pendingLogLines.remove(instance.id)
             lastLogEmitMs.remove(instance.id)
+            lastActivityEmitMs.remove(instance.id)
             // F2-8（BL-048）：目标版本只存在于本次请求里 —— 存下来供 [fail] 写进 Progress.Failed
             // （新建实例的 dshVersion 快照为 null，界面收不到版本就清不掉「安装中」标记）。
             // 与其它共享状态同一套所有权规则：入口 put，任务体 finally 里"仍归我管"才 remove。
@@ -1072,6 +1090,23 @@ class DshInstaller(
             // ★ BL-032：run() 内部预检失败也走 onLine（"[proot] 预检失败: <原因>"），删掉外层预检后
             //   这里收进尾部——失败摘要链经 errorSummary → 原样回放仍能带出可读原因，不回落泛化文案。
             trimmed.startsWith(PREFLIGHT_FAIL_PREFIX) -> rememberFailureLine(instance.id, trimmed)
+            // ★ R20：npm http 行 → 实时活动行（见 [extractNpmActivity]）。**不覆盖 stage**：
+            //   只更新 activity 字段（卡片/任务区拿它显示"正在抓哪个包"的滚动细节）。
+            //   读-改-写安全：onInstallLine 由单一 stdout 读取线程顺序调用，不存在与
+            //   STAGE 行的并发交错；updateStatusIfOwned 仍按归属门复核。
+            //   ★ 更新节流 [ACTIVITY_THROTTLE_MS]：npm 下载高峰每秒几十条 http 行，每条都写
+            //   _statuses 会让 RecyclerView 每秒收到几十次 payload 通知（掉帧）。200ms 窗口
+            //   ≈5Hz —— 肉眼"在滚动"的观感已足够（与部署页 1Hz 的文件路径滚动同量级）。
+            else -> extractNpmActivity(trimmed)?.let { activity ->
+                val now2 = System.currentTimeMillis()
+                if (now2 - (lastActivityEmitMs[instance.id] ?: 0L) >= ACTIVITY_THROTTLE_MS) {
+                    lastActivityEmitMs[instance.id] = now2
+                    val cur = _statuses.value[instance.id]
+                    if (cur != null && cur.activity != activity) {
+                        updateStatusIfOwned(instance.id, myJob) { cur.copy(activity = activity) }
+                    }
+                }
+            }
         }
     }
 
@@ -1095,6 +1130,7 @@ class DshInstaller(
     private fun flushPendingInstallLog(instanceId: String) {
         val deque = pendingLogLines.remove(instanceId) ?: return
         lastLogEmitMs.remove(instanceId)
+        lastActivityEmitMs.remove(instanceId)
         val lines = synchronized(deque) { deque.toList().also { deque.clear() } }
         if (lines.isEmpty()) return
         _progress.value = Progress.Log(lines.joinToString("\n"))
@@ -1133,6 +1169,7 @@ class DshInstaller(
             "using-preinstalled-dsh" -> com.dsh.fcl.androidlauncher.R.string.dsh_stage_using_preinstalled_dsh
             "installing" -> com.dsh.fcl.androidlauncher.R.string.dsh_stage_installing
             "verifying-install" -> com.dsh.fcl.androidlauncher.R.string.dsh_stage_verifying_install
+            "reinstalling" -> com.dsh.fcl.androidlauncher.R.string.dsh_stage_reinstalling
             else -> return raw
         }
         // 带 %1$s 的那几条，参数缺失时**整行原样返回**而不是喂空串：
@@ -1382,7 +1419,67 @@ class DshInstaller(
             "using-preinstalled-dsh" -> 1.00
             "installing" -> 0.40
             "verifying-install" -> 0.90
+            // R20 自愈链第二趟：回到 40%（同一段工作的重来），不能超过 0.90（那是"校验"）。
+            "reinstalling" -> 0.40
             else -> null
+        }
+
+        /**
+         * R20：把 npm `--loglevel=http` 的一行提炼成**实时活动文本**（不认得返回 null）。
+         *
+         * 识别的两类真实行形（本机 npm 11 实抓）：
+         * - `npm http fetch GET 200 https://registry.npmjs.org/@deepseek-ai%2fdsh 979ms (cache miss)`
+         * - `npm http cache @deepseek-ai/dsh@https://registry.npmjs.org/…/dsh-0.2.1-rc.2.tgz 0ms (cache hit)`
+         *
+         * 输出取"包路径的最后一段"（真机上 URL 又长又带 %2F，整条塞卡片放不下，用户也只需要
+         * 看到**它在动、在抓哪个包**）：`fetch …/js-yaml 74ms` → `↓ js-yaml · 74ms`；
+         * `cache …/dsh-0.2.1-rc.2.tgz` → `✓ dsh-0.2.1-rc.2.tgz · 0ms`。
+         *
+         * ★ 前缀用**符号**（↓=网络下载 / ✓=缓存命中）而不是任何语言的词：这一行是高频率
+         *   滚动细节，进三语 strings 会让每行活动都要过一遍资源表；符号零本地化、三语同观感，
+         *   且与部署页"原始活动流"的形态一致（用户要看的是"在动"，不是语法完备的句子）。
+         *
+         * ★ 纯函数放 companion：与 [isNpmErrorLine]/[stageFraction] 同一理由 —— 这是给用户
+         *   看的文本提炼，必须能直接单测（真机上它就是"死机感"的正解，不能再靠真机试）。
+         */
+        fun extractNpmActivity(trimmedLine: String): String? {
+            // 前缀判据与 npm 官方输出格式绑定；不匹配的行（STAGE/DONE/包安装完成等）返回 null。
+            val symbol = when {
+                trimmedLine.startsWith("npm http fetch ") -> "↓ "
+                trimmedLine.startsWith("npm http cache ") -> "✓ "
+                else -> return null
+            }
+            // 取 URL 字段：fetch 行的 URL 在 "npm http fetch GET 200 " 之后（第 6 个空白字段，下标 5）；
+            // cache 行的包规格形如 `name@https://…` 或 `@scope/name@https://…` —— 不能按 '@' 切
+            // （scoped 名里也有 '@'，URL 路径里还有 '@deepseek-ai'），改用 "http" 首次出现处截取。
+            val url = when {
+                trimmedLine.startsWith("npm http fetch ") -> {
+                    trimmedLine.split(' ').getOrNull(5) ?: return null
+                }
+                else -> {
+                    val field = trimmedLine.split(' ').getOrNull(3) ?: return null
+                    val idx = field.indexOf("http")
+                    if (idx < 0) return null
+                    field.substring(idx)
+                }
+            }
+            // 包名 = URL 路径最后一段（去掉 query/hash；%2F 在包名段里还原为 /）
+            val pathTail = url.substringBefore('?').substringBefore('#').trimEnd('/')
+                .substringAfterLast('/')
+                .ifEmpty { return null }
+                .replace("%2F", "/")
+                .replace("%2f", "/")
+            // 耗时（URL 之后的第一个 "<n>ms" 字段，有就带上——"它在动"的最直接证据）
+            val ms = Regex(" (\\d+)ms").find(trimmedLine)?.groupValues?.getOrNull(1)
+            return buildString {
+                append(symbol)
+                append(pathTail.take(60))
+                if (ms != null) {
+                    append(" · ")
+                    append(ms)
+                    append("ms")
+                }
+            }
         }
 
         // --- BL-043/053/054 的纯判断内核（public，便于 JVM 单测；class 头那套理由） ----------
@@ -1456,6 +1553,9 @@ class DshInstaller(
 
         /** BL-053：普通行的节流窗口（100ms ≈ 10Hz）—— 安装高峰每秒几十行 → 最多 10 次 StateFlow 写 */
         const val LOG_THROTTLE_MIN_INTERVAL_MS = 100L
+
+        /** R20：活动行写入窗口（200ms ≈ 5Hz）—— 理由见 [onInstallLine] 活动分支注释 */
+        const val ACTIVITY_THROTTLE_MS = 200L
 
         /** BL-053：pending 缓冲上限（只保尾部；收尾 flush 合并成一条发射） */
         const val PENDING_LOG_MAX_LINES = 50

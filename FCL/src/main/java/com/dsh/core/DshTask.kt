@@ -364,6 +364,10 @@ object DshTasks {
         kind = DshTask.Kind.INSTALL,
         title = DshInstances.byId(st.instanceId)?.name ?: st.version,
         stage = st.stage,
+        // R20：实时活动行（"正在抓哪个包"）进任务行明细位 —— 任务区从"一条不动的时间戳"变成
+        // "有东西在滚"（真机反馈：下载期整个屏幕没有任何地方在动，像死机）。activity 为 null
+        // （未开始/已结束）时保持 null，由 UI 收起明细行。
+        detail = st.activity,
         fraction = st.fraction,
         action = DshTask.Action.CANCEL,
         instanceId = st.instanceId

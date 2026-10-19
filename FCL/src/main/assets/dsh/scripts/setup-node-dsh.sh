@@ -161,18 +161,66 @@ fi
 stage "installing" "@deepseek-ai/dsh@$DSH_VERSION"
 echo "[setup] installing @deepseek-ai/dsh@$DSH_VERSION into $INSTANCE_DIR ..."
 # --prefer-offline：命中缓存时不打网络
-npm install --no-fund --no-audit --prefer-offline "@deepseek-ai/dsh@$DSH_VERSION"
+# --loglevel=http（R20）：npm 在非 TTY 下默认**一行不输出**，下载依赖的几分钟里整个界面
+# 没有任何东西在动（真机截图实锤："看起来像死机"）。http 级每抓一个 URL 打一行
+# `npm http fetch GET 200 <url> <ms>`；启动器侧把它提炼成"实时活动行"显示在卡片/任务区
+# （DshInstaller 的 InstallStatus.activity），用户能看着它滚动 —— 与部署页文件路径滚动同观感。
+#
+# ★ R20 自愈链（两趟）：npm 在"缓存/tree 元数据认为已完整、实际包内容半装"时会 exit 0 直接跳过
+#   （真机实锤：js-yaml/dist/js-yaml.mjs 缺失、npm 认为一切正常）。第一趟后跑启动冒烟测试；
+#   失败则**删掉 node_modules 重装第二趟**（--prefer-online 强制校验，不吃坏缓存）；
+#   第二趟再失败才判 FAILED。为什么不让启动器侧重试：清树重装是脚本自己的领域知识，
+#   且重装耗时可长（分钟级），放到安装流程内部走同一套 STAGE/进度反馈最自然。
+npm_install_pass() {
+  npm install --no-fund --no-audit --prefer-offline --loglevel=http "@deepseek-ai/dsh@$DSH_VERSION"
+}
+npm_install_pass
 
 stage "verifying-install"
-INSTALLED="$(node -e "console.log(require('./node_modules/@deepseek-ai/dsh/package.json').version)" 2>/dev/null || true)"
-if [ -z "$INSTALLED" ]; then
+verify_tree() {
+  INSTALLED="$(node -e "console.log(require('./node_modules/@deepseek-ai/dsh/package.json').version)" 2>/dev/null || true)"
+  [ -n "$INSTALLED" ] || return 1
+  [ -f "node_modules/@deepseek-ai/dsh/lib/bin.js" ] || return 1
+  return 0
+}
+if ! verify_tree; then
   echo "[setup] FAILED reason=verify-version" >&2
   exit 1
 fi
-if [ ! -f "node_modules/@deepseek-ai/dsh/lib/bin.js" ]; then
-  echo "[setup] FAILED reason=missing-bin-js" >&2
-  exit 1
+
+# --- 启动冒烟测试（R20 / fix7）：装完**实跑一次** `bin.js --version` -----------------------
+# 为什么必须有（真机实锤，2026-10-19）：npm 退出码 0 但依赖树存在"半装"文件时（解压不完整 /
+# 缓存损坏），上面的两条静态检查（package.json 版本 + bin.js 存在）**全过**，而 dsh 一启动
+# 就死：真机日志 `ERR_MODULE_NOT_FOUND: .../js-yaml/dist/js-yaml.mjs`（@deepseek-ai/dsh-app-boot
+# 静态 import js-yaml 的 ESM 入口，该文件在本机干净安装 100% 在；缺失=树坏了）。
+# `--version` 是零副作用的真实启动路径：它要把整个 import 图 link 完才可能打印版本
+# （本机实测：好树 exit 0 打印版本；删掉 js-yaml.mjs 后 exit 1、报错与真机完全一致）。
+# timeout 兜底：坏树在极端情况下可能挂在 link 上（本机未复现），30s 远超正常 ~1s。
+# rootfs（Debian）带 coreutils 的 /usr/bin/timeout（已核对 rootfs.tar.xz 清单）。
+smoke() {
+  SMOKE_OUT="$(timeout 30 node node_modules/@deepseek-ai/dsh/lib/bin.js --version 2>&1)" || return 1
+  return 0
+}
+if ! smoke; then
+  # 第一趟冒烟失败 → 清树重装（自愈）。
+  echo "[setup] smoke test failed on pass 1; wiping node_modules and reinstalling once" >&2
+  stage "reinstalling" "@deepseek-ai/dsh@$DSH_VERSION"
+  rm -rf node_modules package-lock.json
+  npm install --no-fund --no-audit --prefer-online --loglevel=http "@deepseek-ai/dsh@$DSH_VERSION"
+  if ! verify_tree || ! smoke; then
+    echo "[setup] smoke test failed; output tail:" >&2
+    printf '%s\n' "$SMOKE_OUT" | tail -5 >&2
+    # 把根因首行塞进 FAILED 行本身：失败摘要收集器（DshInstaller.errorTails）只认
+    # `[setup] FAILED` 前缀与 npm 错误行，裸 node 堆栈收集不进去 —— 让最关键的一句
+    # （如 `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…/js-yaml.mjs'`）随 FAILED 行进摘要。
+    SMOKE_ERR="$(printf '%s\n' "$SMOKE_OUT" | grep -m1 -E 'Error|error' || true)"
+    [ -n "$SMOKE_ERR" ] || SMOKE_ERR="$(printf '%s\n' "$SMOKE_OUT" | head -1)"
+    echo "[setup] FAILED reason=smoke-test detail=$(printf '%s' "$SMOKE_ERR" | head -c 200)" >&2
+    exit 1
+  fi
 fi
+INSTALLED="$(node -e "console.log(require('./node_modules/@deepseek-ai/dsh/package.json').version)" 2>/dev/null || true)"
+echo "[setup] smoke: bin.js --version -> $(printf '%s' "$SMOKE_OUT" | head -1)"
 
 echo "[setup] DONE version=$INSTALLED source=instance"
 echo "[setup] node_modules size: $(du -sh node_modules 2>/dev/null | cut -f1)"

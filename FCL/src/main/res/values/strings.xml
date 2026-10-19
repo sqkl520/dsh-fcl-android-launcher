@@ -150,6 +150,7 @@
         <string name="dsh_stage_using_preinstalled_dsh">Using the bundled dsh %1$s (skipping download)</string>
         <string name="dsh_stage_installing">Downloading and installing %1$s</string>
         <string name="dsh_stage_verifying_install">Verifying the installation</string>
+        <string name="dsh_stage_reinstalling">Installation check failed; reinstalling %1$s (one retry)</string>
         <string name="dsh_start_failed">Failed to start instance</string>
         <string name="dsh_start_not_ready">Runtime or instance is not ready</string>
         <string name="dsh_state_broken">Broken</string>
@@ -265,6 +266,8 @@ Version %1$s</string>
     <string name="dsh_setup_title_failed">Preparation failed</string>
     <string name="dsh_setup_title_done">Runtime ready</string>
     <string name="dsh_setup_view_logs">View logs</string>
+    <!-- R20：部署页底部滑出日志面板的标题（实时日志，非静态快照） -->
+    <string name="dsh_setup_log_panel_title">Live log</string>
     <string name="dsh_setup_restart">Restart</string>
     <string name="dsh_setup_starting">Starting…</string>
     <string name="dsh_setup_step_proot">proot runtime</string>
