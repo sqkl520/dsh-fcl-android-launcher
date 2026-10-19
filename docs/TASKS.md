@@ -81,8 +81,8 @@
 > 装机**主路径免 adb**（手机浏览器下 Release 附件直接装）；adb 链路是「反复装 + 抓详细日志」的可选增强。
 > 下面命令里的 `adb` 指 Android SDK 的 `platform-tools/adb`（Windows 上是 `adb.exe`）。
 
-- **包名**（装后，fordebug 变体）：`com.dsh.fcl.androidlauncher.debug`
-  （`applicationId` + `applicationIdSuffix=".debug"`）。
+- **包名**：fix6 起出货包 `com.dsh.fcl.androidlauncher`（无后缀）；调试通道（fordebug）
+  `com.dsh.fcl.androidlauncher.debug`（`applicationIdSuffix=".debug"`）。两者可并存。
 - **连设备**：`adb devices` → 看到 `<序列号>\tdevice`；`unauthorized` 则在手机上允许 USB 调试。
 - **装机（adb 路）**：`adb install -r dsh-fcl-android-launcher-<ver>-arm64.apk` → `Success`；
   签名/版本不兼容先 `adb uninstall com.dsh.fcl.androidlauncher.debug` 再装（会触发重解压）。

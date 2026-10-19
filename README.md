@@ -61,7 +61,7 @@
 | 界面白屏 / 模型选不了 | 同上——多半是 WebView 内核过旧，dsh 新版前端需要 119+ |
 | 首次要等多久？要多大空间？ | 解压约需 1.5 GB 空闲、几分钟（视闪存速度）；解压期间保持前台或锁屏放置均可 |
 | 下载/安装中断了要重来吗？ | 不用——已下载的内容有缓存，重试不会从头再来 |
-| 品牌 / 包名 | debug 签名验证包，包名 `com.dsh.fcl.androidlauncher.debug`；正式包名与签名留待 1.0.0 |
+| 品牌 / 包名 | **fix6 起**：正式包名 `com.dsh.fcl.androidlauncher` + 专用签名密钥（非 debuggable）。**fix1~fix5**：验证包，包名带 `.debug` 后缀、公开调试签名——两者是**不同的 App，可并存**（fix6 不继承旧版数据） |
 
 ## 🔧 它是怎么工作的
 
@@ -103,7 +103,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 修复轮次 fix1 / fix2 | ✅ 已发布 |
 | 修复轮次 fix3 / fix4 | ✅ 已补发 Releases（2026-10-17） |
 | 修复轮次 **fix5**（401 全链路 + 体验修复） | 🔍 真机验证中（code 111） |
-| 新一轮修复 **fix6**（R18 五路审查结论） | 🔧 开发树完成（单测 331/331），待验证后随包发布 |
+| **fix6**（R18 五路审查修复 + **出货身份切换：新签名/正式包名/非 debuggable**） | 📦 已出包（code 112），待验证后发布 |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
 **质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **331/331** · 脚本自检 18/18
@@ -118,8 +118,11 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 .\gradlew.bat --no-daemon -Darch=arm64 :FCL:compileDebugKotlin :FCL:compileDebugJavaWithJavac `
   :FCL:processDebugResources :FCL:processDebugMainManifest
 .\gradlew.bat --no-daemon :FCL:testFordebugUnitTest           # 单测
-.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug  # 打包（需先备好 rootfs）
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleRelease   # 打包出货包（需先备好 rootfs）
 ```
+
+> 出货走 `assembleRelease`（T-D1 起：正式包名 / 非 debuggable / 专用密钥；密钥接线见
+> `docs/PACKAGING.md` 密钥段）。调试通道仍可用 `assembleFordebug`（debuggable，抓日志用）。
 
 手机（arm64 Linux 沙箱）上用同目录的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh`
 （纯 POSIX sh，自动识别源码目录）；一条命令出整版用 `sh release.sh`。
