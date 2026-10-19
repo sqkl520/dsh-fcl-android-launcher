@@ -150,6 +150,7 @@
         <string name="dsh_stage_using_preinstalled_dsh">使用随包预装的 dsh %1$s（跳过下载）</string>
         <string name="dsh_stage_installing">正在下载并安装 %1$s</string>
         <string name="dsh_stage_verifying_install">正在校验安装结果</string>
+        <string name="dsh_stage_reinstalling">安装校验未通过，正在重新安装 %1$s（自动重试一次）</string>
         <string name="dsh_start_failed">实例启动失败</string>
         <string name="dsh_start_not_ready">运行时或实例尚未就绪</string>
         <string name="dsh_state_broken">损坏</string>
@@ -261,6 +262,8 @@
     <string name="dsh_setup_title_failed">运行环境准备失败</string>
     <string name="dsh_setup_title_done">运行环境已就绪</string>
     <string name="dsh_setup_view_logs">查看日志</string>
+    <!-- R20：部署页底部滑出日志面板的标题（实时日志，非静态快照） -->
+    <string name="dsh_setup_log_panel_title">实时日志</string>
     <string name="dsh_setup_restart">重新开始</string>
     <string name="dsh_setup_starting">正在开始…</string>
     <string name="dsh_setup_step_proot">proot 运行时</string>

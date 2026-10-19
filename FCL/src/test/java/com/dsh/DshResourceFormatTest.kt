@@ -101,6 +101,8 @@ class DshResourceFormatTest {
         "dsh_stage_installing_node" to arrayOf<Any>("22"),
         "dsh_stage_using_preinstalled_dsh" to arrayOf<Any>("0.1.6-alpha.2"),
         "dsh_stage_installing" to arrayOf<Any>("@deepseek-ai/dsh@0.2.1-alpha.1"),
+        // R20：自愈链第二趟的 stage（%1$s = 版本号）
+        "dsh_stage_reinstalling" to arrayOf<Any>("@deepseek-ai/dsh@0.2.1-rc.2"),
 
         // 通知栏与任务行的端口/状态文案（参数都是字符串 —— 状态本身已经是本地化过的文本）
         "dsh_task_port" to arrayOf<Any>("3080"),

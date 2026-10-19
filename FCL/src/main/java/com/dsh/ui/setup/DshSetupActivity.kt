@@ -23,6 +23,7 @@ import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -128,6 +129,7 @@ class DshSetupActivity : FCLActivity() {
         ThemeEngine.getInstance().registerEvent(binding.root, themeRefresh)
 
         binding.btnLogs.setOnClickListener { showLogs() }
+        binding.logPanelClose.setOnClickListener { closeLogPanel() }
         binding.btnRetry.setOnClickListener { beginPrepare() }
         binding.btnRestart.setOnClickListener { restartFromScratch() }
 
@@ -521,19 +523,78 @@ class DshSetupActivity : FCLActivity() {
             .show()
     }
 
+    /**
+     * 「查看日志」（R20 重做）：切换底部滑出式**实时**日志面板。
+     *
+     * 旧实现是 FCLAlertDialog 弹一坨 `DshLogBus.export()` 的静态快照 —— 真机反馈
+     * "太太太粗糙"：遮满屏、不滚动、打开后就不再更新（部署还在跑，日志却冻在那一刻）。
+     * 现在：常驻布局的底部面板，打开时订阅 [DshLogBus.snapshot]（与设置页日志同一份
+     * 实时流），新行自动追加并滚到底 —— 用户能看到整个应用正在运行在部署，
+     * 而不是看起来像死机。
+     */
+    private var logPanelOpen = false
+    private var logPanelJob: Job? = null
+
     private fun showLogs() {
-        val text = DshLogBus.export().takeLast(LOG_TAIL)
-        if (text.isBlank()) {
-            Toast.makeText(this, R.string.dsh_logs_empty, Toast.LENGTH_SHORT).show()
+        if (logPanelOpen) {
+            closeLogPanel()
             return
         }
-        FCLAlertDialog.Builder(this)
-            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
-            .setTitle(getString(R.string.dsh_setting_logs))
-            .setMessage(text)
-            .setNegativeButton(getString(R.string.dialog_positive), null)
-            .create()
-            .show()
+        logPanelOpen = true
+        val panel = binding.logPanel
+        // 滑出：从下方平移进入（内容区不受遮 —— 面板只占底部 ~110dp）。
+        // panel.height 首次打开时可能还是 0（未布局）→ 回落与布局一致的 110dp。
+        val panelPx = panel.height.takeIf { it > 0 }?.toFloat()
+            ?: (110 * resources.displayMetrics.density)
+        panel.visibility = View.VISIBLE
+        panel.translationY = panelPx
+        panel.animate().translationY(0f).setDuration(200).start()
+        binding.btnLogs.setText(R.string.dsh_action_close)
+        // 内容区避让（"左半部分上移"的落地）：ScrollView 铺满全屏、不能整体平移（顶部会移出屏）；
+        // 正确做法是**加底部 padding** —— fillViewport 下内容在 padding 区内重新居中，
+        // 视觉上就是双栏整体上移、给底部面板让位。关闭时还原。
+        val lift = panelPx.toInt() + (12 * resources.displayMetrics.density).toInt()
+        binding.contentScroll.setPadding(
+            binding.contentScroll.paddingLeft,
+            binding.contentScroll.paddingTop,
+            binding.contentScroll.paddingRight,
+            lift
+        )
+        // 实时订阅：每帧快照整段 setText（文本量 ≤4000 行截尾；部署日志频率低、面板短暂，
+        // 与日志页的增量渲染不同量级，简单渲染即可）。自动滚底 = "在动"的观感本体。
+        logPanelJob?.cancel()
+        logPanelJob = scope.launch {
+            DshLogBus.snapshot.collect { snap ->
+                val text = snap.lines.takeLast(LOG_TAIL).joinToString("\n")
+                binding.logPanelText.text = text
+                binding.logPanelScroll.post {
+                    binding.logPanelScroll.fullScroll(View.FOCUS_DOWN)
+                }
+            }
+        }
+    }
+
+    private fun closeLogPanel() {
+        if (!logPanelOpen) return
+        logPanelOpen = false
+        logPanelJob?.cancel()
+        logPanelJob = null
+        binding.btnLogs.setText(R.string.dsh_setup_view_logs)
+        binding.contentScroll.setPadding(
+            binding.contentScroll.paddingLeft,
+            binding.contentScroll.paddingTop,
+            binding.contentScroll.paddingRight,
+            0
+        )
+        val panel = binding.logPanel
+        panel.animate()
+            .translationY(
+                panel.height.takeIf { it > 0 }?.toFloat()
+                    ?: (110 * resources.displayMetrics.density)
+            )
+            .setDuration(160)
+            .withEndAction { panel.visibility = View.GONE }
+            .start()
     }
 
     private fun markCompleted() {
@@ -658,6 +719,7 @@ class DshSetupActivity : FCLActivity() {
     override fun onDestroy() {
         ThemeEngine.getInstance().removeRefreshListener(themeRefreshListener)
         ThemeEngine.getInstance().unregisterEvent(binding.root)
+        logPanelJob?.cancel()
         scope.cancel()
         super.onDestroy()
     }

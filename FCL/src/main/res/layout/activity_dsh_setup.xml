@@ -45,7 +45,10 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
-        <!-- 双栏容器：宽度用 padding 限制（平板/大屏不至于拉太宽） -->
+        <!-- 双栏容器：宽度用 padding 限制（平板/大屏不至于拉太宽）
+             ★ R20：底部预留日志面板高度（paddingBottom 96dp）——面板滑出时内容整体
+               仍在它上方可见（"左半部分上移"的落地方式：不是动画位移，而是常驻底部安全区，
+               面板与内容互不遮挡）。日志打开时由代码把 ScrollView 的 padding 调大。 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
@@ -251,5 +254,73 @@
 
         </LinearLayout>
     </ScrollView>
+
+    <!-- ================= R20：底部滑出式迷你实时日志面板 =================
+         为什么不再用 FCLAlertDialog 弹一坨静态文本（真机反馈"太太太粗糙"）：
+         部署过程可能持续几分钟，对话框既遮满屏、又不滚动、更不能实时更新 ——
+         用户只能看到"点开那一刻的快照"。这里改为常驻布局的滑出面板：
+           · 底部固定高度（~150dp），打开时上升进入（translationY 动画），内容区不受遮；
+           · 日志行来自 DshLogBus 的实时流（与设置页日志同源），新行自动追加+自动滚底；
+           · 顶部一行"当前活动"（progressDetail 的镜像）在日志为空/刚开始时也不显得空。
+         初始 GONE（不占位、不吃触摸），由代码控制显隐。 -->
+    <com.tungsten.fcllibrary.component.view.FCLConstraintLayout
+        android:id="@+id/log_panel"
+        android:layout_width="0dp"
+        android:layout_height="110dp"
+        android:layout_marginStart="56dp"
+        android:layout_marginEnd="56dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/bg_container_white"
+        android:padding="10dp"
+        android:visibility="gone"
+        app:auto_tint="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <com.tungsten.fcllibrary.component.view.FCLTextView
+            android:id="@+id/log_panel_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:singleLine="true"
+            android:text="@string/dsh_setup_log_panel_title"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            app:auto_text_tint="true"
+            app:layout_constraintEnd_toStartOf="@id/log_panel_close"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <com.tungsten.fcllibrary.component.view.FCLImageButton
+            android:id="@+id/log_panel_close"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:background="@drawable/ic_baseline_close_24"
+            android:contentDescription="@string/dsh_action_close"
+            android:padding="0dp"
+            app:layout_constraintBottom_toBottomOf="@id/log_panel_title"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="@id/log_panel_title"
+            app:use_theme_color="true" />
+
+        <ScrollView
+            android:id="@+id/log_panel_scroll"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/log_panel_title">
+
+            <com.tungsten.fcllibrary.component.view.FCLTextView
+                android:id="@+id/log_panel_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textSize="10sp"
+                app:auto_text_tint="true" />
+        </ScrollView>
+
+    </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
