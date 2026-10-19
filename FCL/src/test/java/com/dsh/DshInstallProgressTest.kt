@@ -81,10 +81,57 @@ class DshInstallProgressTest {
         listOf(
             "installing-node 22", "adding-npm", "node-ready v22.23.3",
             "using-preinstalled-dsh 0.1.6-alpha.2",
-            "installing @deepseek-ai/dsh@0.2.0-rc.2", "verifying-install"
+            "installing @deepseek-ai/dsh@0.2.0-rc.2", "verifying-install",
+            "reinstalling @deepseek-ai/dsh@0.2.1-rc.2"
         ).forEach { raw ->
             val f = DshInstaller.stageFraction(raw)!!
             assertTrue("$raw 应在 (0,1] 内，实际 $f", f > 0.0 && f <= 1.0)
         }
+    }
+
+    // --- R20：npm http 行 → 实时活动行（extractNpmActivity） -------------------------
+
+    /**
+     * 两类真实行形（本机 npm 11 实抓的原文）+ 提炼规则：URL 取路径尾段、%2F 还原、带耗时。
+     * 这条钉住"下载期界面在动"的正解 —— 行形一旦变了这里先红，而不是等用户看到死机感。
+     */
+    @Test
+    fun npmHttpLinesBecomeActivityText() {
+        assertEquals(
+            "↓ @deepseek-ai/dsh · 979ms",
+            DshInstaller.extractNpmActivity(
+                "npm http fetch GET 200 https://registry.npmjs.org/@deepseek-ai%2fdsh 979ms (cache miss)"
+            )
+        )
+        assertEquals(
+            "✓ dsh-0.2.1-rc.2.tgz · 0ms",
+            DshInstaller.extractNpmActivity(
+                "npm http cache @deepseek-ai/dsh@https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.1-rc.2.tgz 0ms (cache hit)"
+            )
+        )
+        // scoped 包的 %2F 还原（用户读 `@deepseek-ai/dsh` 才对，%2F 是 URL 编码）
+        assertEquals(
+            "↓ js-yaml · 74ms",
+            DshInstaller.extractNpmActivity(
+                "npm http fetch GET 200 https://registry.npmjs.org/js-yaml 74ms (cache stale)"
+            )
+        )
+        assertEquals(
+            "↓ commander · 84ms",
+            DshInstaller.extractNpmActivity(
+                "npm http fetch GET 200 https://registry.npmjs.org/commander 84ms"
+            )
+        )
+    }
+
+    /** 非 http 行一律 null（不认识的输出绝不能伪装成活动行） */
+    @Test
+    fun nonHttpLinesReturnNull() {
+        assertNull(DshInstaller.extractNpmActivity("added 540 packages in 3m"))
+        assertNull(DshInstaller.extractNpmActivity("[setup] STAGE=installing x"))
+        assertNull(DshInstaller.extractNpmActivity("npm error code EAI_AGAIN"))
+        // 字段数不足的残缺行（连接中断/截断）也不能炸、不能猜
+        assertNull(DshInstaller.extractNpmActivity("npm http fetch"))
+        assertNull(DshInstaller.extractNpmActivity("npm http cache justaname"))
     }
 }

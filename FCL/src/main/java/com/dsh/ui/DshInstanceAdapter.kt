@@ -225,7 +225,10 @@ class DshInstanceAdapter(
         }
         b.installProgress.visibility = View.VISIBLE
         b.installStage.visibility = View.VISIBLE
-        b.installStage.text = status.stage
+        // R20：阶段文案 + 实时活动行（"正在抓哪个包 · 74ms"）。活动行在**同一行**的尾部拼接
+        // 而不是新开一行：布局零改动、卡片高度稳定（下载期每秒都在变的是这行文字本身 ——
+        // 视觉上就是"在滚动"，正是要治的"死机感"）。activity 为 null 时退化为纯阶段文案。
+        b.installStage.text = status.activity?.let { "${status.stage} · $it" } ?: status.stage
         val fraction = status.fraction
         if (fraction != null) {
             if (b.installProgress.isIndeterminate) {
@@ -291,7 +294,8 @@ class DshInstanceAdapter(
         if (status != null && status.running) {
             b.installProgress.visibility = View.VISIBLE
             b.installStage.visibility = View.VISIBLE
-            b.installStage.text = status.stage
+            // R20：同 payload 路径（活动行拼在阶段文案尾部，见 applyInstallStatusText）
+            b.installStage.text = status.activity?.let { "${status.stage} · $it" } ?: status.stage
             val fraction = status.fraction
             if (fraction != null) {
                 if (b.installProgress.isIndeterminate) {
