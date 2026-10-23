@@ -65,10 +65,17 @@ class DshInstanceSettingAdapter(
      * ## 新增的三个
      * [STATUS] / [START_STOP] / [OPEN_WEB] 是"运行"段的主操作：详情页原来是个独立 Activity，
      * 进了详情反而启停不了实例（那两件事只存在于实例列表行和外壳右面板），现在补齐。
+     *
+     * ## 新增的 COPY_URL（fix8 / BL-168）
+     * 「复制访问链接」补的是"达标设备（WebView ≥119）上没有任何合法途径把带 token 的 URL 交给
+     * 外部浏览器"这条缺口：两个外跳出口都以"版本过旧"为前置 ⇒ 代码上不可达，而本页显示给用户
+     * 的又是刻意剥掉 token 的裸地址（防泄漏没错，但它构成"看到 → 手敲进浏览器 → 必 401"的诱导）。
+     * 与 PATH 同为"点击即复制"的值行，差别在于复制的是**凭据**，所以页面侧加了主动确认（见
+     * DshInstanceSettingPage.confirmCopyUrl 的口径注释）。
      */
     enum class Tag {
         NAME, PORT,
-        STATUS, START_STOP, OPEN_WEB,
+        STATUS, START_STOP, OPEN_WEB, COPY_URL,
         VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE
     }
 

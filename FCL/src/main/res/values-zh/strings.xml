@@ -166,7 +166,10 @@
         <string name="dsh_verify_running">正在自检…</string>
         <string name="dsh_verify_title">自检结果</string>
         <string name="dsh_version_size">包体 %1$s</string>
-        <string name="dsh_webview_auth_failed">会话已失效：本地 cookie 不再有效，请重启实例以获取新 token。</string>
+        <!-- fix8 / BL-181(5)：旧文案断言"cookie 已失效"，但这个错误也可能来自**state 本就是裸 URL**
+             （认领孤儿/回落路径，见 BL-135）—— 那种情况下从来没有 cookie 可失效。归因不确定就不写
+             归因，只给两条真能走通的路：回应用内重开、或重启实例拿新链接。 -->
+        <string name="dsh_webview_auth_failed">无法访问本地 dsh 界面。请回应用内重新点「打开界面」，或重启实例获取新的访问链接。</string>
         <string name="dsh_webview_error">页面加载失败：%1$s</string>
         <string name="dsh_webview_http_error">服务端返回 HTTP %1$d</string>
         <string name="dsh_webview_starting">正在启动 dsh，首次启动会比较慢…</string>
@@ -301,6 +304,10 @@
     <string name="dsh_settings_row_version">已安装 dsh</string>
     <string name="dsh_settings_row_disk">占用空间</string>
     <string name="dsh_settings_row_path">实例路径</string>
+    <!-- fix8 / BL-168：达标 WebView（≥119）的设备上没有任何“把带 token 的链接交给外部浏览器”的出口
+         （两个外跳入口都以“版本过旧”为前置），而本页显示的又是剥掉 token 的裸地址 → 手敲进浏览器必 401。
+         这一行补的就是那个出口，值位仍是裸地址，凭据只在用户确认后进剪贴板。 -->
+    <string name="dsh_settings_row_copy_url">复制访问链接</string>
     <string name="dsh_settings_desc_name">显示在实例列表里的名字</string>
     <string name="dsh_settings_desc_model">对话使用的模型</string>
     <string name="dsh_settings_desc_profile">启动时加载的 dsh profile</string>
@@ -308,6 +315,7 @@
     <string name="dsh_settings_desc_key">只保存在本机，Keystore 加密</string>
     <string name="dsh_settings_desc_key_status">上一次测试或读取的结果</string>
     <string name="dsh_settings_desc_path">点击复制到剪贴板</string>
+    <string name="dsh_settings_desc_copy_url">点击复制带本次会话访问凭据的链接</string>
     <string name="dsh_settings_desc_verify">在 proot 内跑一遍最小链路（9 项）</string>
     <string name="dsh_settings_desc_reinstall">重新执行安装脚本（保留会话与密钥）</string>
     <string name="dsh_settings_desc_delete">删除实例目录与密钥，不可恢复</string>
@@ -359,6 +367,12 @@
     <string name="dsh_download_empty_all">没有可显示的版本，点右上角刷新重试。</string>
     <!-- R18：配置页复制路径的确认提示（原先误用描述行文案，看起来像“又让我点一次”） -->
     <string name="dsh_path_copied">路径已复制到剪贴板</string>
+    <!-- fix8 / BL-168：复制访问链接（不复用 dsh_path_copied —— 复制的是凭据，反馈要一眼看出复制的是
+         “链接”而不是“路径”：两者在同一条链路上先后出现，贴错东西的代价由用户承担） -->
+    <string name="dsh_url_copied">链接已复制到剪贴板</string>
+    <!-- fix8 / BL-168：复制前的知情确认。写清“别人拿到就能打开界面”（用途）与
+         “实例重启后失效”（代价），免得被当成长期有效的地址转发出去 -->
+    <string name="dsh_copy_url_confirm_message">这个链接带着本次会话的访问凭据：拿到它的人都能打开 dsh 界面。实例重启后它会失效。确定要复制吗？</string>
     <!-- R18：重装前确认（与删除同级；说明会先停实例、重新下载依赖） -->
     <string name="dsh_reinstall_confirm_message">要重新安装 %1$s 吗？将重新下载依赖。若实例正在运行，会先停止它。</string>
     <!-- R18：改名/改端口在实例运行中修改后的提示（改动需重启才生效） -->

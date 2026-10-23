@@ -150,7 +150,10 @@
         <string name="dsh_verify_running">正在檢測…</string>
         <string name="dsh_verify_title">檢測結果</string>
         <string name="dsh_version_size">套件 %1$s</string>
-        <string name="dsh_webview_auth_failed">工作階段已失效：本機 cookie 不再有效，請重新啟動實例以取得新 token。</string>
+        <!-- fix8 / BL-181(5)：舊文案斷言「cookie 已失效」，但這個錯誤也可能來自**state 本就是裸 URL**
+             （認領孤兒/回落路徑，見 BL-135）—— 那種情況下從來沒有 cookie 可失效。歸因不確定就不寫
+             歸因，只給兩條真能走通的路：回應用內重開、或重新啟動實例拿新連結。 -->
+        <string name="dsh_webview_auth_failed">無法存取本機 dsh 介面。請回應用內重新點「開啟介面」，或重新啟動實例取得新的存取連結。</string>
         <string name="dsh_webview_error">頁面載入失敗：%1$s</string>
         <string name="dsh_webview_http_error">伺服器端回傳 HTTP %1$d</string>
         <string name="dsh_webview_starting">正在啟動 dsh，首次啟動會比較慢…</string>
@@ -283,6 +286,10 @@
     <string name="dsh_settings_row_version">已安裝 dsh</string>
     <string name="dsh_settings_row_disk">佔用空間</string>
     <string name="dsh_settings_row_path">實例路徑</string>
+    <!-- fix8 / BL-168：達標 WebView（≥119）的裝置上沒有任何「把帶 token 的連結交給外部瀏覽器」的出口
+         （兩個外跳入口都以「版本過舊」為前置），而本頁顯示的又是剝掉 token 的裸位址 → 手敲進瀏覽器必 401。
+         這一行補的就是那個出口，值位仍是裸位址，憑據只在使用者確認後進剪貼簿。 -->
+    <string name="dsh_settings_row_copy_url">複製存取連結</string>
     <string name="dsh_settings_desc_name">顯示在實例清單裡的名稱</string>
     <string name="dsh_settings_desc_model">對話使用的模型</string>
     <string name="dsh_settings_desc_profile">啟動時載入的 dsh profile</string>
@@ -290,6 +297,7 @@
     <string name="dsh_settings_desc_key">只儲存在本機，Keystore 加密</string>
     <string name="dsh_settings_desc_key_status">上一次測試或讀取的結果</string>
     <string name="dsh_settings_desc_path">點選複製到剪貼簿</string>
+    <string name="dsh_settings_desc_copy_url">點選複製帶本次工作階段存取憑據的連結</string>
     <string name="dsh_settings_desc_verify">在 proot 內跑一遍最小鏈路（9 項）</string>
     <string name="dsh_settings_desc_reinstall">重新執行安裝指令碼（保留工作階段與金鑰）</string>
     <string name="dsh_settings_desc_delete">刪除實例目錄與金鑰，無法復原</string>
@@ -339,6 +347,12 @@
     <string name="open_link_failed">未能自動跳轉至瀏覽器，已自動複製連結，請手動開啟瀏覽器貼上進入。</string>
     <!-- R18：配置頁複製路徑的確認提示（原先誤用描述行文案，看起來像「又要我點一次」） -->
     <string name="dsh_path_copied">路徑已複製到剪貼簿</string>
+    <!-- fix8 / BL-168：複製存取連結（不沿用 dsh_path_copied —— 複製的是憑據，回饋要一眼看出複製的是
+         「連結」而不是「路徑」：兩者在同一條路徑上先後出現，貼錯東西的代價由使用者承擔） -->
+    <string name="dsh_url_copied">連結已複製到剪貼簿</string>
+    <!-- fix8 / BL-168：複製前的知情確認。寫清「別人拿到就能開啟介面」（用途）與
+         「實例重新啟動後失效」（代價），免得被當成長期有效的位址轉發出去 -->
+    <string name="dsh_copy_url_confirm_message">這個連結帶著本次工作階段的存取憑據：拿到它的人都能開啟 dsh 介面。實例重新啟動後它會失效。確定要複製嗎？</string>
     <!-- R18：重裝前確認（與刪除同級；說明會先停實例、重新下載相依套件） -->
     <string name="dsh_reinstall_confirm_message">要重新安裝 %1$s 嗎？將重新下載相依套件。若實例正在執行，會先停止它。</string>
     <!-- R18：改名/改連接埠在實例執行中修改後的提示（變更需重新啟動才生效） -->

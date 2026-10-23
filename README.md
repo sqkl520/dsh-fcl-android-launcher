@@ -7,7 +7,7 @@
 
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-331%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-358%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 **[⬇️ 下载最新版](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)** ·
@@ -56,7 +56,7 @@
 
 | 问题 | 解法 |
 |---|---|
-| 打开界面看到 `dsh web authentication required` | 先在系统浏览器里清一次该站点（127.0.0.1）的缓存/cookie，再从应用内重新打开；最新验证包已针对此链路做了多轮修复，若仍复现请带日志反馈 |
+| 打开界面看到 `dsh web authentication required` | 回应用内点「打开界面」（会自动带上当前的新 token）；要在外部浏览器里用，到该实例详情页「运行」里点「复制访问链接」，拿带凭据的链接粘贴进浏览器。注意：重启实例后链接与端口都可能变，旧链接随即失效 |
 | 提示「WebView 过旧」 | 升级「Android System WebView」（部分设备为 Chrome）；急用时点「用外部浏览器打开」 |
 | 界面白屏 / 模型选不了 | 同上——多半是 WebView 内核过旧，dsh 新版前端需要 119+ |
 | 首次要等多久？要多大空间？ | 解压约需 1.5 GB 空闲、几分钟（视闪存速度）；解压期间保持前台或锁屏放置均可 |
@@ -106,7 +106,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | **fix6**（R18 五路审查修复 + **出货身份切换：新签名/正式包名/非 debuggable**） | 📦 已出包（code 112），待验证后发布 |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
-**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **331/331** · 脚本自检 18/18
+**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **358/358** · 脚本自检 18/18
 （每轮修复都跑全量；关键修复均钉成断言）
 
 ## 📦 构建

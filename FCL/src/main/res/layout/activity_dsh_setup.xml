@@ -46,10 +46,19 @@
         app:layout_constraintTop_toTopOf="parent">
 
         <!-- 双栏容器：宽度用 padding 限制（平板/大屏不至于拉太宽）
-             ★ R20：底部预留日志面板高度（paddingBottom 96dp）——面板滑出时内容整体
-               仍在它上方可见（"左半部分上移"的落地方式：不是动画位移，而是常驻底部安全区，
-               面板与内容互不遮挡）。日志打开时由代码把 ScrollView 的 padding 调大。 -->
+             ★ R20：给底部日志面板让位的方式不是动画位移，而是把 ScrollView 的 paddingBottom
+               临时调大（面板高 110dp + marginBottom 12dp；本容器自己的 20dp 底部内边距是常态留白，
+               与让位量无关 —— 旧注释写的"paddingBottom 96dp"是当时的设计稿数字，实际从未落地，
+               让位完全由代码侧的 lift 负责，见 DshSetupActivity.showLogs）。
+             ★ BL-171（R21）：这里的 gravity 必须是**可被代码换掉**的（故加了 id=content_container）。
+               fillViewport 下本容器高度 = 视口高 - ScrollView 的上下 padding（顶边不动、只从下沿缩），
+               而 `center` 把内容钉在这个盒子的正中 —— 所以 ScrollView 的 paddingBottom=lift 之后
+               内容只上移 **lift/2**，面板（110dp + 12dp margin ≈ lift）仍压住下半屏
+               （明细行 + 「查看日志」「重新开始」）。
+               面板打开时 DshSetupActivity 把它临时改成 TOP|CENTER_HORIZONTAL，让位量才全额生效；
+               关闭时还原 CENTER（算术与取舍的完整推导见 DshSetupActivity.showLogs 注释）。 -->
         <LinearLayout
+            android:id="@+id/content_container"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:gravity="center"
