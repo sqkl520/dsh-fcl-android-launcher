@@ -470,19 +470,32 @@ class DshInstanceAdapter(
         }
 
         // 体积：带缓存、按 (版本,状态) 失效；绝不每次绑定都去 walk 300MB 目录
-        val sizeKey = "${inst.id}:${inst.dshVersion}:${inst.state}"
-        val cachedSize = sizeCache[sizeKey]
-        if (cachedSize != null) {
-            b.size.text = DshPaths.formatSize(cachedSize)
+        //
+        // ★ BL-169：安装期不显示体积。31 B 不是"算错"，是**真实读数** —— 那一刻实例目录里
+        //   唯一的文件就是 `dsh-install.pid`（pretty JSON 恰好 31 字节）。缺陷有两层：
+        //   ①语义：包还没落地时报"多大"没有意义，任何数字都会被读成"这个 dsh 才 31 字节"；
+        //   ②缓存键 `id:dshVersion:state` 安装期三个字段全不变 → 首算值钉死整场安装，
+        //     装完也不更新。
+        //   所以安装期既不显示、也**不写 sizeCache**（写了就把安装中那个 31B 留在表里）：
+        //   状态转 READY 后键变化、自然重算真实体积。占位用 "-"，与配置页 webUiText
+        //   无值时的口径一致（不用"计算中体积" —— 那不是"正在算"，而是"此阶段无从可算"）。
+        if (inst.state == DshInstance.State.INSTALLING) {
+            b.size.text = "-"
         } else {
-            b.size.text = ctx.getString(R.string.dsh_size_calculating)
-            if (sizePending.add(sizeKey)) {
-                DshInstances.diskUsageAsync(inst.id) { bytes ->
-                    sizeCache[sizeKey] = bytes
-                    sizePending.remove(sizeKey)
-                    mainHandler.post {
-                        val idx = items.indexOfFirst { it.id == inst.id }
-                        if (idx >= 0) notifyItemChanged(idx)
+            val sizeKey = "${inst.id}:${inst.dshVersion}:${inst.state}"
+            val cachedSize = sizeCache[sizeKey]
+            if (cachedSize != null) {
+                b.size.text = DshPaths.formatSize(cachedSize)
+            } else {
+                b.size.text = ctx.getString(R.string.dsh_size_calculating)
+                if (sizePending.add(sizeKey)) {
+                    DshInstances.diskUsageAsync(inst.id) { bytes ->
+                        sizeCache[sizeKey] = bytes
+                        sizePending.remove(sizeKey)
+                        mainHandler.post {
+                            val idx = items.indexOfFirst { it.id == inst.id }
+                            if (idx >= 0) notifyItemChanged(idx)
+                        }
                     }
                 }
             }

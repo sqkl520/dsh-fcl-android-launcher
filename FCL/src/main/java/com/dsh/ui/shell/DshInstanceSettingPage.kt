@@ -14,6 +14,7 @@ import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
 import com.dsh.core.DshServices
+import com.dsh.core.UrlScanner
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.UiDshInstanceDetailBinding
 import com.dsh.ui.DshInstanceSettingAdapter
@@ -56,6 +57,8 @@ private const val REINSTALL_STOP_WAIT_POLL_MS = 100L
  *   页面内的事不该做成一行按钮。
  * - **多了状态 / 启动停止 / 打开界面三行**：改造前这三件事只存在于实例列表行和外壳右面板，
  *   进了详情页反而做不了（详情页是孤岛）。现在它们是这一页的主操作。
+ *   （fix8 / BL-168 又加了第四行「复制访问链接」：达标 WebView 的设备上没有任何出口能把**带 token**
+ *   的地址交给外部浏览器，而本页能看到的又是剥掉 token 的裸地址 —— 缺口只能在这里补。）
  *
  * @param onOpenTab 切到详情页的另一个 tab（传 [DshInstanceDetailPage] 的 TAB_* 常量）：
  *   启动失败时的「查看日志」就落在**同页的另一个 tab**（原本是要 `startActivity` 去别处的）。
@@ -197,6 +200,9 @@ class DshInstanceSettingPage(
             inst?.state == DshInstance.State.INSTALLING -> R.string.dsh_state_installing
             else -> R.string.dsh_action_start
         }
+        // 「复制访问链接」这一行能不能点：以"此刻手里有没有带 token 的 URL"为准（fix8 / BL-168）。
+        // 与 OPEN_WEB 的 editable 一样在提交行清单时求值（值位的文本才是绑定时现取）。
+        val copyUrlReady = tokenUrl() != null
         return listOf(
             // 组头用 `dsh_settings_section_*` 这一族（它们就是为分组标题准备的），
             // 而不是拿 tab 文案 `dsh_instance_detail_tab_run` 顶替 —— 后者是 tab 标签，
@@ -220,6 +226,19 @@ class DshInstanceSettingPage(
                 R.string.dsh_action_open_web, 0,
                 { webUiText() }, DshInstanceSettingAdapter.Tag.OPEN_WEB,
                 editable = running || isBusy()
+            ),
+            // 复制访问链接（fix8 / BL-168）：达标设备（WebView ≥119）上"用外部浏览器打开"的两个
+            // 出口都以"版本过旧"为前置，代码上不可达，而本页给用户的地址又是**刻意剥掉 token** 的
+            // 裸地址（见 webUiText）—— 于是"看到地址 → 敲进浏览器 → 必 401"没有第二条路。这一行就是
+            // 那个缺失的合法出口：只在拿得到**带 token** 的 URL 时可点，点下去先弹确认再复制。
+            // 值位仍显示裸地址（与 webUiText 同款口径，不把凭据铺在界面上被截图带走）。
+            // ★ 描述行跟着可点性走（0 = 不显示）：拿不到凭据时写着一句「点击复制…」却点不动，
+            //   正是 BL-127/BL-179 反复登记的那种名实两张皮；值位的 "-" 已经说明现在没有链接可给。
+            DshInstanceSettingAdapter.Row.Value(
+                R.string.dsh_settings_row_copy_url,
+                if (copyUrlReady) R.string.dsh_settings_desc_copy_url else 0,
+                { copyUrlText() }, DshInstanceSettingAdapter.Tag.COPY_URL,
+                editable = copyUrlReady
             ),
 
             DshInstanceSettingAdapter.Row.Group(R.string.dsh_settings_section_env),
@@ -364,6 +383,25 @@ class DshInstanceSettingPage(
         }
     }
 
+    /**
+     * 本实例**当前带凭据**的访问 URL（fix8 / BL-168），拿不到就返回 null。
+     *
+     * 判据不是"Running 且 url 非空"，而是 `UrlScanner.tokenOf(url) != null`：认领孤儿在旧 pid
+     * 文件迁移期、以及任何回落路径，state.url 都可能是**裸 URL**（BL-135 的成因）。那时候这一行
+     * 必须不可点 —— 复制一个点开必 401 的地址，比不给出口更糟：用户会以为"链接是对的、是 dsh 坏了"，
+     * 而真正的解法是回应用内「打开界面」（那里会自动带新 token 走 303）。
+     * 非运行态同样返回 null：没有会话，就没有凭据。
+     */
+    private fun tokenUrl(): String? {
+        val st = runtimeState
+        if (st !is DshRuntime.State.Running || st.instanceId != instanceId) return null
+        val url = st.url ?: return null
+        return url.takeIf { UrlScanner.tokenOf(it) != null }
+    }
+
+    /** 「复制访问链接」行的值位：裸地址（与 [webUiText] 同款口径，凭据不铺在界面上），不可点时为 "-" */
+    private fun copyUrlText(): String = tokenUrl()?.substringBefore('?') ?: "-"
+
     // ===== 值行动作 =====
 
     private fun onValue(row: DshInstanceSettingAdapter.Row.Value) {
@@ -400,6 +438,10 @@ class DshInstanceSettingPage(
 
             // 打开界面：运行中/启动中/停止中才会走到这里（`editable` 按 running || isBusy() 设置）
             DshInstanceSettingAdapter.Tag.OPEN_WEB -> host.openWebView()
+
+            // 复制访问链接：只有拿得到带 token 的 URL 才会走到这里（editable = tokenUrl() != null）。
+            // 点击不直接复制，先过一道确认 —— 见 [confirmCopyUrl]。
+            DshInstanceSettingAdapter.Tag.COPY_URL -> confirmCopyUrl()
 
             else -> Unit
         }
@@ -444,6 +486,33 @@ class DshInstanceSettingPage(
         if (DshRuntime.activeInstanceId() == id) {
             toast(context.getString(R.string.dsh_restart_to_apply))
         }
+    }
+
+    /**
+     * 「复制访问链接」的确认 + 复制（fix8 / BL-168）。
+     *
+     * 为什么要点确认：复制的是**本次会话的凭据**，进剪贴板后任何应用都能读走（Android 10+ 还
+     * 会把它同步到云）。这与 [com.dsh.ui.DshWebViewCompat] 里"用户在对话框里主动点的选择，可接受"
+     * 是同一口径 —— 凭据外流必须让用户知情并点头，而不是点一行就悄悄发生。
+     * 确认正文同时交代两件事：拿到链接的人能打开界面（这是用途）、实例重启后链接失效（这是代价），
+     * 免得用户把它当成长期有效的地址分享出去。
+     *
+     * 不做的事：不把这个 URL 写进日志总线（写了就是自己把 registerSecret 防的泄漏又打开一个口子）。
+     */
+    private fun confirmCopyUrl() {
+        val url = tokenUrl() ?: return // 行不可点时理论上到不了这里；到得了也只是什么都不做
+        FCLAlertDialog.Builder(host.activity)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+            .setTitle(context.getString(R.string.dsh_settings_row_copy_url))
+            .setMessage(context.getString(R.string.dsh_copy_url_confirm_message))
+            .setPositiveButton(context.getString(R.string.dsh_action_copy)) {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("dsh access url", url))
+                toast(context.getString(R.string.dsh_url_copied))
+            }
+            .setNegativeButton(context.getString(R.string.dialog_negative), null)
+            .create()
+            .show()
     }
 
     // ===== 动作行动作 =====

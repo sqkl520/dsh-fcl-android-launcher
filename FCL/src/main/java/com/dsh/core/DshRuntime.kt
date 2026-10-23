@@ -704,6 +704,21 @@ object DshRuntime {
         /** 三态探活一个候选并归类（live 立即采用；unknown 记 tentative）。 */
         fun tryCandidate(candidate: String?): Boolean {
             if (candidate.isNullOrEmpty()) return false
+            // ★ BL-176（R21-E）：端口一致性门 —— ①pid 文件 / ②侧车 的候选与 ③启动日志恢复
+            //   （[ProcessUtil.recoverTokenUrlsFromStartLogs] 的 expectedPort 过滤）统一口径。
+            //   比对基准就是上面解析出的 [port]（= [ProcessUtil.PidMeta.port]，且已通过
+            //   [Probe.isPortOpen] 确认可达）—— 与 ③级传进去的 expectedPort 同一个值。
+            //   不一致一律不采信：探活 3xx 只证明"该 URL 的端口上有个 dsh 受理这个 token"，
+            //   不证明那个端口属于本实例（判据见 [adoptionPortMatches]）。
+            //   ③级候选已按同一端口筛过，这里对它们是幂等的。
+            if (!adoptionPortMatches(candidate, port)) {
+                // URL 明文（含 token）不落日志（沿用本函数既有的写回段纪律）：只记端口差。
+                DshLogBus.append(
+                    "[runtime] adopted ${instance.name}: adoption candidate port mismatch " +
+                        "(candidate port ${UrlScanner.portOf(candidate)}, expected $port); candidate rejected"
+                )
+                return false
+            }
             val code = Probe.probeTokenUrl(candidate)
             return when {
                 code != null && code in 300..399 -> {
@@ -721,9 +736,11 @@ object DshRuntime {
 
         tryCandidate(persistedUrl)
         if (liveUrl == null && persistedUrl != null) {
+            // ★ BL-176：此处不再只有"探活失败"一种成因 —— 端口不一致的候选同样走到这里
+            //   （它根本没被探活），措辞按三种落空成因并列，避免把"被端口门拒绝"误读成"进程不在了"。
             DshLogBus.append(
-                "[runtime] adopted ${instance.name}: persisted url not live " +
-                    "(stale entry or probe timeout); searching other sources"
+                "[runtime] adopted ${instance.name}: persisted url not adopted " +
+                    "(port mismatch, stale entry or probe timeout); searching other sources"
             )
         }
         if (liveUrl == null) {
@@ -1765,6 +1782,33 @@ fun canSendQuitSignal(pid: Long, cmdline: String, instanceId: String): Boolean =
 fun syntheticUrlWouldOverwriteToken(current: String?, incoming: String): Boolean =
     UrlScanner.tokenOf(incoming) == null &&
         current != null && UrlScanner.tokenOf(current) != null
+
+/**
+ * ★ BL-176（R21-E）：认领孤儿时，候选 token URL 的**监听端口是否等于本实例当前端口**的判据
+ *（纯函数，便于单测；无状态、无 Android 依赖）。
+ *
+ * 背景：[DshRuntime.adoptOrphan] 的三源恢复里，③级 [ProcessUtil.recoverTokenUrlsFromStartLogs]
+ * 已按 `expectedPort` 过滤候选（[UrlScanner.portOf] == expectedPort 才留），而 ①pid 文件持久化
+ * url 与 ②侧车 `dsh-token-url.txt` 的候选过去只做探活 3xx 判定，不比对端口 —— 口径不一致。
+ * 探活 3xx 只证明"该 URL 的端口上有个 dsh 受理这个 token"，**不证明它属于本实例当前端口**
+ *（跨实例 token 换代 / 旧 node 残留 / 端口漂移后旧端口 URL 恰好仍被某持有同 token 语义的进程
+ * 监听等场景）。采信一个端口与本次认领目标端口不一致的候选，会把 `state.url` 指向别的监听端口。
+ *
+ * 判据取严（与 ③级同一口径）：
+ * - candidate 为空（null / 空串 / 纯空白）→ false（无从判定端口，不采信）；
+ * - expectedPort <= 0 → false（目标端口本身不可信，不比对）；
+ * - candidate 解析不出端口（裸 host、无 `:port`）→ [UrlScanner.portOf] 返回 null → false；
+ * - 其余：candidate 端口 == expectedPort 才 true（`?token=` 等 query 不参与端口判定，
+ *   [UrlScanner.portOf] 已只取 host:port 段）。
+ *
+ * 写成顶层函数而不是 private：单测 harness 不加载 android 依赖，顶层落在 `DshRuntimeKt`
+ * 静态方法上（同 [syntheticUrlWouldOverwriteToken] / [pidFileBelongsTo] 的惯例）。
+ */
+fun adoptionPortMatches(candidate: String?, expectedPort: Int): Boolean {
+    if (expectedPort <= 0) return false
+    if (candidate.isNullOrBlank()) return false
+    return UrlScanner.portOf(candidate) == expectedPort
+}
 
 /** 端口连通性探测（判断孤儿进程是否还活着、是否已就绪） */
 object Probe {

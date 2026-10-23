@@ -393,6 +393,30 @@ object DshLogBus {
     fun appendAll(lines: List<String>) = lines.forEach { append(it) }
 
     /**
+     * 追加一行**进度事件**到全局流，级别恒 [LogLevel.INFO]，不走 [classifyLevel] 的文本判级。
+     *
+     * 为什么需要这个窄口（fix8 / BL-170 的配套，R21-W1B 上报）：解包阶段逐文件写
+     * `[extract] <相对路径>`，而 rootfs 里 **464/35101（1.3%）** 条路径本身含
+     * `error|failed|exception` 字样（`libgpg-error.so.0`、`npm/lib/utils/audit-error.js`
+     * 这类真实包名）—— [classifyLevel] 对整行跑正则，会把它们判成 ERROR，在日志页刷成红字、
+     * 并被 Filter.ERROR 档收进"只看错误"的视图。那是**假错误**，排障现场里假错误的代价
+     * 比没有错误更高（用户/开发者会去查一个不存在的问题）。
+     *
+     * 判据不是"这行恰好不含敏感词"，而是**它根本没有语义级别可言**：一条"正在解哪个文件"
+     * 是进度事件，不是消息文本，[classifyLevel] 对它不适用而非判错。所以豁免是对的。
+     *
+     * ★ 用途受限：只给进度/明细这类无级别含义的行用。任何"来自进程输出/错误分支"的行
+     *   仍须走 [append] 让判级器工作 —— 别拿这个口去躲一段本该显红的真错误。
+     * 脱敏与时间戳照旧（同一 [stamp]），本方法只跳过级别判定。
+     */
+    @JvmStatic
+    fun appendProgress(line: String) {
+        val stamped = stamp(line)
+        synchronized(lock) { appendGlobalLocked(stamped, LogLevel.INFO) }
+        scheduleFlush()
+    }
+
+    /**
      * 追加一行到某实例的流，**并同时进全局流**。
      *
      * 适用判据：这一行是"该实例自己产生/关于该实例的"输出（它的 stdout/stderr、它的安装进度、

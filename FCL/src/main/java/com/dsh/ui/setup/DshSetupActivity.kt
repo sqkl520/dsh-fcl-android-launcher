@@ -2,6 +2,7 @@ package com.dsh.ui.setup
 
 import android.content.Context
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.LinearLayout
@@ -112,6 +113,29 @@ class DshSetupActivity : FCLActivity() {
      * - 非发起方（中途加入）→ 没有那条链，须由本页自行兑现（前台立即、后台等 onResume）。
      */
     private var ownsPrepare = false
+
+    /**
+     * BL-177（R21）：本轮 [DshBootstrap.Progress.Stage] 帧带来的确定进度值（0..1）。
+     *
+     * 根因：Detail 帧（解压逐文件明细）**不带 fraction**，而 [render] 原来给它传死 `null` →
+     * [setProgress] 走 `setProgress(-1f)` 的不确定波浪并清空百分比。结果 Stage 帧那个唯一的
+     * 真实数字（解压期是 0.2）只活一帧就被第一帧 Detail 顶掉，直到 Done 才再出现确定值 ——
+     * 真机截图里"标题行右侧一个字形都没有"正是它。
+     *
+     * 口径：Stage 到达时记下、Detail 沿用（进度条停在 20% 确定态，明细行照常滚动）；
+     * Done / Failed 清空（终态自己给值或不给值，都不该继承上一轮的 0.98）。
+     */
+    private var lastStageFraction: Double? = null
+
+    /**
+     * BL-177 延伸（fix8 / W1-B 上报）：本轮 Stage 帧的**文案**，Detail 帧沿用。
+     *
+     * 原 Detail 分支硬编码 `dsh_setup_step_rootfs` —— 但 Detail 不只出现在 rootfs 阶段：
+     * assets 脚本解压（Stage fraction=0.05）同样逐文件发 Detail，那时标题写「Linux 运行时
+     * （rootfs）」而百分比是 5%，文案与数字对不上。Stage 帧的 text 本来就是该阶段的权威
+     * 名称，与 fraction 同一记点一起存、Detail 一起沿用即可。
+     */
+    private var lastStageText: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -277,6 +301,8 @@ class DshSetupActivity : FCLActivity() {
         // 新一轮：supersede 一切旧状态（重放的旧 Done/Failed 都属于上一轮）
         prepareRunning = true
         donePending = false
+        lastStageFraction = null // BL-177：新一轮还没到过 Stage 帧，别继承上一轮的阶段值
+        lastStageText = null
         binding.btnRetry.visibility = View.GONE
         setStateIcon(R.drawable.ic_baseline_download_24)
         binding.progressTitle.setText(R.string.dsh_setup_title)
@@ -306,6 +332,9 @@ class DshSetupActivity : FCLActivity() {
         when (p) {
             is DshBootstrap.Progress.Stage -> {
                 binding.progressTitle.setText(R.string.dsh_setup_title)
+                // BL-177：记下本轮 Stage 的 fraction 与文案，供随后的 Detail 帧沿用（Detail 两者都不带）
+                lastStageFraction = p.fraction
+                lastStageText = p.text
                 setProgress(p.text, null, p.fraction)
                 // 新一轮进度到达：作废可能残留的旧 Done 记录（onResume 补偿只在完成真正
                 // 到达后兑现；Done 是每轮的最后一帧，其后不会再出现 Stage/Detail）
@@ -313,12 +342,23 @@ class DshSetupActivity : FCLActivity() {
                 refreshStepStates()
             }
             is DshBootstrap.Progress.Detail -> {
-                setProgress(getString(R.string.dsh_setup_step_rootfs), p.detail, null)
+                // BL-177：沿用本轮 Stage 的 fraction —— 原来这里传死 null，解压期进度条会退回
+                // 不确定波浪、百分比清空，Stage 那个唯一的真实数字只活一帧。
+                // 延伸（fix8）：文案同样沿用 Stage 的 —— 原来硬编码 rootfs，脚本解压阶段的
+                // Detail 会被写成「Linux 运行时（rootfs）」配 5% 的百分比，名实不符。
+                // 兜底保留旧硬编码：Detail 先于任何 Stage 到达（理论不可达的竞态形）时行为不变。
+                setProgress(
+                    lastStageText ?: getString(R.string.dsh_setup_step_rootfs),
+                    p.detail,
+                    lastStageFraction
+                )
                 // 同 Stage：解压明细到达即说明新一轮在跑
                 donePending = false
                 refreshStepStates()
             }
             is DshBootstrap.Progress.Done -> {
+                lastStageFraction = null // 终态自带 1.0，不继承上一阶段的值
+                lastStageText = null
                 setStateIcon(R.drawable.ic_baseline_done_24)
                 setProgress(getString(R.string.dsh_setup_title_done), null, 1.0)
                 // 解压期结束：立即按磁盘事实重刷清单（把垫着的"进行中"落成"已就绪"）
@@ -359,6 +399,8 @@ class DshSetupActivity : FCLActivity() {
         // 失败到达后 Done 已不可能再兑现：清补偿标志与进行中记号（防旧状态在下一轮误触发）
         donePending = false
         prepareRunning = false
+        lastStageFraction = null // BL-177：失败终态不继承阶段值（下一轮 beginPrepare 也会再清一次）
+        lastStageText = null
         setStateIcon(R.drawable.ic_baseline_warning_24)
         binding.progressTitle.setText(R.string.dsh_setup_title_failed)
         setProgress(reason, null, null)
@@ -550,9 +592,25 @@ class DshSetupActivity : FCLActivity() {
         panel.translationY = panelPx
         panel.animate().translationY(0f).setDuration(200).start()
         binding.btnLogs.setText(R.string.dsh_action_close)
-        // 内容区避让（"左半部分上移"的落地）：ScrollView 铺满全屏、不能整体平移（顶部会移出屏）；
-        // 正确做法是**加底部 padding** —— fillViewport 下内容在 padding 区内重新居中，
-        // 视觉上就是双栏整体上移、给底部面板让位。关闭时还原。
+        // 内容区避让（"左半部分上移"的落地）：ScrollView 铺满全屏、不能整体平移（顶部会移出屏），
+        // 所以给它**加底部 padding** 把可用区抬高。
+        //
+        // ★ BL-171（R21）：光加 padding 让位量会被"居中"稀释一半，必须同时把内容容器改成顶对齐。
+        //   算术根因（已对着 AOSP ScrollView.onMeasure 逐行核实）：xml 里 ScrollView 是
+        //   `fillViewport`、内容容器 height=match_parent 且 `gravity="center"`。fillViewport 分支把
+        //   子 View 按 `EXACTLY = 本 View 高 - paddingTop - paddingBottom` 重测 —— 容器是个**顶边不动、
+        //   只有下沿随 padding 缩**的盒子，而它把内容摆在自己的正中。于是 paddingBottom=lift 之后
+        //   内容的净位移只有 **lift/2**：面板是根级浮层（xml :266-279，110dp 高 + 12dp marginBottom，
+        //   正好等于下面的 lift），缺的那一半就把进度明细行与右列「查看日志」「重新开始」压进面板
+        //   底下（20:19:00 截图两按钮不可见；19:49 两张同包同阶段可见 —— 内容高度不同，是否踩到临界）。
+        //   改 TOP|CENTER_HORIZONTAL 后内容贴着容器顶边，容器下沿 = 视口 - lift，让位量 = lift **全额**。
+        //   ★ 顺带一条"也别指望靠滚动补救"：容器高被钉成可用高 ⇒ computeScrollRange = 0，
+        //   被压住的那半屏**滚不出来**（同一份 AOSP 算术的另一面）。E2 给的另一个候选"改用
+        //   marginBottom"不吃这个亏，但要动两栏的约束、面更大，本轮按裁定只换 gravity。
+        //
+        // 取舍：内容比视口短时"顶对齐"会让双栏贴到屏幕上方、不再居中 —— 但面板打开就意味着用户
+        // 进入的是"看日志"模式，内容贴顶把下半屏整块让给面板是合理的；关闭即还原 CENTER，
+        // 常态观感不受影响。
         val lift = panelPx.toInt() + (12 * resources.displayMetrics.density).toInt()
         binding.contentScroll.setPadding(
             binding.contentScroll.paddingLeft,
@@ -560,6 +618,8 @@ class DshSetupActivity : FCLActivity() {
             binding.contentScroll.paddingRight,
             lift
         )
+        // xml 原值 center 对应 Gravity.CENTER（值不同，故按位或重写而非 +1 偏移）
+        binding.contentContainer.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         // 实时订阅：每帧快照整段 setText（文本量 ≤4000 行截尾；部署日志频率低、面板短暂，
         // 与日志页的增量渲染不同量级，简单渲染即可）。自动滚底 = "在动"的观感本体。
         logPanelJob?.cancel()
@@ -586,6 +646,8 @@ class DshSetupActivity : FCLActivity() {
             binding.contentScroll.paddingRight,
             0
         )
+        // BL-171：还原 xml 里的居中（与 showLogs 的顶对齐成对，别只还原 padding）
+        binding.contentContainer.gravity = Gravity.CENTER
         val panel = binding.logPanel
         panel.animate()
             .translationY(

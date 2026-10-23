@@ -540,19 +540,46 @@ object DshBootstrap {
     }
 
     /**
-     * 解压进度回调 → [Progress.Detail]。
+     * 解压进度回调 → [Progress.Detail] +（BL-170）按节流旁路写日志总线。
      *
      * ★ 节流（配合 RuntimeUtils 去掉的"每文件 sleep 25ms"）：解压 rootfs 时每个文件都会回调一次
      * （几万次），如果原样往下传，UI 线程会被几万个 `runOnUiThread { dialog.setMessage(...) }`
      * 淹没。这里把回调压到约 5 次/秒：解压全速跑，界面仍然每 200ms 刷新一次。
+     *
+     * ★ BL-170（R21）：解包的逐文件明细原来**只**走 [_progress] 这条独立的进度流，一行都不进
+     *   [DshLogBus]。而部署页（R20/fix7）的实时日志面板订阅的是总线的全局流 —— 于是在最长的
+     *   rootfs 解压那三分钟里，面板恰好只剩 `[app]` + `[bootstrap]` 两行不动，看起来像死机
+     *   （E2/E3/E4/E5 四源同判；PLAN 原来猜的"订阅错流"已被反证）。
+     *   现在同一个回调里旁路写一行 `[extract] <相对路径>`，间隔见 [EXTRACT_BUS_LINE_INTERVAL_MS]。
+     *   **量级自查**：3~4 分钟 × 0.5 行/秒 ≈ 120 行，总线环形上限 2000 行装得下，不会把头部
+     *   两行冲掉（面板本来就贴底滚动，头两行少看见也无妨）。
+     *   rootfs（tar.xz → [RuntimeUtils.uncompressTarXZ]）与 assets 脚本（→ [RuntimeUtils.install]
+     *   → copyAssets）**共用这个 listener**，两个阶段一并覆盖（E3-C15 提的同型问题即此）。
+     *
+     * ★ 线程：回调由解压线程发出（调用方在 IO 线程上同步跑 install），而 [DshLogBus.append]
+     *   的契约就是"任意线程可调"（内部串行化 + ~200ms 合并 flush），所以这里直接调，不再切线程。
+     *
+     * ★ fix8 / BL-170 配套（W1B 上报、主代理裁决）：路径行走 [DshLogBus.appendProgress] 而非
+     *   [DshLogBus.append]。原因：rootfs 里有 464/35101（1.3%）条文件路径**本身**含
+     *   error/failed/exception 字样（`libgpg-error.so.0`、`npm/lib/utils/audit-error.js` 这类
+     *   包名），[DshLogBus.classifyLevel] 按整行文本跑正则会把它们判成 ERROR 刷红字 —— 那是
+     *   假错误，排障现场里假错误的代价比没有错误更高。"正在解哪个文件"是进度事件、本无语义
+     *   级别可言，appendProgress 正是为这类行开的窄口（脱敏与时间戳照旧，只跳过判级）。
      */
     private fun listener(onProgress: (Progress) -> Unit) =
         object : RuntimeUtils.InstallListener {
             private var lastEmitAt = 0L
+            private var lastBusEmitAt = 0L
 
             override fun onUpdate(detail: String) {
                 val now = System.currentTimeMillis()
-                if (now - lastEmitAt < DETAIL_THROTTLE_MS) return
+                // 总线走自己的（更慢的）节奏：它要的是"一直在动"的观感，不是逐文件流水账
+                if (shouldEmitExtractLine(lastBusEmitAt, now, EXTRACT_BUS_LINE_INTERVAL_MS)) {
+                    lastBusEmitAt = now
+                    // tar 是 `tar … .` 打的，条目名带 `./` 前缀：去掉它，行更短也更好和磁盘路径对照
+                    DshLogBus.appendProgress("${EXTRACT_BUS_LINE_PREFIX} ${detail.removePrefix("./")}")
+                }
+                if (!shouldEmitExtractLine(lastEmitAt, now, DETAIL_THROTTLE_MS)) return
                 lastEmitAt = now
                 onProgress(Progress.Detail(detail))
             }
@@ -562,6 +589,40 @@ object DshBootstrap {
 
     /** 解压进度明细的最小刷新间隔（毫秒） */
     private const val DETAIL_THROTTLE_MS = 200L
+
+    /**
+     * BL-170：解包活动行写日志总线的最小间隔（毫秒）—— 2 秒一行。
+     *
+     * 取 2 秒而不是 [DETAIL_THROTTLE_MS] 的理由：面板要的是"还在动"的证据，不是逐文件流水账；
+     * 200ms × 34000 文件会把 2000 行的环形缓冲整轮刷成解压清单，把真正要看的安装/启动行挤掉。
+     */
+    const val EXTRACT_BUS_LINE_INTERVAL_MS = 2_000L
+
+    /** BL-170：解包活动行的前缀（与 `[bootstrap]`/`[app]` 同轨 —— 底座是 App 级，不带实例归属） */
+    const val EXTRACT_BUS_LINE_PREFIX = "[extract]"
+
+    /**
+     * BL-170：解包活动行要不要落一行进日志总线（[listener] 的判据内核，纯函数）。
+     *
+     * ★ 抽出来放对象里（与 [requiredFreeBytes] 同一惯例）是为了能在 JVM 单测里直接钉住：
+     *   整条解压链要 assets、要 tar.xz、要真文件系统，测试里构造不出来，而"什么时候写一行"恰恰是
+     *   这轮唯一的可判定核心（写太密 = 把总线当流水账冲掉别的行，写太疏 = 面板又看起来像死的）。
+     *   见 `R21FixBTest`。
+     *
+     * @param lastEmitMs 上一行的时间戳（毫秒）；`<= 0` = 这一轮还没写过（必写首行）
+     * @param nowMs      本行的时间戳（毫秒）
+     * @param intervalMs 最小间隔（毫秒）；`<= 0` = 不节流（每行都写）
+     * @return true = 该写一行（调用方随即把 [lastEmitMs] 更新为 [nowMs]）
+     *
+     * ★ `nowMs < lastEmitMs`（系统时钟被校正回跳）判**放行**而不是拦住：回跳后差值恒为负，
+     *   拦住就等于"整轮不再写一行"；放行则顺便把时间戳重新对齐到当前时钟。
+     */
+    @JvmStatic
+    fun shouldEmitExtractLine(
+        lastEmitMs: Long,
+        nowMs: Long,
+        intervalMs: Long = EXTRACT_BUS_LINE_INTERVAL_MS
+    ): Boolean = lastEmitMs <= 0L || nowMs < lastEmitMs || nowMs - lastEmitMs >= intervalMs
 
     /** 任务保活用的 WakeLock 标签（决策 5）：解压与安装共用，tag 只做日志/排障标识 */
     private const val WAKELOCK_TAG = "dsh:bootstrap-extract"

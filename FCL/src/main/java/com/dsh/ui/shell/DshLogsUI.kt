@@ -6,6 +6,7 @@ import android.animation.ValueAnimator
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.ColorStateList
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextPaint
@@ -292,8 +293,27 @@ class DshLogsUI(
         // 亮暗切换不重建 Activity（外壳 configChanges 含 uiMode），必须自己挂主题刷新：
         // 否则分级色会停在进入这一页时的配色上。registerEvent 注册时会立即执行一次，
         // 所以上面那行赋值不是为了"先有个值"，而是为了 render() 在任何路径下都有值可用。
+        //
+        // ★ BL-173：控制台**底板**也纳入同一次刷新。旧版只刷文字（分级色），底板是布局里
+        // 一次性的 `android:background="@drawable/bg_log_console"` —— drawable 在**进入这一页时**
+        // 解析完就被永久钉住，运行期切亮暗就出现"night 浅字压 day 浅底"（对比度 ≈1.2:1）。
+        //
+        // 用 `backgroundTintList`（SRC_IN：只换不透明像素的色，8dp 圆角仍由 shape 出）
+        // 而不是重新 `setBackgroundResource`：
+        // · AOSP `View.setBackgroundResource` 开头是
+        //   `if (resid != 0 && resid == mBackgroundResource) return;` —— 布局里的 background
+        //   不填这个字段，所以**只有第一次**重复调用会重解析，第二次起（亮→暗→亮往回切）
+        //   直接早退，修复会退化成"单向有效"的空操作；
+        // · tint 取的是与用户主题色无关的**中性色**（同 [LevelColors.bg] = @color/dsh_log_console_bg，
+        //   按当前配置现取），而不是 `app:auto_tint` / `use_theme_color` 那族主题色
+        //   （ltColor / getColor2）—— 这块底板的颜色不该跟着用户主题色走（见类注释
+        //   「分级色为什么走颜色资源」与布局里正文不挂 auto_text_tint 的同条理由）；
+        // · 形状与颜色的分工：布局里的 drawable 继续提供圆角，代码只在它上面盖色。
+        // 附带自洽：渐显起始色与本底板**同一个值、同一次回调**里解析，两者不会再分家
+        // （BL-173 附带项，即"新行入场闪深灰"）。
         ThemeEngine.getInstance().registerEvent(contentView) {
             levelColors = resolveColors()
+            binding.logScroll.backgroundTintList = ColorStateList.valueOf(levelColors.bg)
             render()
         }
 
@@ -405,8 +425,16 @@ class DshLogsUI(
                 render()
             }
         }
-        // 运行状态只对实例视角有意义：App 级日志页显示"某个实例在跑"是噪音
-        if (instanceId == null) {
+        // ★ BL-172：运行状态只对**实例视角**有意义 —— 旧版条件写反成 `instanceId == null`，
+        // 于是唯一被状态流持续覆盖掉作用域标签的恰是 App 级页（真机显示「未运行」），
+        // 实例详情日志 tab 反而永不显示状态。
+        // 现在：App 级保持上面那次 scopeLabel() 不被覆盖；实例视角才订阅状态流。
+        // 覆盖掉"某某的日志"这行不丢信息：本页只从该实例详情页的「日志」标签进来
+        //（见 DshInstanceDetailPage），视角已由位置表达。
+        // ⚠️ 残留（本轮按裁定不做，留给后续）：DshRuntime 是**单实例**状态流，describe() 里
+        // Starting/Running/Stopping 带实例名、Idle/Failed/Exited 不带 —— 所以"看 A 的日志、
+        // 而 B 刚失败"时，这一行会显示不带主语的「失败：…」，可能被读成 A 失败了。
+        if (instanceId != null) {
             scope.launch {
                 DshRuntime.state.collect { st -> binding.runtimeStatus.text = describe(st) }
             }

@@ -284,10 +284,10 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         if (inst == null) {
             binding.rightInstanceName.text = getString(R.string.dsh_right_no_instance)
             binding.rightInstanceHint.text = ""
-            binding.rightStart.isEnabled = false
+            setRightEnabled(binding.rightStart, false)
             binding.rightStartText.setText(R.string.dsh_action_start)
             setStartIcon(R.drawable.ic_start)
-            binding.rightWebui.isEnabled = false
+            setRightEnabled(binding.rightWebui, false)
             return
         }
         // ★ 与点击处理（setupRightPanel）的 `running` 一字不差（BL-126）：runningInstanceId()
@@ -296,14 +296,33 @@ class DshMainActivity : FCLActivity(), DshShellHost {
         val running = DshRuntime.runningInstanceId() == inst.id
         binding.rightInstanceName.text = inst.name
         binding.rightInstanceHint.text = describeState(inst, state)
-        binding.rightStart.isEnabled = inst.state == DshInstance.State.READY || running
+        setRightEnabled(binding.rightStart, inst.state == DshInstance.State.READY || running)
         // 图标 + 文字都随状态切换（FCL 的按钮就是"图标 + 文字"的组合形态）
         binding.rightStartText.setText(if (running) R.string.dsh_action_stop else R.string.dsh_action_start)
         setStartIcon(if (running) R.drawable.ic_baseline_close_24 else R.drawable.ic_start)
         // 「打开界面」放宽到 Starting（F2-15a / BL-125 一半）：启动中也能进 WebView 看进度面板
         // （页面 render(Starting) 本就有「启动中」）。state 快照与实时读数在切换瞬间可能差一拍，取或兜底。
-        binding.rightWebui.isEnabled =
+        setRightEnabled(
+            binding.rightWebui,
             running || (state is DshRuntime.State.Starting && state.instanceId == inst.id)
+        )
+    }
+
+    /**
+     * ★ BL-179：右面板控件的启用态 = isEnabled + **透明度**一起改。
+     *
+     * 为什么不能只写 isEnabled：FCLConstraintLayout 里的控件**没有 disabled 视觉**（没有
+     * 状态列表 drawable、也不压暗），所以安装期"启动/打开界面"在截图里画成满色可点、点下去
+     * 什么都不发生（三张真机截图同现象）。卡片主按钮已按 BL-162 改成"状态词"口径，右面板是
+     * 那轮的漏网出口。
+     *
+     * 这里**不跟卡片用状态词**：右面板是常驻动作区（标题「启动」/「打开界面」说的是这个动作
+     * 本身），把常驻标签换成"安装中"会让按钮看起来像个状态行；"安装中"的文案已经由上面的
+     * [describeState] 与左侧卡片承担。灰化 = "这个动作现在不可用"，足够表意，且零新增字符串。
+     */
+    private fun setRightEnabled(view: View, enabled: Boolean) {
+        view.isEnabled = enabled
+        view.alpha = if (enabled) RIGHT_ALPHA_ENABLED else RIGHT_ALPHA_DISABLED
     }
 
     /**
@@ -578,6 +597,18 @@ class DshMainActivity : FCLActivity(), DshShellHost {
     companion object {
         /** 详情页用它请求外壳打开指定 tab（见 [DshShellHost] 的 TAB_* 常量） */
         const val EXTRA_OPEN_TAB = "dsh_open_tab"
+
+        /**
+         * ★ BL-179：右面板常驻动作区（「启动」「打开界面」）的启用/禁用透明度。
+         *
+         * 0.4f 与 Android 自己的 disabled 口径同档（`disabledButtonAlpha=0.3`、
+         * `disabledTextAlpha≈0.38`、Material 的 `disabledContentAlpha=0.38`）：灰到一眼看出
+         * "点不了"，又不至于像消失。挂在**容器**上，图标与文字一起压暗（子控件无需单独处理）。
+         */
+        private const val RIGHT_ALPHA_DISABLED = 0.4f
+
+        /** 与 [RIGHT_ALPHA_DISABLED] 成对：可用态必须显式写回 1f，不能依赖"从没改过" */
+        private const val RIGHT_ALPHA_ENABLED = 1f
 
         /** BL-095：savedInstanceState 里保存的"当前 tab"（ViewPager2 自身状态被关闭，外壳自存） */
         private const val STATE_CURRENT_TAB = "dsh_current_tab"

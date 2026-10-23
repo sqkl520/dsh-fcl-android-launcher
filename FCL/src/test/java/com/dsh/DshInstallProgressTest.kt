@@ -92,32 +92,37 @@ class DshInstallProgressTest {
     // --- R20：npm http 行 → 实时活动行（extractNpmActivity） -------------------------
 
     /**
-     * 两类真实行形（本机 npm 11 实抓的原文）+ 提炼规则：URL 取路径尾段、%2F 还原、带耗时。
+     * 两类真实行形（本机 npm 11 实抓的原文）+ 提炼规则：URL 按 scheme 起点取、包名从 `/-/`
+     * 之前回溯、%2F 还原、**不带耗时**。
      * 这条钉住"下载期界面在动"的正解 —— 行形一旦变了这里先红，而不是等用户看到死机感。
+     *
+     * ★ fix8 / BL-175：旧版断言里的 `· 74ms` 与 `dsh-0.2.1-rc.2.tgz` 正是本轮判定为缺陷的形态
+     * （npm 的 ms 是含 socket 排队的墙钟、真机见过 214657ms，会被读成"这一个包下了 3.5 分钟"；
+     * 取 URL 尾段会让 scoped 包丢掉作用域名）。现在活动行只留 `↓ 包名` / `✓ 包名`。
      */
     @Test
     fun npmHttpLinesBecomeActivityText() {
         assertEquals(
-            "↓ @deepseek-ai/dsh · 979ms",
+            "↓ @deepseek-ai/dsh",
             DshInstaller.extractNpmActivity(
                 "npm http fetch GET 200 https://registry.npmjs.org/@deepseek-ai%2fdsh 979ms (cache miss)"
             )
         )
+        // tarball 行也归到包名（`/-/` 之前回溯 + 倒数第二段是作用域 → 两段一起要）
         assertEquals(
-            "✓ dsh-0.2.1-rc.2.tgz · 0ms",
+            "✓ @deepseek-ai/dsh",
             DshInstaller.extractNpmActivity(
                 "npm http cache @deepseek-ai/dsh@https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.1-rc.2.tgz 0ms (cache hit)"
             )
         )
-        // scoped 包的 %2F 还原（用户读 `@deepseek-ai/dsh` 才对，%2F 是 URL 编码）
         assertEquals(
-            "↓ js-yaml · 74ms",
+            "↓ js-yaml",
             DshInstaller.extractNpmActivity(
                 "npm http fetch GET 200 https://registry.npmjs.org/js-yaml 74ms (cache stale)"
             )
         )
         assertEquals(
-            "↓ commander · 84ms",
+            "↓ commander",
             DshInstaller.extractNpmActivity(
                 "npm http fetch GET 200 https://registry.npmjs.org/commander 84ms"
             )
