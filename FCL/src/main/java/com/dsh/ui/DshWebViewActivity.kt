@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -34,6 +35,7 @@ import com.dsh.core.UrlScanner
 import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.FCLActivity
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
+import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import com.tungsten.fcllibrary.component.view.FCLProgressBar
 import com.tungsten.fcllibrary.component.view.FCLTextView
 import kotlinx.coroutines.Job
@@ -174,6 +176,52 @@ class DshWebViewActivity : FCLActivity() {
     private var webViewContainer: ViewGroup? = null
     private var webViewLayoutParams: ViewGroup.LayoutParams? = null
 
+    /**
+     * BL-173：日志覆盖层控制台**底板 + 正文**的主题刷新（与 [com.dsh.ui.shell.DshLogsUI] 同款）。
+     *
+     * 底板是布局里一次性的 `android:background="@drawable/bg_log_console"`（中性色，
+     * 亮/暗各一套）。本页的 `configChanges` 含 `uiMode`（见 AndroidManifest）→ 运行期切亮暗
+     * **不重建 Activity**，drawable 在 inflate 那一刻解析完就被永久钉住。
+     *
+     * ★ 覆盖层的**正文**与底板**必须同一处、同一次回调里一起刷**，只刷底板会修出新缺陷：
+     * `log_overlay_text` 刻意不挂 `app:auto_text_tint`（见 activity_dsh_webview.xml 的注释 ——
+     * 那一族取黑/白，配中性底板会撞色），于是它走的是主题默认色；而默认色**和底板一样**是
+     * inflate 时解析完就钉住的（布局注释里"与底板天然对得上"只在**没在运行期切过亮暗**时成立）。
+     * 日志页没这个毛病是因为它每行都被 `levelColors` 的 span 整体覆盖、而那份颜色挂在刷新名单里；
+     * 覆盖层是纯文本，没有任何东西替它重解析。
+     * 所以现状是"一老一老、成对但整体过时"；只刷底板 = 变成"一新（night 暗底）一老
+     * （day 深字）" → 对比度比修之前更差。两支色一起取，配对关系由**同一次回调**保证。
+     *
+     * 取色口径：底板 @color/dsh_log_console_bg、正文 @color/dsh_log_info（= 日志页 INFO 档
+     * 同一支，与这块底板是配套设计的亮暗两套），两者都是 DayNight 资源。
+     * 这里用 `setTextColor(Int)`（纯颜色覆盖，正文没有别的 textAppearance 要保）；
+     * 覆盖层正文零 span，所以这一支就是它的全部颜色出处。
+     *
+     * 底板用 `backgroundTintList`（默认 SRC_IN：只换不透明像素的色，8dp 圆角仍由 shape 出），
+     * **不用**重新 `setBackgroundResource`：AOSP `View` 该方法开头是
+     * `if (resid != 0 && resid == mBackgroundResource) return;` —— 布局里的 background 不填
+     * 这个字段，于是**只有第一次**重复调用会重解析，第二次起（亮→暗→亮往回切）直接早退，
+     * 修复退化成"单向有效"的空操作。**也不用** `app:auto_tint` / `use_theme_color` 那族
+     * 声明式方案（fcllibrary 源码已核）：取的是**用户主题色**（`ltColor` / `getColor2()`），
+     * 这块底板要的是与主题色无关的中性色，挂上去颜色就是错的；且库里没有可替换 ScrollView
+     * 的 FCL 版滚动容器（view 目录下无 FCLScrollView），换控件类型会牵动 BL-115 的 pin/补偿
+     * 接线，超出"最小改动"边界。
+     *
+     * 字段**具名**：回调表按 View 为 key，注册与反注册必须是同一个实例（同
+     * [com.dsh.ui.shell.DshLogsUI.logTextFocusListener] 那条"注销得掉"的前提）。
+     */
+    private var logConsoleScroll: ScrollView? = null
+    private var logConsoleText: FCLTextView? = null
+    private val logConsoleThemeRefresh = Runnable { refreshLogConsoleTheme() }
+
+    /** [logConsoleThemeRefresh] 的本体；判空即"本页已销毁"（onDestroy 置 null），直接跳过。 */
+    private fun refreshLogConsoleTheme() {
+        val scroll = logConsoleScroll ?: return
+        // 底板与正文各按**当前配置**现取一次 —— 同源同刻，不会分家
+        scroll.backgroundTintList = ColorStateList.valueOf(getColor(R.color.dsh_log_console_bg))
+        logConsoleText?.setTextColor(getColor(R.color.dsh_log_info))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // aliveCount 与 onDestroy 的 -- 成对：放在最前段，之后任何路径只要系统回调 onDestroy
@@ -181,6 +229,12 @@ class DshWebViewActivity : FCLActivity() {
         aliveCount++
         registerLive(this)
         setContentView(R.layout.activity_dsh_webview)
+        // BL-173：覆盖层控制台的底板与正文纳入主题刷新（机理与取舍见 [logConsoleThemeRefresh]）。
+        // key 用底板控件本身，[onDestroy] 按同一实例反注册。
+        val console = findViewById<ScrollView>(R.id.log_overlay_scroll)
+        logConsoleScroll = console
+        logConsoleText = findViewById(R.id.log_overlay_text)
+        ThemeEngine.getInstance().registerEvent(console, logConsoleThemeRefresh)
         webView = findViewById(R.id.web_view)
         // 崩溃重建要把新 WebView 插回原位：容器与布局参数此刻捕获一次（重建时旧对象已被摘除，
         // 再查 getChildAt(0) 会拿到进度条）。
@@ -1062,6 +1116,12 @@ class DshWebViewActivity : FCLActivity() {
         // 计数配平（onDestroy 至多一次；-- 后不再有代码能把计数加回）。
         aliveCount--
         unregisterLive(this)
+        // BL-173：反注册底板主题回调。ThemeEngine 的表是弱键 View（页面没了会随 GC 消失），
+        // 但本页强引用着 logConsoleScroll 直到本方法结束 —— 不注销就等于自己拽着一条指向
+        // 自己的回调（闭包捕获 this）。写法参照 DshLogsUI.onDestroy。
+        logConsoleScroll?.let { ThemeEngine.getInstance().unregisterEvent(it) }
+        logConsoleScroll = null
+        logConsoleText = null
         // BL-111：本页销毁时收掉还挂着的兼容对话框，别让它跟着已死窗口泄漏
         //（重建路径先重建后销毁，对话框会由新 WebView 的加载路径重新接管）。
         runCatching { DshWebViewCompat.dismissCompatDialog() }

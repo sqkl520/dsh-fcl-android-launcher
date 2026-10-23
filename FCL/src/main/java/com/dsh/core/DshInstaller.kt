@@ -119,7 +119,8 @@ class DshInstaller(
          * 每个抓取打一行 `npm http fetch GET 200 <url> <ms>`。stage 是"阶段级"低频文案
          * （几分钟不变），活动行是"秒级"滚动细节 —— 卡片/任务区拿它显示连续的下载活动，
          * 用户能看着它动（真机反馈："屏幕上没有任何一处地方在动了，看起来像死机"）。
-         * 由 [extractNpmActivity] 从 http 行提炼（去掉长 URL 的 query、截短到路径尾部）。
+         * 由 [extractNpmActivity] 从 http 行提炼成 `↓ 包名` / `✓ 包名`（BL-175：不再带 npm 的
+         * 累计 ms，包名按 `/-/` 回溯以保住 scoped 的作用域名）。
          */
         val activity: String? = null
     )
@@ -1431,9 +1432,15 @@ class DshInstaller(
          * - `npm http fetch GET 200 https://registry.npmjs.org/@deepseek-ai%2fdsh 979ms (cache miss)`
          * - `npm http cache @deepseek-ai/dsh@https://registry.npmjs.org/…/dsh-0.2.1-rc.2.tgz 0ms (cache hit)`
          *
-         * 输出取"包路径的最后一段"（真机上 URL 又长又带 %2F，整条塞卡片放不下，用户也只需要
-         * 看到**它在动、在抓哪个包**）：`fetch …/js-yaml 74ms` → `↓ js-yaml · 74ms`；
-         * `cache …/dsh-0.2.1-rc.2.tgz` → `✓ dsh-0.2.1-rc.2.tgz · 0ms`。
+         * ★ BL-175（fix8）输出改成 **`↓ 包名` / `✓ 包名`** 两段（取"包名"而不是"URL 尾段"），三处修正：
+         *   ① URL 一律按 scheme 起点找（不再按固定下标取字段 —— 失败/重试行没有状态码位，
+         *      旧写法会把裸词 `attempt` 当包名显示成 `↓ attempt`）；
+         *   ② 包名从 `/-/` 之前回溯（`…/@smithy/core/-/core-3.36.0.tgz` → `@smithy/core`，
+         *      旧写法取最后一段 → `core-3.36.0.tgz`，scoped 包的作用域名整个丢掉）；
+         *   ③ **不再带 ms**：npm 的 `<n>ms` 是"该请求从创建到响应体读完"的墙钟（含 socket 排队，
+         *      maxsockets=1 时近乎单调递增，真机见过 214657ms），摆在活动行会被读成
+         *      "这一个包下了 3.5 分钟"。活动行的职责是"在动"这一件事，行在换就是证据，
+         *      不需要一个误导性的数字。
          *
          * ★ 前缀用**符号**（↓=网络下载 / ✓=缓存命中）而不是任何语言的词：这一行是高频率
          *   滚动细节，进三语 strings 会让每行活动都要过一遍资源表；符号零本地化、三语同观感，
@@ -1449,38 +1456,90 @@ class DshInstaller(
                 trimmedLine.startsWith("npm http cache ") -> "✓ "
                 else -> return null
             }
-            // 取 URL 字段：fetch 行的 URL 在 "npm http fetch GET 200 " 之后（第 6 个空白字段，下标 5）；
-            // cache 行的包规格形如 `name@https://…` 或 `@scope/name@https://…` —— 不能按 '@' 切
-            // （scoped 名里也有 '@'，URL 路径里还有 '@deepseek-ai'），改用 "http" 首次出现处截取。
-            val url = when {
-                trimmedLine.startsWith("npm http fetch ") -> {
-                    trimmedLine.split(' ').getOrNull(5) ?: return null
-                }
-                else -> {
-                    val field = trimmedLine.split(' ').getOrNull(3) ?: return null
-                    val idx = field.indexOf("http")
-                    if (idx < 0) return null
-                    field.substring(idx)
-                }
-            }
-            // 包名 = URL 路径最后一段（去掉 query/hash；%2F 在包名段里还原为 /）
-            val pathTail = url.substringBefore('?').substringBefore('#').trimEnd('/')
-                .substringAfterLast('/')
-                .ifEmpty { return null }
-                .replace("%2F", "/")
-                .replace("%2f", "/")
-            // 耗时（URL 之后的第一个 "<n>ms" 字段，有就带上——"它在动"的最直接证据）
-            val ms = Regex(" (\\d+)ms").find(trimmedLine)?.groupValues?.getOrNull(1)
-            return buildString {
-                append(symbol)
-                append(pathTail.take(60))
-                if (ms != null) {
-                    append(" · ")
-                    append(ms)
-                    append("ms")
-                }
-            }
+            // ★ BL-175①：认不出 URL（没有 http(s):// 段）就是认不出这行 —— 返回 null，不猜。
+            //   注意：**不按 GET/HEAD 过滤** —— 失败/重试行族里状态码位是缺的，方法后面紧跟的
+            //   就是 URL；用"有没有 200"当判据会把最需要显示的弱网行整条丢掉。
+            val url = findUrl(trimmedLine) ?: return null
+            val name = packageNameOf(url) ?: return null
+            // 整行 ≤60 字符（与 fix7 同口径：那边截的是尾段，这里截活动行本体）—— 卡片明细位
+            // 放的是 `"<stage> · <activity>"`，异常 URL 才会撑出这种长度，宁可截短不要撑爆。
+            return (symbol + name).take(NPM_ACTIVITY_MAX)
         }
+
+        /** 活动行总长上限（前缀 2 字符也算在内） */
+        private const val NPM_ACTIVITY_MAX = 60
+
+        /**
+         * BL-175①：从 npm http 行里取 URL —— **按 scheme 起点**，不按空白字段下标。
+         *
+         * 三种真实形态一并覆盖：
+         * - 成功 `npm http fetch GET 200 <url> 74ms (cache miss)`
+         * - 失败/重试 `npm http fetch GET <url> attempt 1 failed with ECONNREFUSED`（无状态码位）
+         * - 缓存 `npm http cache <name>@<url> 0ms (cache hit)`（URL 前贴着包名与 '@'）
+         *
+         * 只认 `http://` / `https://`（行首的 `npm http ` 里没有 "://"，不会误命中前缀），
+         * 从 scheme 起到下一个空白为止 —— 后面跟着的 `<n>ms` / `(cache hit)` / `attempt` 都不进 URL。
+         */
+        private fun findUrl(line: String): String? {
+            val a = line.indexOf("http://")
+            val b = line.indexOf("https://")
+            val start = when {
+                a < 0 && b < 0 -> return null
+                a < 0 -> b
+                b < 0 -> a
+                else -> minOf(a, b)
+            }
+            return line.substring(start).substringBefore(' ').takeIf { it.isNotEmpty() }
+        }
+
+        /**
+         * BL-175②：URL → 包名。
+         *
+         * registry tarball 的固定形态是 `…/<pkg>/-/<name>-<version>.tgz`，`/-/` 就是"包名段"与
+         * "文件段"的分隔符，所以有 `/-/` 时只看它**之前**的部分；包名段若倒数第二段以 `@` 开头
+         * 就是作用域名，两段一起要（旧写法取最后一段 → `@smithy/core` 变成 `core`）。
+         * 没有 `/-/` 的行（registry 元数据请求、hosted tarball）取最后一段；那段是文件名时
+         * （`.tgz` / `.tar.gz`）再剥掉扩展与尾随版本，只留名字。
+         *
+         * `%2F` 必须**在按 '/' 分组之后**再还原：`@deepseek-ai%2fdsh` 整体才是"一段"包名，
+         * 先还原会让它被当成两段、只剩 `dsh`（丢 scope 的另一条路径）。
+         *
+         * ★ 附带一条**行为变化**：npm 站内端点行（`/-/npm/v1/security/audits/quick` 这类，
+         *   路径首段是单独的 "-"）不是包请求。旧写法对它取"URL 最后一段"，显示成
+         *   `↓ quick`（或干脆 `↓ 12ms`）—— 现在返回 null，不占活动行。理由见判据处注释。
+         */
+        private fun packageNameOf(url: String): String? {
+            val path = url.substringBefore('?').substringBefore('#').trimEnd('/')
+            // host 之后的路径（scheme 与 host 一律不进包名）
+            val afterHost = path.substringAfter("://", "").substringAfter('/', "")
+                .ifEmpty { return null }
+            val segments = afterHost.split('/').filter { it.isNotEmpty() }
+            if (segments.isEmpty()) return null
+            // ★ npm **站内端点**（`/-/npm/v1/security/audits`、`/-/user/org.couchdb.user:x`）不是
+            //   包请求：路径首段是单独的 "-"（npm 的包名不允许以 '-' 开头，所以这个判据无歧义）。
+            //   这类行返回 null —— 显示 `↓ quick` 比什么都不显示更让人以为在装一个叫 quick 的包。
+            if (segments.first() == "-") return null
+            // 步 1：`/-/` 之前才是包名段（registry tarball 形态）：它之前的段里倒数第二段以 '@' 开头
+            //    就是作用域名，两段一起要。
+            val sep = afterHost.indexOf("/-/")
+            val parts = if (sep >= 0) segments.dropLast(2) else segments
+            if (parts.isEmpty()) return null
+            val last = parts.last()
+            val scope = parts.dropLast(1).lastOrNull()?.takeIf { it.startsWith("@") }
+            // 步 2：%2F 还原（编码形态的 scoped 名整体就是一段）；段已过滤过空串，decoded 必非空
+            val decoded = (if (scope != null) "$scope/$last" else last)
+                .replace("%2F", "/").replace("%2f", "/")
+            if (sep >= 0) return decoded
+            // 步 3：无 `/-/` 且末段是文件名（hosted tarball）：剥掉扩展与尾随版本，只留名字
+            if (!(decoded.endsWith(".tgz") || decoded.endsWith(".tar.gz"))) return decoded
+            val base = decoded.removeSuffix(".tgz").removeSuffix(".tar.gz")
+            val cut = TARBALL_VERSION_TAIL.find(base)?.range?.first ?: base.length
+            // 整段都被当版本吃掉的畸形名（`-1.2.3.tgz`）→ null，不输出光剩前缀的活动行
+            return base.substring(0, cut).takeIf { it.isNotEmpty() }
+        }
+
+        /** tarball 文件名尾部的 `-<数字开头的版本段>`（`typebox-1.3.27` → 去掉 `-1.3.27`） */
+        private val TARBALL_VERSION_TAIL = Regex("-\\d[\\w.+\\-]*$")
 
         // --- BL-043/053/054 的纯判断内核（public，便于 JVM 单测；class 头那套理由） ----------
 

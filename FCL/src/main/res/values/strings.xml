@@ -166,7 +166,10 @@
         <string name="dsh_verify_running">Running self-check…</string>
         <string name="dsh_verify_title">Self-check result</string>
         <string name="dsh_version_size">package %1$s</string>
-        <string name="dsh_webview_auth_failed">Session expired: the local cookie is no longer valid. Restart the instance to get a new token.</string>
+        <!-- fix8 / BL-181(5)：旧文案断言"cookie 已失效"，而这个界面错误也可能来自**state 本就是
+             裸 URL**（认领孤儿/回落路径，见 BL-135）—— 那种情况下从来没有 cookie 可失效。
+             归因不确定就不写归因，只给两条真能走通的路：回应用内重开、或重启实例拿新链接。 -->
+        <string name="dsh_webview_auth_failed">Cannot access the local dsh UI. Open the instance from the app again, or restart the instance to get a fresh access link.</string>
         <string name="dsh_webview_error">Page failed to load: %1$s</string>
         <string name="dsh_webview_http_error">Server returned HTTP %1$d</string>
         <string name="dsh_webview_starting">Starting dsh, this can take a while on first run…</string>
@@ -305,6 +308,10 @@ Version %1$s</string>
     <string name="dsh_settings_row_version">Installed dsh</string>
     <string name="dsh_settings_row_disk">Disk usage</string>
     <string name="dsh_settings_row_path">Instance path</string>
+    <!-- fix8 / BL-168：达标 WebView（≥119）的设备上没有任何"把带 token 的链接交给外部浏览器"的出口
+         （两个外跳入口都以"版本过旧"为前置），而本页显示的又是剥掉 token 的裸地址 → 手敲进浏览器必 401。
+         这一行补的就是那个出口，值位仍是裸地址，凭据只在用户确认后进剪贴板。 -->
+    <string name="dsh_settings_row_copy_url">Copy access link</string>
     <string name="dsh_settings_desc_name">Shown in the instance list</string>
     <string name="dsh_settings_desc_model">Model used for conversations</string>
     <string name="dsh_settings_desc_profile">dsh profile to boot</string>
@@ -312,6 +319,7 @@ Version %1$s</string>
     <string name="dsh_settings_desc_key">Stored locally, encrypted with Keystore</string>
     <string name="dsh_settings_desc_key_status">Result of the last check</string>
     <string name="dsh_settings_desc_path">Tap to copy</string>
+    <string name="dsh_settings_desc_copy_url">Tap to copy the link with this session\'s access credentials</string>
     <string name="dsh_settings_desc_verify">Run the minimal chain inside proot (9 checks)</string>
     <string name="dsh_settings_desc_reinstall">Re-run the install script (keeps sessions and key)</string>
     <string name="dsh_settings_desc_delete">Delete the instance directory and key; cannot be undone</string>
@@ -372,6 +380,12 @@ Version %1$s</string>
     <string name="dsh_download_empty_all">No versions available. Tap refresh to reload.</string>
     <!-- R18：配置页复制路径的确认提示（原先误用描述行文案，看起来像"又让我点一次"） -->
     <string name="dsh_path_copied">Path copied to clipboard</string>
+    <!-- fix8 / BL-168：复制访问链接（独立于 dsh_path_copied —— 复制的是凭据，反馈要能一眼看出
+         复制的是"链接"而不是"路径"，两者在同一条链路上先后出现，混淆的代价是用户贴错东西） -->
+    <string name="dsh_url_copied">Link copied to clipboard</string>
+    <!-- fix8 / BL-168：复制前的知情确认。写清"别人拿到就能打开界面"（用途）与
+         "实例重启后失效"（代价），免得被当成长期有效的地址转发出去 -->
+    <string name="dsh_copy_url_confirm_message">This link contains the access credentials for the current session: anyone who has it can open the dsh UI. It stops working once the instance is restarted. Copy it?</string>
     <!-- R18：重装前确认（与删除同级；说明会先停实例、重新下载依赖） -->
     <string name="dsh_reinstall_confirm_message">Reinstall %1$s? Dependencies will be downloaded again. If the instance is running, it will be stopped first.</string>
     <!-- R18：改名/改端口在实例运行中修改后的提示（改动需重启才生效） -->
