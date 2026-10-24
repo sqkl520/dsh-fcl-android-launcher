@@ -102,8 +102,8 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 应用外壳：三页 + 实例详情 + 右面板 + 动态岛 | ✅ 完成 |
 | 运行时底座：proot + rootfs + PROOT_LOADER | ✅ 已集成、真机点亮 |
 | 真机端到端：装 → 启 → 停 → 再启 → 对话 | ✅ 已点亮（0.1.6，2026-10-11） |
-| 修复轮次 fix1 ~ fix9 | 已出包；具体发布状态见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
-| 修复轮次 **fix10**（R23 锐评返工 + 启动链脚本版本检查） | 📦 已出包（code 116），验证状态见 Releases |
+| 修复轮次 fix1 ~ fix9 | ✅ 全部已发布（fix5 除外，见下）；状态见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
+| 修复轮次 **fix10**（R23 锐评返工 + 启动链脚本版本检查） | ✅ 已发布（code 116，见 Releases） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
 **质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **380/380** · 脚本自检 18/18
