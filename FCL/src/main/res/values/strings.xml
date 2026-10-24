@@ -369,10 +369,19 @@ Version %1$s</string>
     <string name="dsh_list_separator">", "</string>
     <!-- R1b（BL-026）：WebView 版本过旧提示 -->
     <string name="dsh_webview_compat_title">System WebView is too old</string>
-    <string name="dsh_webview_compat_message">The current WebView is too old, and the dsh UI may display incorrectly (version %1$d or newer is required). You can continue anyway, or open this page in an external browser instead.</string>
+    <!-- BL-184：不再承诺"外部浏览器一定能打开"——外部浏览器内核同样可能过旧（白屏/无响应），
+         所以把「复制链接」抬成第一推荐。%1$d 仍是要求的最低主版本号（DshResourceFormatTest 已登记）。 -->
+    <string name="dsh_webview_compat_message">The current WebView is too old (dsh needs version %1$d or newer), so the UI may stay blank or stop responding. Note: external browsers also need a recent engine — the browser built into many phones is outdated too and may show the same blank page. Recommended: tap "Copy link" and paste the credentialed address into an up-to-date browser, or update WebView first and try again.</string>
+    <!-- BL-185：版本串读不出（厂商非标格式）时单独一套文案，把"复制链接"作为第一推荐 -->
+    <string name="dsh_webview_compat_unknown_version">Cannot recognize the current WebView version (read "%1$s"). To avoid a blank screen, open dsh in a newer browser using "Copy link", or update WebView and try again.</string>
     <string name="dsh_webview_compat_continue">Continue anyway</string>
     <string name="dsh_webview_compat_external">Open in external browser</string>
-    <string name="dsh_webview_compat_upgrade_hint">How to upgrade: update "Android System WebView" (sometimes "Chrome") to the latest version in your app store, then reopen this page.</string>
+    <!-- BL-182：门禁框第三出路。文案必须短：dialog_alert 的按钮是 350dp 等分四支（各约 80dp） -->
+    <string name="dsh_webview_compat_copy">Copy link</string>
+    <string name="dsh_webview_compat_copied">Link copied</string>
+    <string name="dsh_webview_compat_copy_unavailable">No access link with credentials is available for the current instance. Start the instance first.</string>
+    <!-- BL-184：升级指引补一句"更新后仍异常就走复制链接"——升级不一定能解决（内核也可能已最新但仍是旧内核） -->
+    <string name="dsh_webview_compat_upgrade_hint">How to upgrade: update "Android System WebView" (sometimes "Chrome") to the latest version in your app store, then reopen this page. If it still fails after updating, use "Copy link" and open the address in another, newer browser.</string>
     <string name="dsh_webview_render_gone_repeat">The page crashed repeatedly and could not be recovered. Tap Retry to load it again.</string>
     <string name="dsh_edit_blank_hint">Can\'t be empty</string>
     <string name="dsh_download_warning_stale">Refresh failed; showing cached data</string>

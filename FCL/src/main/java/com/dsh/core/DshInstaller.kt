@@ -1583,6 +1583,10 @@ class DshInstaller(
             trimmedLine.startsWith("[setup] STAGE=") ||
                 trimmedLine.startsWith("[setup] FAILED") ||
                 trimmedLine.startsWith("[setup] DONE") ||
+                // BL-191（fix9）：预装命中/未命中这两行决定"这次装得快还是慢"，
+                // 是排查"为什么又要全量下载"的第一分叉点 —— 必须立即发射，不能进 pending 缓冲。
+                trimmedLine.startsWith("[setup] preinstalled") ||
+                trimmedLine.startsWith("[setup] using preinstalled") ||
                 trimmedLine.startsWith(PREFLIGHT_FAIL_PREFIX) ||
                 isNpmErrorLine(trimmedLine)
 
