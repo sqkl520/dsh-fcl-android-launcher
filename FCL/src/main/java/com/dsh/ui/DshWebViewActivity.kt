@@ -99,6 +99,16 @@ class DshWebViewActivity : FCLActivity() {
     private var compatOk = false
 
     /**
+     * BL-182/BL-186：门禁框「复制链接」的确认框**正开着**。
+     *
+     * FCLAlertDialog 的按钮点击会先无条件 dismiss（java:93-106），所以点「复制链接」会让门禁框
+     * 带着 onDismissWithoutChoice 一起关闭。这个标记告诉那条回调"先别立刻重渲染"——
+     * 确认框还压在最上面，此刻把门禁框弹回来就会两层叠影；等确认框关闭时
+     * [resumeGateAfterCopyLink] 统一收尾并恢复门禁。
+     */
+    private var copyLinkFlowActive = false
+
+    /**
      * 日志覆盖层正在展示的实例 id（`null` = App 级全局流）。
      *
      * BL-025：FCL 原版（`LogWindow`）的运行期日志是**同页全屏覆盖层**，只切显隐、
@@ -516,10 +526,11 @@ class DshWebViewActivity : FCLActivity() {
      * 不再弹框 —— 而 114 这类老 WebView 上 dsh 0.2.x 的 SPA **必崩**（`Promise.withResolvers`
      * 需 119+ 等，bebug (2) 实锤），用户于是只剩白屏/连不上，既不知情也无出口。
      *
-     * 本函数在 `onConsoleMessage` 里被调用：仅当 **当前 WebView 确实过旧**
-     * （[DshWebViewCompat.webViewMajorBelow]）+ 消息命中崩溃判据
-     * （[isOldWebViewSpaCrash]）+ **本次加载尚未弹过**（[crashHintShownForThisLoad]）时，
-     * 弹 [DshWebViewCompat.showCrashUpgradeHint]（带升级指引 + 外部浏览器出口）。
+     * 本函数在 `onConsoleMessage` 里被调用：仅当 **当前 WebView 版本不可信**
+     * （[DshWebViewCompat.parseWebViewMajor] 读不出，或读出的值低于
+     * [DshWebViewCompat.MIN_WEBVIEW_MAJOR]）+ 消息命中崩溃判据（[isOldWebViewSpaCrash]）+
+     * **本次加载尚未弹过**（[crashHintShownForThisLoad]）时，
+     * 弹 [DshWebViewCompat.showCrashUpgradeHint]（带升级指引 + 复制链接 / 外部浏览器出口）。
      *
      * 为什么前提条件是"WebView 过旧"：`is not a function` 在**新** WebView 上也可能因 dsh
      * 前端 bug 出现，那种情况给"升级 WebView"是错误指引（用户已经最新）；过旧前提把误报面
@@ -532,15 +543,30 @@ class DshWebViewActivity : FCLActivity() {
         if (crashHintShownForThisLoad) return
         if (!isOldWebViewSpaCrash(consoleMessage)) return
         val versionName = runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
-        if (!DshWebViewCompat.webViewMajorBelow(versionName)) return
+        // BL-185：这里不能用 `webViewMajorBelow`（它对"读不出"返回 false，是给"未知≠低于"的
+        // 旧契约留的）。崩溃提示的前提恰恰是"版本不可信"：过旧**或**读不出都要给升级指引 ——
+        // 用户当初可能正是在 unknown 档里选了"仍要继续"，页面随后崩了，这时候没有出口最糟。
+        val major = DshWebViewCompat.parseWebViewMajor(versionName)
+        if (major != null && major >= DshWebViewCompat.MIN_WEBVIEW_MAJOR) return
         crashHintShownForThisLoad = true
-        // 外部浏览器出口：与 ensureSupported 的负选同款 —— 用点击时刻 fresh URL（拿不到时
-        // 按 state 现值跳；再拿不到就不显示出口按钮，见 showCrashUpgradeHint 的 onExternal 可空）。
-        val fresh = (DshRuntime.state.value as? DshRuntime.State.Running)?.url
-        val onExternal = fresh?.let { url -> { openExternalFresh(url) } }
+        // BL-187：外跳/复制都必须落在"本次加载所属实例"上 —— 记下此刻的运行实例，
+        // 点击时刻再由 openExternalFresh/copyableUrlFor 复核（跨实例切换后不复用别人的 URL）。
+        val ownerId = DshRuntime.runningInstanceId()
+        // 兜底快照按 owner 归属取（BL-187）：state 里是别人的 URL 时宁可没有快照，也不拿它当回落。
+        val stateRunning = DshRuntime.state.value as? DshRuntime.State.Running
+        val snapshot = stateRunning?.url?.takeIf { ownerId != null && stateRunning.instanceId == ownerId }
+            ?: (if (webViewDead) null else runCatching { webView.url }.getOrNull())
         // R17：本提示的典型现场恰是"用户开着日志覆盖层排查崩坏原因"——先收日志层再弹，
         // 与 loadUrlChecked 的 onDialogWillShow 同款（两处出口都要；用户可能从任一路径触发）。
-        DshWebViewCompat.showCrashUpgradeHint(this, onExternal, onDialogWillShow = { closeLogOverlay() })
+        // BL-182：拿得到本实例带 token 的 URL 才挂「复制链接」；BL-195：外跳回调必填。
+        DshWebViewCompat.showCrashUpgradeHint(
+            this,
+            onExternal = { openExternalFresh(snapshot ?: "", ownerId) },
+            onCopyLink = if (copyableUrlFor(ownerId) != null) {
+                { copyAccessLinkConfirmed(ownerId, resumeGate = false) }
+            } else null,
+            onDialogWillShow = { closeLogOverlay() }
+        )
     }
 
     /**
@@ -806,42 +832,221 @@ class DshWebViewActivity : FCLActivity() {
             webView.loadUrl(url)
             return
         }
+        // BL-187：本页是"当前运行实例"的界面，外跳/复制都必须校验 instanceId 归属。
+        // 在这里取一次归属（与状态回放同刻），后续点击时刻再取 fresh URL 时复核。
+        val ownerId = DshRuntime.runningInstanceId()
         DshWebViewCompat.ensureSupported(
             this, url,
             onContinue = {
                 compatOk = true
                 if (!webViewDead) webView.loadUrl(url)
             },
-            onExternal = { openExternalFresh(url) },
+            // BL-195：外跳回调必填（不再有模块内 ACTION_VIEW 兜底）；BL-187：点击时刻 fresh URL
+            // + instanceId 归属校验都收在 openExternalFresh 里。
+            onExternal = { openExternalFresh(url, ownerId) },
+            // BL-182：只有拿得到**本实例带 token** 的 URL 才挂「复制链接」——复制裸 URL 等于
+            // 给用户一条必 401 的死链（BL-168/BL-135 同款口径）。
+            onCopyLink = if (copyableUrlFor(ownerId) != null) {
+                { copyAccessLinkConfirmed(ownerId, resumeGate = true) }
+            } else null,
+            // BL-186：框被关掉但没做放行选择（返回键已由 setCancelable(false) 挡住；
+            // 这里兜"任一支按钮点击后 FCLAlertDialog 无条件 dismiss"这条路径）→ 清 loadedUrl
+            // 并立刻重渲染：否则页面会停在"已置位所以只 showWeb"的空白上，且门禁框没了。
+            // 「复制链接」是例外：它的确认框还没关，由 copyLinkFlowActive 让复制流程收尾时
+            // 自己恢复门禁（否则会在确认框底下再压一个门禁框）。
+            onDismissWithoutChoice = {
+                DshLogBus.append("[web] compat gate closed without choice, resetting loadedUrl")
+                loadedUrl = null
+                if (!copyLinkFlowActive) {
+                    postRender()
+                } else {
+                    DshLogBus.append("[web] compat gate re-show deferred to copy-link flow")
+                }
+            },
             // R17（作者反馈"弹出 webview 过旧提示时应该退出日志界面"）：对话框弹出前先收日志
             // 覆盖层 —— 排查时用户开着日志，对话框压在日志层上两个界面互相抢视线；
-            // 先退日志层，让用户直接面对"仍要继续 / 用外部浏览器打开"的决策。
+            // 先退日志层，让用户直接面对"仍要继续 / 复制链接 / 用外部浏览器打开"的决策。
             // closeLogOverlay() 幂等（没开时是 no-op），版达标的静默放行路径不会走到这里。
             onDialogWillShow = { closeLogOverlay() }
         )
     }
 
     /**
-     * BL-129 / BL-130 / BL-057：版本门禁里选"外部浏览器"的收尾路径。
+     * BL-182：**本实例当前可复制的带凭据访问 URL**，拿不到返回 null。
+     *
+     * 判据与设置页 `DshInstanceSettingPage.tokenUrl()` 同款（BL-187 要求的"同一份 state、
+     * 两个出口、同一强度"）：
+     * - 必须 `Running` 且 `instanceId == 本次加载所属实例`（[ownerId]；null 表示当时没有运行实例，
+     *   那就不存在合法的归属）；
+     * - URL 里必须**真的带 token**（`UrlScanner.tokenOf != null`）—— 认领孤儿/回落路径的
+     *   state.url 可能是裸 URL，复制它等于给用户一条必 401 的死链。
+     *
+     * 点击时刻现取（不是框创建时刻的快照）：dsh 的 token 是进程级 launchToken，重启即换。
+     */
+    private fun copyableUrlFor(ownerId: String?): String? {
+        if (ownerId == null) return null
+        val st = DshRuntime.state.value
+        if (st !is DshRuntime.State.Running || st.instanceId != ownerId) return null
+        val url = st.url ?: return null
+        return url.takeIf { UrlScanner.tokenOf(it) != null }
+    }
+
+    /**
+     * BL-182：门禁框「复制链接」的实现 —— **点击时刻**现取 fresh URL + 知情确认后再复制。
+     *
+     * 为什么要再做一次确认：这条链接带着当前会话的访问凭据（拿到的人都能打开 dsh 界面），
+     * 与设置页「复制访问链接」的 `confirmCopyUrl()` 是同一口径；用户可能只是误触第三按钮。
+     *
+     * 拿不到带 token 的 URL（实例已停/已切到别的实例）时**什么都不复制**，只 toast 说明 ——
+     * 绝不把裸 URL 放进剪贴板（那会让用户以为链接是对的、是 dsh 坏了）。
+     *
+     * ## BL-186 与"复制 ≠ 放行"
+     * FCLAlertDialog 的任一支按钮点击后都会**无条件 dismiss**（java:93-106），于是点「复制链接」
+     * 也会把门禁框关掉。两个后果都要收拾：
+     * 1. 门禁框的 dismiss 会触发宿主的 onDismissWithoutChoice（loadedUrl 复位）——本流程用
+     *    [copyLinkFlowActive] 把"立刻重渲染"推迟到确认框关闭之后，否则门禁框会压在确认框底下；
+     * 2. 确认框无论复制还是取消，收尾都**重新过一遍门禁**（render → loadUrlChecked）：
+     *    用户可能拿链接走了、也可能只是看了一眼，回到本页时门禁与三个出路必须在。
+     *    仅 [resumeGate] 为真时做（门禁框触发的复制）；崩溃提示框里的复制不动页面 ——
+     *    那里页面已经加载过，重载只会再崩一次、还平白丢现场。
+     *
+     * 本函数**不 dismiss 任何框**：两个弹框谁先谁后完全由用户按（系统把新框压在旧框之上，
+     * 门禁框的 onDismiss 只在用户真的关掉它时才发生 —— 那是 BL-186 的那条路径）。
+     */
+    private fun copyAccessLinkConfirmed(ownerId: String?, resumeGate: Boolean) {
+        val url = copyableUrlFor(ownerId)
+        if (url == null) {
+            DshLogBus.append("[web] copy link unavailable: no token url for the current instance")
+            Toast.makeText(this, R.string.dsh_webview_compat_copy_unavailable, Toast.LENGTH_LONG).show()
+            // 不在这里 render：门禁框的按钮点击随后会 dismiss，onDismissWithoutChoice 会统一复位
+            // loadedUrl 并重摆门禁（此刻 copyLinkFlowActive 尚未置真，那条路径会立即执行）。
+            return
+        }
+        copyLinkFlowActive = true
+        // fix9 集成裁定：记下本次确认框里"是否真的复制成功"，收尾时据此决定要不要重摆门禁
+        // （成功=用户已拿到链接，重摆只会多一次闪烁；取消/失败=必须回到可决策的现场）。
+        var didCopy = false
+        FCLAlertDialog.Builder(this)
+            .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
+            .setTitle(getString(R.string.dsh_settings_row_copy_url))
+            .setMessage(getString(R.string.dsh_copy_url_confirm_message))
+            .setPositiveButton(getString(R.string.dsh_action_copy)) {
+                val copied = runCatching {
+                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("dsh access url", url))
+                }
+                if (copied.isFailure) {
+                    DshLogBus.append("[web] copy link failed: ${copied.exceptionOrNull()}")
+                    Toast.makeText(this, R.string.open_link_failed, Toast.LENGTH_LONG).show()
+                } else {
+                    didCopy = true
+                    DshLogBus.append("[web] copy link: token url copied to clipboard")
+                    Toast.makeText(this, R.string.dsh_webview_compat_copied, Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(getString(R.string.dialog_negative), null)
+            .create()
+            .apply {
+                setOnDismissListener {
+                    copyLinkFlowActive = false
+                    if (resumeGate) resumeGateAfterCopyLink(didCopy)
+                }
+            }
+            .show()
+    }
+
+    /**
+     * BL-186：复制流程收尾 —— 让门禁重新走一遍（BL-182：复制 ≠ 放行）。
+     *
+     * 只在页面仍在本页（未 finish）时重渲染：实例已停/Activity 正在销毁时，render 会把
+     * 错误面板/加载态摆出来是对的，但 `isDestroyed` 之后碰 View 会崩，所以先挡一刀。
+     * `compatOk` 已置（复制期间用户在别处放行过）时什么都不做，避免白白重载一次。
+     */
+    private fun resumeGateAfterCopyLink(copied: Boolean) {
+        copyLinkFlowActive = false
+        if (isFinishing || isDestroyed) return
+        // ★ fix9 集成裁定（W2A 自报不确定点 2）：**复制成功后不再重摆门禁**。
+        //   缘由：FCLAlertDialog 任一按钮点击都无条件 dismiss（java:93-106），所以点「复制链接」
+        //   必然先关掉门禁框；若复制成功后还重摆一次，用户看到的是
+        //   "框消失 → 确认框 → 再冒出同一个框" 的三段闪烁，而此刻他手里已经有链接了 ——
+        //   重摆只会逼他再做一个没必要的选择（"仍要继续/外部浏览器"都是他刚才回避掉的路）。
+        //   取消/失败时仍重摆：用户没拿到东西，必须回到可决策的现场，不能停在空白页。
+        //   （这正是 BL-186 要防的"框关了、页面空白、无出口"。）
+        if (copied) return
+        if (compatOk) return
+        loadedUrl = null
+        postRender()
+    }
+
+    /**
+     * BL-186：把一次 render 排到当前事件之后。
+     *
+     * 为什么必须 post：清 loadedUrl / 重摆门禁的调用点都在 **FCLAlertDialog 的 dismiss 回调**里，
+     * 此刻对话框还在 show/dismiss 的收尾中；同步再 `dialog.show()`（render → loadUrlChecked →
+     * 门禁框）会把新框压在正在消失的旧框窗口上，部分 ROM 上表现为新框被一起带走（黑屏）。
+     * post 一拍让旧窗口先销毁干净。
+     */
+    private fun postRender() {
+        if (isFinishing || isDestroyed) return
+        window.decorView.post {
+            if (isFinishing || isDestroyed) return@post
+            if (!webViewDead) render(DshRuntime.state.value)
+        }
+    }
+
+    /**
+     * BL-129 / BL-130 / BL-057 / BL-183 / BL-187：版本门禁与崩溃提示里选"外部浏览器"的收尾路径。
      *
      * 1. **fresh URL**：外跳用**点击时刻**的最新 URL（重新查 `DshRuntime.state`），而不是
      *    对话框创建时刻的快照 —— dsh 的 token 是进程级 launchToken，重启即换；旧框旧 token
      *    外跳到浏览器首访又无 cookie，正是"外跳后 authentication required"（BL-129）的主链。
-     *    非 Running 时打英文日志（拿不到 fresh token 时按原快照跳，404/401 总好过不跳）。
-     * 2. **ACTION_VIEW 失败**（无浏览器可跳）→ 复制链接 + toast（BL-065 惯例），别静默失败。
-     * 3. **收尾**：跳完"壳前移" + `finish()` 回首页 —— 本页 WebView 从未加载（版本门禁挡的），
+     * 2. **BL-187 归属校验**：fresh 状态还必须是**本次加载所属实例**（[ownerId]）的 —— 跨实例
+     *    切换后 `state` 仍是 Running，但那是另一个实例的 URL（仍带 token，token 校验不会报警）。
+     *    不匹配时回落 [snapshotUrl] 并记英文日志（与设置页 `tokenUrl()` 的校验对齐）。
+     * 3. **ACTION_VIEW 失败**（无浏览器可跳）→ 复制链接 + toast（BL-065 惯例），别静默失败。
+     * 4. **BL-183 成功留痕**：成功分支补一条英文日志，只记 URL 骨架（scheme://host:port + 有无
+     *    token），**绝不记 token 值**。manifest 无 `<queries>` + targetSdk=34 ⇒ `resolveActivity`
+     *    恒 null，"目标包名"记录不了，日志里会注明这一限制。
+     * 5. **收尾**：跳完"壳前移" + `finish()` 回首页 —— 本页 WebView 从未加载（版本门禁挡的），
      *    没有缓存价值；留着它回来只会又落"空白 + 重弹对话框"的单程票（BL-057）。
      *
      * 注意本场景（版本门禁负选）**不保活本页**是刻意的：`finish()` 的例外与「停止」按钮同款，
      * 属"放弃缓存"语义；SPA 已就绪后点站外链接的外跳（`shouldOverrideUrlLoading`）不 finish，
      * 那是"返回直接 resume"的另一档。
+     *
+     * @param snapshotUrl 对话框弹出时刻的 URL（fresh 拿不到/归属不符时的回落）
+     * @param ownerId 本次加载所属实例 id（[DshRuntime.runningInstanceId] 的当时取值；可能为 null）
      */
-    private fun openExternalFresh(snapshotUrl: String) {
-        val fresh = (DshRuntime.state.value as? DshRuntime.State.Running)?.url
+    private fun openExternalFresh(snapshotUrl: String, ownerId: String?) {
+        val running = DshRuntime.state.value as? DshRuntime.State.Running
+        val fresh = running?.url
+        // BL-187：Running 的必须是本次加载所属实例。ownerId 为 null（弹框时就没有运行实例）或
+        // 实例已切换，都算归属不符 —— 此时 fresh 可能是**别人**的 URL（仍带 token，token 校验不会报警）。
+        val belongs = running != null && ownerId != null && running.instanceId == ownerId
         if (fresh == null) {
             logWeb("[web] external open: runtime not Running, falling back to snapshot url")
+        } else if (!belongs) {
+            // BL-187：Running 的已经不是本次加载所属实例 —— fresh URL 属于别人（还带别人的 token），
+            // 用它外跳会打开另一个实例的界面。回落快照，把归属不符摊在日志里。
+            logWeb(
+                "[web] external open: fresh url belongs to another instance " +
+                    "(owner=${ownerId ?: "none"}, current=${running?.instanceId ?: "none"}), " +
+                    "falling back to snapshot url"
+            )
         }
-        val url = fresh ?: snapshotUrl
+        val url = if (fresh != null && belongs) fresh else snapshotUrl
+        if (url.isBlank()) {
+            // 死路兜底：既没有 fresh URL 也没有可用的快照（门禁框弹出时 state 就已经没有 URL）。
+            // 不能拿空串去 ACTION_VIEW（"没浏览器可跳"的假故障会把用户带到复制空串），
+            // 也不能让用户停在空白页：把门禁/状态面板重新摆出来。
+            logWeb("[web] external open: no url available, aborting")
+            Toast.makeText(this, R.string.dsh_webview_compat_copy_unavailable, Toast.LENGTH_LONG).show()
+            if (!compatOk) {
+                loadedUrl = null
+                postRender()
+            }
+            return
+        }
         // ★ R16/fix4（BL-135 第二道防线）：若外跳目标**无 token**（认领孤儿场景在旧 pid 文件
         //   迁移期 / 任何回落裸 URL 的路径），浏览器首访无 cookie 必落 401 原文页
         //   （reports/round16/V1；V0 实验 EXP2 精确复现）。这是"明知会 401 还让用户撞墙"的场景，
@@ -857,6 +1062,15 @@ class DshWebViewActivity : FCLActivity() {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }.isSuccess
         if (ok) {
+            // BL-183：成功分支此前**零日志**，出事后无法回溯"我们到底把什么交给了谁"。
+            // 只记骨架：scheme://host:port + 有无 token，token 值绝不落盘（DshLogBus 虽会脱敏
+            // `token=` 前缀，但不把凭据交给日志是最稳的口径）。"交给哪个 App"当前记不了 ——
+            // manifest 无 <queries> + targetSdk=34 ⇒ resolveActivity 恒 null（E1-C-13），
+            // 这条限制写在日志里，免得后来人以为漏了。
+            logWeb(
+                "[web] external open dispatched: ${urlSkeleton(url)} " +
+                    "(target app not resolvable: no <queries> in manifest)"
+            )
             // ★ R14-V2B 新问题-1：成功路径**不再**抢前台。原实现三步（ACTION_VIEW →
             //   intentForShell → finish）同帧连发，最后一个 startActivity（外壳 REORDER）
             //   通常赢得前台 —— 浏览器被我们自己的壳盖住，用户看不到"跳出去了"。
@@ -1200,3 +1414,4 @@ class DshWebViewActivity : FCLActivity() {
 fun trimDeltaFor(totalLines: Int, maxShown: Int, lastTrimmed: Int): Int =
     ((totalLines - maxShown).coerceAtLeast(0) - lastTrimmed.coerceAtLeast(0))
         .coerceAtLeast(0)
+
