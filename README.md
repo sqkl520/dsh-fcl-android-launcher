@@ -7,7 +7,7 @@
 
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-358%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-366%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 **[⬇️ 下载最新版](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)** ·
@@ -33,7 +33,7 @@
 - **多实例管理** —— 多个 dsh 实例独立安装 / 启动 / 停止 / 删除，互不干扰
 - **版本管理** —— 从 npm registry 拉取版本列表，一键安装指定版本的 dsh
 - **一键启动** —— 自动捕获访问凭证，应用内直接打开 dsh 界面
-- **外部浏览器逃生** —— 设备 WebView 过旧时，一键用系统浏览器（Edge / Chrome）打开 dsh
+- **版本过旧时的出路** —— 设备 WebView 过旧时，用「复制链接」把带凭据的地址拿到较新内核的浏览器打开（外部浏览器内核过旧同样会白屏，不保证能开）
 
 **界面与体验**
 
@@ -57,7 +57,7 @@
 | 问题 | 解法 |
 |---|---|
 | 打开界面看到 `dsh web authentication required` | 回应用内点「打开界面」（会自动带上当前的新 token）；要在外部浏览器里用，到该实例详情页「运行」里点「复制访问链接」，拿带凭据的链接粘贴进浏览器。注意：重启实例后链接与端口都可能变，旧链接随即失效 |
-| 提示「WebView 过旧」 | 升级「Android System WebView」（部分设备为 Chrome）；急用时点「用外部浏览器打开」 |
+| 提示「WebView 过旧」 | 升级「Android System WebView」（部分设备为 Chrome）；急用时点「复制链接」拿到带凭据的地址，粘贴到已更新的浏览器（外部浏览器内核过旧同样会白屏） |
 | 界面白屏 / 模型选不了 | 同上——多半是 WebView 内核过旧，dsh 新版前端需要 119+ |
 | 首次要等多久？要多大空间？ | 解压约需 1.5 GB 空闲、几分钟（视闪存速度）；解压期间保持前台或锁屏放置均可 |
 | 下载/安装中断了要重来吗？ | 不用——已下载的内容有缓存，重试不会从头再来 |
@@ -106,7 +106,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | **fix6**（R18 五路审查修复 + **出货身份切换：新签名/正式包名/非 debuggable**） | 📦 已出包（code 112），待验证后发布 |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
-**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **358/358** · 脚本自检 18/18
+**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **366/366** · 脚本自检 18/18
 （每轮修复都跑全量；关键修复均钉成断言）
 
 ## 📦 构建

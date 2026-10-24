@@ -141,11 +141,19 @@ if [ ! -f "$INSTANCE_BIN" ]; then
     case "$DSH_VERSION" in
       latest|"$PRE_VER")
         stage "using-preinstalled-dsh" "$PRE_VER"
+        # BL-191：命中预装时也明确说一句"用的是哪一份"，否则日志里只有 DONE 行，
+        # 看不出这次安装到底有没有下载（现场排查"为什么装得慢"的第一分叉点）。
+        echo "[setup] using preinstalled dsh $PRE_VER"
         echo "[setup] DONE version=$PRE_VER source=preinstalled"
         exit 0
         ;;
     esac
-    echo "[setup] preinstalled $PRE_VER != requested $DSH_VERSION; installing into the instance directory"
+    # BL-191：预装未命中 —— 这是现网默认路径（下载页恒传精确版本），接下来是 proot 内
+    # 全量 npm install（自估 ~500 MB、数分钟起）。旧版只有下面那句"installing into the
+    # instance directory"，用户/日志读者看不出"rootfs 里那 420 MB 预装为什么没被用上"。
+    # 一行说全两件事（否则两行在节流窗口内会被合并成 pending，用户只看到一句半）：
+    # `[setup] preinstalled` 前缀保留 —— E6 的现场取证（EXP-18）按这个关键字搜日志页。
+    echo "[setup] preinstalled dsh $PRE_VER != requested $DSH_VERSION, installing into the instance directory (full npm install, ~500 MB)"
   fi
 fi
 

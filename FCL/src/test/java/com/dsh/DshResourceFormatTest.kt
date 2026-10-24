@@ -128,7 +128,9 @@ class DshResourceFormatTest {
         "dsh_task_cancelled_suffix" to arrayOf<Any>("dsh 0.1.5 · 安装中…"),
 
         // DshWebViewCompat（R1b）：%1$d = 要求的最低 WebView 主版本号（R16/fix4 起为 119）
-        "dsh_webview_compat_message" to arrayOf<Any>(119)
+        "dsh_webview_compat_message" to arrayOf<Any>(119),
+        // BL-185（R22）：%1$s = WebView 读到的 versionName 原文（读不出时传 "unknown"）
+        "dsh_webview_compat_unknown_version" to arrayOf<Any>("V114.0.5.302")
     )
 
     @Test
