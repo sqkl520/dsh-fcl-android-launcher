@@ -129,8 +129,11 @@ class DshResourceFormatTest {
 
         // DshWebViewCompat（R1b）：%1$d = 要求的最低 WebView 主版本号（R16/fix4 起为 119）
         "dsh_webview_compat_message" to arrayOf<Any>(119),
-        // BL-185（R22）：%1$s = WebView 读到的 versionName 原文（读不出时传 "unknown"）
+        // BL-185（R22）：%1$s = WebView 读到的 versionName 原文（**只在非 null 时**走这条；
+        // null 走下面无占位符的 no_name 那条 —— BL-206 不再往文案里塞英文 "unknown"）
         "dsh_webview_compat_unknown_version" to arrayOf<Any>("V114.0.5.302")
+        // BL-206 新增的 dsh_webview_compat_unknown_version_no_name / _unknown_title / _later
+        // 都不带占位符，按本测试的规则不需要登记。
     )
 
     @Test
@@ -183,10 +186,59 @@ class DshResourceFormatTest {
         )
     }
 
+    /**
+     * **BL-206**：门禁框两档标题 + "系统没给版本"那条文案，三语必须齐全且中文里不许出现
+     * 英文占位串 "unknown"。
+     *
+     * 为什么单独钉这一组（而不是扩展 [LOCALES] 做全量三语校验）：rTW 文件刻意只覆盖 `dsh_*`
+     *（见其文件头），全量校验是 BL-209 的既有欠账，属另一条战线；这里只钉本轮新加的三条 ——
+     * 它们出现在**同一个对话框**里，缺一条的后果是"简体用户看到一个英文标题"或更糟：
+     * 标题说"无法识别"、正文说"读到 unknown"，正是 BL-206 要消灭的自相矛盾。
+     */
+    @Test
+    fun webviewGateTitlesAndNullVersionCopyExistInAllThreeLocales() {
+        val keys = listOf(
+            "dsh_webview_compat_title",
+            "dsh_webview_compat_unknown_title",
+            "dsh_webview_compat_unknown_version_no_name",
+            "dsh_webview_compat_later",
+        )
+        THREE_LOCALES.forEach { rel ->
+            val file = resolve(rel)
+                ?: throw AssertionError("找不到 $rel（三语校验必须真的读到三份文件，不能跳过）")
+            val strings = parseStrings(file)
+            keys.forEach { key ->
+                val body = strings[key]
+                    ?: throw AssertionError("@string/$key 在 $rel 中缺失（三语文案必须齐全）")
+                assertTrue("@string/$key 在 $rel 中是空的", body.isNotBlank())
+            }
+        }
+        // 中文（简/繁）的"读不到版本"文案里不许出现英文占位串 —— 那正是 BL-206 的成因。
+        listOf("values-zh/strings.xml", "values-zh-rTW/strings.xml").forEach { rel ->
+            val body = parseStrings(resolve(rel)!!)["dsh_webview_compat_unknown_version_no_name"]!!
+            assertTrue(
+                "$rel 的 no_name 文案仍含英文占位串 unknown：$body",
+                !body.contains("unknown", ignoreCase = true)
+            )
+        }
+        // 两档标题必须不同：复用同一个标题就是 BL-206 本身。
+        val en = parseStrings(resolve("values/strings.xml")!!)
+        assertTrue(
+            "旧版标题与 unknown 标题不能是同一句（BL-206）",
+            en["dsh_webview_compat_title"] != en["dsh_webview_compat_unknown_title"]
+        )
+    }
+
     // --- 工具 ---------------------------------------------------------------
 
     private companion object {
         val LOCALES = listOf("values/strings.xml", "values-zh/strings.xml")
+
+        /**
+         * BL-206：门禁框文案的三语校验用（**不含**在 [LOCALES] 里 —— rTW 刻意只覆盖 dsh_*，
+         * 全量格式化校验是 BL-209 的既有欠账，不在本轮范围）。
+         */
+        val THREE_LOCALES = listOf("values/strings.xml", "values-zh/strings.xml", "values-zh-rTW/strings.xml")
 
         /** 渲染后不应该再出现的 %N$x 形式占位符 */
         val LEFTOVER = Regex("""%\d+\$[a-zA-Z]""")
