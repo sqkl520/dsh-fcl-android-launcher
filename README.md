@@ -7,7 +7,7 @@
 
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-366%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-380%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 **[⬇️ 下载最新版](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)** ·
@@ -19,9 +19,10 @@
 > ⚠️ **这是一个用 AI 辅助开发（vibe coding）的个人项目，处于早期开发中** ——
 > 有任何问题欢迎提 Issues，如果喜欢就点个 Star 吧！
 >
-> **公开可下载的最新包：`0.1.6-SNAPSHOT-fix4`**（见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)）。
-> 更新的修复包（fix5/fix6）正在真机验证中，验证通过后才会发布到 Releases。
-> 一律以 Releases 页为准 —— 装完请到**关于页核对版本号后缀**（如 `-fix4`）确认装对了包。
+> **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
+> 最新验证包是 `0.1.6-SNAPSHOT-fix10`（截至本文最后更新）。本 README 不单独维护版本号 ——
+> 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
+> 装完请到**关于页核对版本号后缀**（如 `-fix10`）确认装对了包；文件名带 `-fixN` 的才是当前验证包。
 
 ---
 
@@ -33,7 +34,7 @@
 - **多实例管理** —— 多个 dsh 实例独立安装 / 启动 / 停止 / 删除，互不干扰
 - **版本管理** —— 从 npm registry 拉取版本列表，一键安装指定版本的 dsh
 - **一键启动** —— 自动捕获访问凭证，应用内直接打开 dsh 界面
-- **版本过旧时的出路** —— 设备 WebView 过旧时，用「复制链接」把带凭据的地址拿到较新内核的浏览器打开（外部浏览器内核过旧同样会白屏，不保证能开）
+- **版本过旧时的出路** —— 设备 WebView 过旧时，门禁框不再只给"硬闯或离开"两条路：可以直接「复制链接」把带凭据的地址拿到较新内核的浏览器打开，也可以「稍后」先不动（外部浏览器内核过旧同样会白屏，不保证能开）
 
 **界面与体验**
 
@@ -57,11 +58,12 @@
 | 问题 | 解法 |
 |---|---|
 | 打开界面看到 `dsh web authentication required` | 回应用内点「打开界面」（会自动带上当前的新 token）；要在外部浏览器里用，到该实例详情页「运行」里点「复制访问链接」，拿带凭据的链接粘贴进浏览器。注意：重启实例后链接与端口都可能变，旧链接随即失效 |
-| 提示「WebView 过旧」 | 升级「Android System WebView」（部分设备为 Chrome）；急用时点「复制链接」拿到带凭据的地址，粘贴到已更新的浏览器（外部浏览器内核过旧同样会白屏） |
+| 提示「WebView 过旧」 | 升级「Android System WebView」（部分设备为 Chrome）；急用时在门禁框点「复制链接」拿到带凭据的地址，粘贴到已更新的浏览器（外部浏览器内核过旧同样会白屏）。不想现在决定就点「稍后」，回到实例页 |
 | 界面白屏 / 模型选不了 | 同上——多半是 WebView 内核过旧，dsh 新版前端需要 119+ |
 | 首次要等多久？要多大空间？ | 解压约需 1.5 GB 空闲、几分钟（视闪存速度）；解压期间保持前台或锁屏放置均可 |
 | 下载/安装中断了要重来吗？ | 不用——已下载的内容有缓存，重试不会从头再来 |
 | 品牌 / 包名 | **fix6 起**：正式包名 `com.dsh.fcl.androidlauncher` + 专用签名密钥（非 debuggable）。**fix1~fix5**：验证包，包名带 `.debug` 后缀、公开调试签名——两者是**不同的 App，可并存**（fix6 不继承旧版数据） |
+| 覆盖安装后脚本要重解压吗？ | 需要时会自动做，不用你操心：启动时只读比对一次本机脚本与 APK 内的版本号，落后就直接进「准备运行环境」页，只重解 `scripts` 子目录（约 34 KB，秒级），**不动 rootfs**。fix10 起这条路径才真正接通（此前存量用户升级后不会触发；本轮脚本未改，所以从 fix9 升上来不会看到重解压） |
 
 ## 🔧 它是怎么工作的
 
@@ -92,7 +94,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 
 ## 📌 当前进度
 
-> 2026-10-19 更新。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
+> 最后更新：2026-10-24（fix10）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
 
 | 模块 | 状态 |
 |---|---|
@@ -100,14 +102,15 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 应用外壳：三页 + 实例详情 + 右面板 + 动态岛 | ✅ 完成 |
 | 运行时底座：proot + rootfs + PROOT_LOADER | ✅ 已集成、真机点亮 |
 | 真机端到端：装 → 启 → 停 → 再启 → 对话 | ✅ 已点亮（0.1.6，2026-10-11） |
-| 修复轮次 fix1 / fix2 | ✅ 已发布 |
-| 修复轮次 fix3 / fix4 | ✅ 已补发 Releases（2026-10-17） |
-| 修复轮次 **fix5**（401 全链路 + 体验修复） | 🔍 真机验证中（code 111） |
-| **fix6**（R18 五路审查修复 + **出货身份切换：新签名/正式包名/非 debuggable**） | 📦 已出包（code 112），待验证后发布 |
+| 修复轮次 fix1 ~ fix9 | 已出包；具体发布状态见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
+| 修复轮次 **fix10**（R23 锐评返工 + 启动链脚本版本检查） | 📦 已出包（code 116），验证状态见 Releases |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
-**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **366/366** · 脚本自检 18/18
+**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **380/380** · 脚本自检 18/18
 （每轮修复都跑全量；关键修复均钉成断言）
+
+> 版本号唯一真源仍是 `gradle.properties` 的 `dshVersion` / `dshVersionCode`；
+> **对外可下载的包以 Releases 页为准**，本表只记轮次进度，不承诺"哪个 fixN 已公开发布"。
 
 ## 📦 构建
 

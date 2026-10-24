@@ -369,17 +369,40 @@ Version %1$s</string>
     <string name="dsh_list_separator">", "</string>
     <!-- R1b（BL-026）：WebView 版本过旧提示 -->
     <string name="dsh_webview_compat_title">System WebView is too old</string>
+    <!-- BL-206：unknown 档（读不出版本）的独立标题。此前复用上面那条 ⇒ 标题断言"版本过旧"，
+         正文却说"无法识别版本"，自相矛盾；同一句话里归因也不成立。 -->
+    <string name="dsh_webview_compat_unknown_title">Cannot determine WebView version</string>
     <!-- BL-184：不再承诺"外部浏览器一定能打开"——外部浏览器内核同样可能过旧（白屏/无响应），
          所以把「复制链接」抬成第一推荐。%1$d 仍是要求的最低主版本号（DshResourceFormatTest 已登记）。 -->
     <string name="dsh_webview_compat_message">The current WebView is too old (dsh needs version %1$d or newer), so the UI may stay blank or stop responding. Note: external browsers also need a recent engine — the browser built into many phones is outdated too and may show the same blank page. Recommended: tap "Copy link" and paste the credentialed address into an up-to-date browser, or update WebView first and try again.</string>
-    <!-- BL-185：版本串读不出（厂商非标格式）时单独一套文案，把"复制链接"作为第一推荐 -->
-    <string name="dsh_webview_compat_unknown_version">Cannot recognize the current WebView version (read "%1$s"). To avoid a blank screen, open dsh in a newer browser using "Copy link", or update WebView and try again.</string>
-    <string name="dsh_webview_compat_continue">Continue anyway</string>
-    <string name="dsh_webview_compat_external">Open in external browser</string>
-    <!-- BL-182：门禁框第三出路。文案必须短：dialog_alert 的按钮是 350dp 等分四支（各约 80dp） -->
+    <!-- BL-185：版本串读不出（厂商非标格式）时单独一套文案，把"复制链接"作为第一推荐。
+         BL-206：正文不再重复"无法识别版本"（那是标题的话），改为直接陈述读到的原文 ——
+         标题 + 正文各说一遍同一件事，会让用户以为框里有两处独立的判断。 -->
+    <string name="dsh_webview_compat_unknown_version">The system reported WebView version "%1$s". To avoid a blank screen, open dsh in a newer browser using "Copy link", or update WebView and try again.</string>
+    <!-- BL-206：versionName 为 null 时走这条 —— 不再把内部占位串 "unknown" 当版本号念给用户 -->
+    <string name="dsh_webview_compat_unknown_version_no_name">The system did not report a WebView version. To avoid a blank screen, open dsh in a newer browser using "Copy link", or update WebView and try again.</string>
+    <string name="dsh_webview_compat_continue">Continue</string>
+    <!-- BL-213：四支均分后文字区只剩 ≈72dp（见 DshWebViewCompat.showGateDialog 的算术），
+         原 "Open in external browser"（≈147dp）必然 marquee。压成 "Browser"（≈49dp）：
+         三种语言都 ≤49dp，且仍回答"点它会去哪儿"。不写 "External" —— 孤零零一个形容词
+         不说明"打开的是什么"，而这是用户此刻唯一需要的判断。
+         崩溃升级提示框（3 支）也复用这一条：它按默认 16dp 内边距只有 ≈75dp 文字区，
+         长文案在那里**本来就是滚动的**（E6 的 BL-213 算术只算了门禁框，漏了这只），
+         同一个动作用同一个标签也省得用户在两个框之间重新认按钮。 -->
+    <string name="dsh_webview_compat_external">Browser</string>
+    <!-- BL-199：第四槽「稍后」—— setCancelable(false) 封死返回键后的"先不动"出口。
+         文案必须极短：四支均分后每支只剩 ≈72dp 文字区（见 DshWebViewCompat.showGateDialog 的算术）。 -->
+    <string name="dsh_webview_compat_later">Later</string>
+    <!-- BL-182：门禁框第三出路。文案必须短：按钮行 320dp 四支均分，每槽 80dp、文字区 ≈72dp -->
     <string name="dsh_webview_compat_copy">Copy link</string>
     <string name="dsh_webview_compat_copied">Link copied</string>
     <string name="dsh_webview_compat_copy_unavailable">No access link with credentials is available for the current instance. Start the instance first.</string>
+    <!-- fix10 / BL-207：复制失败专用文案（此前复用 open_link_failed「已自动复制链接」，而失败时剪贴板里可能是旧凭据，直接误导） -->
+    <string name="dsh_copy_url_failed">Copy failed. Please try again.</string>
+    <!-- fix10 / BL-197：兜底出口面板（门禁框、状态面板、已加载页面三样都没有时不许留白屏） -->
+    <string name="dsh_webview_no_exit">Nothing can be shown right now. Tap Retry, check the logs, or go back.</string>
+    <!-- fix10 / BL-199：点「稍后」后的停留态（不打开界面，但给一个明确的下一步） -->
+    <string name="dsh_webview_gate_deferred">dsh UI is not opened yet. Tap Retry when you want to open it.</string>
     <!-- BL-184：升级指引补一句"更新后仍异常就走复制链接"——升级不一定能解决（内核也可能已最新但仍是旧内核） -->
     <string name="dsh_webview_compat_upgrade_hint">How to upgrade: update "Android System WebView" (sometimes "Chrome") to the latest version in your app store, then reopen this page. If it still fails after updating, use "Copy link" and open the address in another, newer browser.</string>
     <string name="dsh_webview_render_gone_repeat">The page crashed repeatedly and could not be recovered. Tap Retry to load it again.</string>
