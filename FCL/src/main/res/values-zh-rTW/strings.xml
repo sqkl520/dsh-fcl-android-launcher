@@ -335,17 +335,35 @@
     <string name="dsh_list_separator">、</string>
     <!-- R1b（BL-026）：WebView 版本過舊提示 -->
     <string name="dsh_webview_compat_title">系統 WebView 版本過舊</string>
+    <!-- BL-206：unknown 檔（讀不出版本）的獨立標題 —— 標題不該斷言「過舊」這件我們沒有證據的事 -->
+    <string name="dsh_webview_compat_unknown_title">無法辨識 WebView 版本</string>
     <!-- BL-184：不再承諾「外部瀏覽器一定能開啟」——外部瀏覽器核心同樣可能過舊（白屏/無回應），
          把「複製連結」抬成第一推薦。%1$d 是最低主版本號。 -->
     <string name="dsh_webview_compat_message">目前的 WebView 過舊（dsh 需要 %1$d 以上版本），介面可能一直白屏或沒有回應。注意：外部瀏覽器同樣需要較新的核心——不少手機內建的瀏覽器核心也舊，開啟後可能一樣白屏。建議做法：點「複製連結」，把帶憑據的位址貼到已更新的瀏覽器裡開啟；或先更新 WebView 再重試。</string>
-    <!-- BL-185：版本字串讀不出（廠商非標準格式）時單獨一套文案，把「複製連結」作為第一推薦 -->
-    <string name="dsh_webview_compat_unknown_version">無法辨識目前的 WebView 版本（讀到 %1$s）。為避免白屏，建議直接用「複製連結」在較新的瀏覽器開啟，或更新 WebView 後重試。</string>
+    <!-- BL-185：版本字串讀不出（廠商非標準格式）時單獨一套文案，把「複製連結」作為第一推薦。
+         BL-206：正文不再重複「無法辨識版本」（那是標題的話），改為直述讀到的原文 -->
+    <string name="dsh_webview_compat_unknown_version">系統回報的 WebView 版本為「%1$s」。為避免白屏，建議直接用「複製連結」在較新的瀏覽器開啟，或更新 WebView 後重試。</string>
+    <!-- BL-206：versionName 為 null 時走這條 —— 不再把內部佔位字串 "unknown" 當版本號唸給使用者 -->
+    <string name="dsh_webview_compat_unknown_version_no_name">系統沒有回報目前 WebView 的版本。為避免白屏，建議直接用「複製連結」在較新的瀏覽器開啟，或更新 WebView 後重試。</string>
     <string name="dsh_webview_compat_continue">仍要繼續</string>
-    <string name="dsh_webview_compat_external">用外部瀏覽器開啟</string>
-    <!-- BL-182：門禁框第三出路。文案必須短：dialog_alert 的按鈕是 350dp 等分四支（各約 80dp） -->
+    <!-- BL-213：四支均分後文字區只剩 ≈72dp（見 DshWebViewCompat.showGateDialog 的算術）。
+         原「用外部瀏覽器開啟」（8 字 ≈112dp）必然 marquee。壓成 3 字「瀏覽器」（≈42dp），
+         留約 30dp 餘量給系統大字型（Android 字號可放到 1.3 倍）。
+         崩潰升級提示框（3 支）也沿用這一條：它按預設 16dp 內距只有 ≈75dp 文字區，長文案
+         在那裡本來就是捲動的；同一個動作用同一個標籤，使用者不必在兩個框之間重新認按鈕。 -->
+    <string name="dsh_webview_compat_external">瀏覽器</string>
+    <!-- BL-199：第四槽「稍後」—— setCancelable(false) 封死返回鍵後的「先不動」出口 -->
+    <string name="dsh_webview_compat_later">稍後</string>
+    <!-- BL-182：門禁框第三出路。按鈕列 320dp 四支均分，每槽 80dp、文字區 ≈72dp -->
     <string name="dsh_webview_compat_copy">複製連結</string>
     <string name="dsh_webview_compat_copied">連結已複製</string>
     <string name="dsh_webview_compat_copy_unavailable">目前實例還拿不到帶憑據的存取連結，請先啟動實例。</string>
+    <!-- fix10 / BL-207：複製失敗專用文案（此前複用 open_link_failed「已自動複製連結」，而失敗時剪貼簿裡可能是舊憑據，直接誤導） -->
+    <string name="dsh_copy_url_failed">複製失敗，請重試。</string>
+    <!-- fix10 / BL-197：保底出口面板（門禁框、狀態面板、已載入頁面三樣都沒有時不許留白屏） -->
+    <string name="dsh_webview_no_exit">目前無法顯示頁面。請點「重試」、查看日誌，或返回。</string>
+    <!-- fix10 / BL-199：點「稍後」後的停留態（不開啟介面，但給一個明確的下一步） -->
+    <string name="dsh_webview_gate_deferred">暫未開啟 dsh 介面。想開啟時點「重試」。</string>
     <!-- BL-184：升級指引補一句「更新後仍異常就走複製連結」 -->
     <string name="dsh_webview_compat_upgrade_hint">升級方法：在應用商店將「Android System WebView」（部分裝置為 Chrome）更新到最新版，然後重新開啟本頁。若更新後仍異常，用「複製連結」把位址拿到其他較新的瀏覽器裡開啟。</string>
     <string name="dsh_webview_render_gone_repeat">頁面多次崩潰，已停止自動恢復。點「重試」重新載入。</string>

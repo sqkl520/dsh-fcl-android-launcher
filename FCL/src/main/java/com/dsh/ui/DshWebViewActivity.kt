@@ -99,14 +99,40 @@ class DshWebViewActivity : FCLActivity() {
     private var compatOk = false
 
     /**
-     * BL-182/BL-186：门禁框「复制链接」的确认框**正开着**。
+     * BL-200/BL-201：复制确认框的实例引用（`null` = 没有确认框开着）。
      *
      * FCLAlertDialog 的按钮点击会先无条件 dismiss（java:93-106），所以点「复制链接」会让门禁框
-     * 带着 onDismissWithoutChoice 一起关闭。这个标记告诉那条回调"先别立刻重渲染"——
-     * 确认框还压在最上面，此刻把门禁框弹回来就会两层叠影；等确认框关闭时
-     * [resumeGateAfterCopyLink] 统一收尾并恢复门禁。
+     * 带着 onDismissWithoutChoice 一起关闭。这个引用同时承担三件事：
+     * 1. **流程进行中**的判据（取代 fix9 的单布尔 `copyLinkFlowActive`）——门禁框与确认框可以
+     *    并存（确认框开着时一次状态回放就会把门禁框重新摆出来，BL-201），单布尔表达不了
+     *    "两张框各自属于谁、谁还开着"；
+     * 2. `onDestroy` 能真的把窗口收掉（fix9 的裸 `show()` 不进任何单例槽，没人收它，BL-200）；
+     * 3. 确认框的 dismiss 监听用"引用是否仍指向自己"区分**用户关框**与**外部收框**
+     *    （与 DshWebViewCompat 的 wasCurrent 纪律同款），外部收框不会反过来触发一次重摆。
      */
-    private var copyLinkFlowActive = false
+    private var copyDialog: FCLAlertDialog? = null
+
+    /**
+     * BL-197/BL-201：「可决策窗口」（门禁框 / 崩溃升级提示）**每次真正 show 之前**自增的序号。
+     *
+     * 复制流程开始时会记下当时的序号；收尾时若序号已经变了，说明期间已经有新的门禁框摆出来
+     *（状态回放 / Home 往返即可触发）—— 此刻屏上已有决策出口，再重摆一次只会把刚摆好的框
+     * 换一次，并与确认框的关闭时序打架。这条序号是"收尾要不要干预"的唯一判据。
+     */
+    private var decidableDialogSeq = 0L
+
+    /** BL-197：延迟重摆的令牌。新一次复位 / onDestroy 会自增，让在途的旧任务作废。 */
+    private var resumeGateToken = 0L
+
+    /**
+     * BL-199（fix10 集成）：用户刚在本轮点了「稍后」——下一次 [onDismissWithoutChoice] 要跳过重摆。
+     *
+     * 为什么要一个标记而不是让 `onLater` 直接接管：`FCLAlertDialog` 的任一按钮点击都会无条件
+     * `dismiss()`，随后统一走 `onDismissWithoutChoice`；而那个回调**分不清**"用户点了稍后"与
+     * "框被程序化关掉"——前者要求停在原地不再弹，后者要求立刻重摆（否则空白页）。
+     * 标记在重摆/放弃重摆两条路径上都要复位，见 [resumeGateAfterCopyLink] 与 render()。
+     */
+    private var gateDeferred = false
 
     /**
      * 日志覆盖层正在展示的实例 id（`null` = App 级全局流）。
@@ -368,12 +394,31 @@ class DshWebViewActivity : FCLActivity() {
             ): Boolean {
                 val url = request?.url?.toString() ?: return false
                 // 只允许回环地址留在 WebView 内；其余交给系统浏览器
-                return if (isLoopback(url)) {
-                    false
-                } else {
-                    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-                    true
+                if (isLoopback(url)) return false
+                // BL-205（R23-E1-01）：BL-183 的"外跳留痕"此前只覆盖了门禁那一支，
+                // 页面内容里的站外链接（聊天里贴的 URL）走这条路径时**零日志、失败静默** ——
+                // 出事后无法回溯"我们把什么交给了谁"，用户点不开也不知道为什么。
+                // 这里 URL 来自页面内容而非 state，没有归属可言（不需要 owner 校验），
+                // 只需要"发出去了什么"的留痕；骨架口径与 openExternalFresh 一致
+                // （scheme://host:port + 有无凭据，绝不记 token 值）。
+                // BL-208：走 logWeb（实例流 + 全局双写），让实例详情页的日志 tab 也看得到。
+                val dispatched = runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                 }
+                dispatched.fold(
+                    onSuccess = {
+                        logWeb("[web] external link dispatched: " + urlSkeleton(url))
+                    },
+                    onFailure = { e ->
+                        logWeb(
+                            "[web] external link failed (no browser handler?): " +
+                                urlSkeleton(url) + ", " + e
+                        )
+                    }
+                )
+                // 失败也返回 true：不能让页面自己在 WebView 里导航到站外（那会顶掉 dsh 界面），
+                // 与既有行为一致（fix9 之前同样无条件 true）；用户侧至少有一条日志可查。
+                return true
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -558,14 +603,19 @@ class DshWebViewActivity : FCLActivity() {
             ?: (if (webViewDead) null else runCatching { webView.url }.getOrNull())
         // R17：本提示的典型现场恰是"用户开着日志覆盖层排查崩坏原因"——先收日志层再弹，
         // 与 loadUrlChecked 的 onDialogWillShow 同款（两处出口都要；用户可能从任一路径触发）。
-        // BL-182：拿得到本实例带 token 的 URL 才挂「复制链接」；BL-195：外跳回调必填。
+        // BL-182/BL-195/BL-198：外跳回调必填；复制回调同样**恒传**（按钮恒挂，拿不到 URL 时
+        // 由 copyAccessLinkConfirmed 自己 toast），与 loadUrlChecked 的门禁框保持同一口径。
         DshWebViewCompat.showCrashUpgradeHint(
             this,
             onExternal = { openExternalFresh(snapshot ?: "", ownerId) },
-            onCopyLink = if (copyableUrlFor(ownerId) != null) {
-                { copyAccessLinkConfirmed(ownerId, resumeGate = false) }
-            } else null,
-            onDialogWillShow = { closeLogOverlay() }
+            onCopyLink = { copyAccessLinkConfirmed(ownerId, resumeGate = false) },
+            onDialogWillShow = {
+                // BL-201：崩溃提示与门禁框共用同一套"屏上可决策窗口"口径 —— 自增序号
+                //（复制收尾据此判断"期间是否已有新出口"），并先收掉复制确认框再 show。
+                decidableDialogSeq++
+                dismissCopyDialog()
+                closeLogOverlay()
+            }
         )
     }
 
@@ -844,31 +894,76 @@ class DshWebViewActivity : FCLActivity() {
             // BL-195：外跳回调必填（不再有模块内 ACTION_VIEW 兜底）；BL-187：点击时刻 fresh URL
             // + instanceId 归属校验都收在 openExternalFresh 里。
             onExternal = { openExternalFresh(url, ownerId) },
-            // BL-182：只有拿得到**本实例带 token** 的 URL 才挂「复制链接」——复制裸 URL 等于
-            // 给用户一条必 401 的死链（BL-168/BL-135 同款口径）。
-            onCopyLink = if (copyableUrlFor(ownerId) != null) {
-                { copyAccessLinkConfirmed(ownerId, resumeGate = true) }
-            } else null,
+            // BL-182 + BL-198（W3-A 已改签名语义）：**恒传回调**，按钮由 DshWebViewCompat 恒挂 ——
+            // 是否真的拿得到带 token 的 URL 在回调内部现取，拿不到只 toast 说明（不复制裸 URL）。
+            // 这样三语文案推荐「复制链接」时，按钮一定在框上（BL-198 的判据）。
+            onCopyLink = { copyAccessLinkConfirmed(ownerId, resumeGate = true) },
             // BL-186：框被关掉但没做放行选择（返回键已由 setCancelable(false) 挡住；
             // 这里兜"任一支按钮点击后 FCLAlertDialog 无条件 dismiss"这条路径）→ 清 loadedUrl
             // 并立刻重渲染：否则页面会停在"已置位所以只 showWeb"的空白上，且门禁框没了。
-            // 「复制链接」是例外：它的确认框还没关，由 copyLinkFlowActive 让复制流程收尾时
-            // 自己恢复门禁（否则会在确认框底下再压一个门禁框）。
+            // BL-197：复制流程进行中（copyDialog != null）时**同样**要复位 loadedUrl ——
+            //   只把"重摆"推迟到确认框关闭之后（由 resumeGateAfterCopyLink 统一收尾），
+            //   复位本身不能跳过；fix9 把这整段推迟掉，才漏出"loadedUrl=null 无人补"的空白页。
             onDismissWithoutChoice = {
-                DshLogBus.append("[web] compat gate closed without choice, resetting loadedUrl")
+                logWeb("[web] compat gate closed without choice, resetting loadedUrl")
                 loadedUrl = null
-                if (!copyLinkFlowActive) {
+                // BL-199：刚从「稍后」回来 —— 面板已经摆好（showError），不要再把门禁弹回去。
+                // 这个标记必须在这里消费掉：之后任何一次真实的状态回放/重试都该重新走门禁。
+                if (gateDeferred) {
+                    gateDeferred = false
+                    logWeb("[web] compat gate: deferred by user, keeping the panel")
+                } else if (copyDialog == null) {
                     postRender()
                 } else {
-                    DshLogBus.append("[web] compat gate re-show deferred to copy-link flow")
+                    // 确认框还压在上面：此刻重摆门禁只会两层叠影（BL-201）。
+                    // 收尾由 copyDialog 的 dismiss 监听统一做（BL-197：成功/取消同一路径）。
+                    logWeb("[web] compat gate re-show deferred to copy-link flow")
                 }
+            },
+            // BL-199（fix10 集成裁定）：用户点「稍后」= 现在不做决定。**这里必须真正收场**，
+            // 否则 W3-A 的实现会走上面的 onDismissWithoutChoice → 立刻 postRender 重摆门禁，
+            // 用户看到"框闪一下又回来"，按钮等于没作用（W3-B 实测上报）。
+            //
+            // 收场方式：落到"暂不打开"状态面板 —— 屏上仍有三条出口（重试 / 日志 / 返回），
+            // 既不空白（BL-197 的底线），也不逼用户立刻二选一。
+            // 用独立标记 gateDeferred 让 onDismissWithoutChoice 跳过这一轮重摆：那个回调
+            // 分不清"稍后"与"程序化关闭"，而这两者对用户的语义要求正相反。
+            onLater = {
+                logWeb("[web] compat gate: user chose to decide later, showing deferred panel")
+                gateDeferred = true
+                loadedUrl = null
+                showError(getString(R.string.dsh_webview_gate_deferred))
             },
             // R17（作者反馈"弹出 webview 过旧提示时应该退出日志界面"）：对话框弹出前先收日志
             // 覆盖层 —— 排查时用户开着日志，对话框压在日志层上两个界面互相抢视线；
             // 先退日志层，让用户直接面对"仍要继续 / 复制链接 / 用外部浏览器打开"的决策。
             // closeLogOverlay() 幂等（没开时是 no-op），版达标的静默放行路径不会走到这里。
-            onDialogWillShow = { closeLogOverlay() }
+            //
+            // BL-201：**先收掉复制确认框再 show** —— 确认框开着期间一次状态回放（Home 往返即可）
+            // 就会让新门禁框压到确认框上（两张框同屏、各自持有独立的 didCopy 闭包）。
+            // 收框是幂等的，且 dismissCopyDialog() 会清引用 ⇒ 确认框的 dismiss 监听据此不再
+            // 触发一次"重摆门禁"（避免刚摆好的框被自己收掉）。
+            // BL-197：这里同时给"可决策窗口"记一次序号 —— 收尾逻辑据此判断期间是否已有出口。
+            onDialogWillShow = {
+                decidableDialogSeq++
+                dismissCopyDialog()
+                closeLogOverlay()
+            }
         )
+    }
+
+    /**
+     * BL-200：收掉复制确认框（幂等，与 [DshWebViewCompat.dismissCompatDialog] 同款纪律）。
+     *
+     * 顺序与 compat 单例槽一致：**先清引用再 dismiss** —— 确认框的 dismiss 监听以
+     * "copyDialog === 自己"判断是不是用户关框，先清引用就能让外部收框走"静默"分支，
+     * 不会反过来再排一次重摆。dismiss 失败只记日志（宿主可能已销毁）。
+     */
+    private fun dismissCopyDialog() {
+        val d = copyDialog ?: return
+        copyDialog = null
+        runCatching { d.dismiss() }
+            .onFailure { logWeb("[web] copy dialog dismiss failed: $it") }
     }
 
     /**
@@ -903,30 +998,38 @@ class DshWebViewActivity : FCLActivity() {
      * ## BL-186 与"复制 ≠ 放行"
      * FCLAlertDialog 的任一支按钮点击后都会**无条件 dismiss**（java:93-106），于是点「复制链接」
      * 也会把门禁框关掉。两个后果都要收拾：
-     * 1. 门禁框的 dismiss 会触发宿主的 onDismissWithoutChoice（loadedUrl 复位）——本流程用
-     *    [copyLinkFlowActive] 把"立刻重渲染"推迟到确认框关闭之后，否则门禁框会压在确认框底下；
-     * 2. 确认框无论复制还是取消，收尾都**重新过一遍门禁**（render → loadUrlChecked）：
-     *    用户可能拿链接走了、也可能只是看了一眼，回到本页时门禁与三个出路必须在。
-     *    仅 [resumeGate] 为真时做（门禁框触发的复制）；崩溃提示框里的复制不动页面 ——
-     *    那里页面已经加载过，重载只会再崩一次、还平白丢现场。
+     * 1. 门禁框的 dismiss 会触发宿主的 onDismissWithoutChoice（loadedUrl 复位）——复位照做，
+     *    只把"重摆门禁"推迟到确认框关闭之后（[copyDialog] 非空期间），否则门禁框会压在确认框底下；
+     * 2. 确认框无论复制成功、复制失败还是取消，收尾都**回到可决策现场**（见
+     *    [resumeGateAfterCopyLink]）——BL-197：fix9 曾让"复制成功"跳过这一步，
+     *    于是 loadedUrl=null 无人补、面板已收、WebView 未加载 ⇒ 整屏无控件的稳态空白。
      *
-     * 本函数**不 dismiss 任何框**：两个弹框谁先谁后完全由用户按（系统把新框压在旧框之上，
-     * 门禁框的 onDismiss 只在用户真的关掉它时才发生 —— 那是 BL-186 的那条路径）。
+     * 本函数**不 dismiss 门禁框**：它由 FCLAlertDialog 自己关；这里只负责确认框这一层。
      */
     private fun copyAccessLinkConfirmed(ownerId: String?, resumeGate: Boolean) {
-        val url = copyableUrlFor(ownerId)
-        if (url == null) {
-            DshLogBus.append("[web] copy link unavailable: no token url for the current instance")
-            Toast.makeText(this, R.string.dsh_webview_compat_copy_unavailable, Toast.LENGTH_LONG).show()
-            // 不在这里 render：门禁框的按钮点击随后会 dismiss，onDismissWithoutChoice 会统一复位
-            // loadedUrl 并重摆门禁（此刻 copyLinkFlowActive 尚未置真，那条路径会立即执行）。
+        // BL-201 / R23-E1-06：确认框已经开着就直接忽略。fix9 用单布尔 copyLinkFlowActive，
+        // 两张确认框会共用一套收尾状态（后关的那张把前一张的 didCopy 覆盖掉）；
+        // 改用实例引用后"是否在流程中"只由 copyDialog 判空决定，重入在入口处就被挡住。
+        if (copyDialog != null) {
+            logWeb("[web] copy link ignored: confirmation dialog is already showing")
             return
         }
-        copyLinkFlowActive = true
-        // fix9 集成裁定：记下本次确认框里"是否真的复制成功"，收尾时据此决定要不要重摆门禁
-        // （成功=用户已拿到链接，重摆只会多一次闪烁；取消/失败=必须回到可决策的现场）。
+        val url = copyableUrlFor(ownerId)
+        if (url == null) {
+            logWeb("[web] copy link unavailable: no token url for the current instance")
+            Toast.makeText(this, R.string.dsh_webview_compat_copy_unavailable, Toast.LENGTH_LONG).show()
+            // 不在这里 render：门禁框的按钮点击随后会 dismiss，onDismissWithoutChoice 会统一复位
+            // loadedUrl（此刻 copyDialog 仍为 null ⇒ 走"立即重摆"分支，不会留空白）。
+            return
+        }
+        // BL-197/BL-201：记下"点复制链接那一刻，屏上最后一个可决策窗口"的序号。
+        // 确认框开着期间若发生状态回放（Home 往返即可），门禁框会被重新摆出，
+        // 序号随之变化 —— 收尾时据此判断"屏上是否已经另有出口"，避免收掉刚摆好的框。
+        val gateSeqAtStart = decidableDialogSeq
+        // 本次确认框里"是否真的把新链接放进了剪贴板"。只用于日志与 toast 口径；
+        // **不参与**收尾决策（BL-197：成功与取消一视同仁回到可决策现场）。
         var didCopy = false
-        FCLAlertDialog.Builder(this)
+        val dialog = FCLAlertDialog.Builder(this)
             .setAlertLevel(FCLAlertDialog.AlertLevel.INFO)
             .setTitle(getString(R.string.dsh_settings_row_copy_url))
             .setMessage(getString(R.string.dsh_copy_url_confirm_message))
@@ -936,11 +1039,15 @@ class DshWebViewActivity : FCLActivity() {
                     cm.setPrimaryClip(ClipData.newPlainText("dsh access url", url))
                 }
                 if (copied.isFailure) {
-                    DshLogBus.append("[web] copy link failed: ${copied.exceptionOrNull()}")
-                    Toast.makeText(this, R.string.open_link_failed, Toast.LENGTH_LONG).show()
+                    // BL-207：失败时不能复用 open_link_failed（"已自动复制链接，请手动粘贴"）——
+                    // 那次复制根本没发生，剪贴板里可能还是上一条旧凭据，那句话会直接把用户
+                    // 引去粘贴一个错误的链接。用独立文案，只说"复制失败，请重试"。
+                    // ⚠ 资源键 dsh_copy_url_failed 由主代理并入三语 strings.xml（本波不碰该文件）。
+                    logWeb("[web] copy link failed: ${copied.exceptionOrNull()}")
+                    Toast.makeText(this, R.string.dsh_copy_url_failed, Toast.LENGTH_LONG).show()
                 } else {
                     didCopy = true
-                    DshLogBus.append("[web] copy link: token url copied to clipboard")
+                    logWeb("[web] copy link: token url copied to clipboard")
                     Toast.makeText(this, R.string.dsh_webview_compat_copied, Toast.LENGTH_SHORT).show()
                 }
             }
@@ -948,34 +1055,111 @@ class DshWebViewActivity : FCLActivity() {
             .create()
             .apply {
                 setOnDismissListener {
-                    copyLinkFlowActive = false
-                    if (resumeGate) resumeGateAfterCopyLink(didCopy)
+                    // BL-200/BL-201：只有"用户关掉的是当前这张框"才收尾。dismissCopyDialog()
+                    // 是先清引用再 dismiss（与 DshWebViewCompat 的 wasCurrent 纪律同款），
+                    // 外部收框时这里看到 copyDialog 已不是自己 ⇒ 静默跳过，
+                    // 不会反过来再排一次重摆（那会把刚摆好的门禁框收掉）。
+                    if (copyDialog === this) {
+                        copyDialog = null
+                        if (resumeGate) resumeGateAfterCopyLink(didCopy, gateSeqAtStart)
+                    }
                 }
             }
-            .show()
+        // BL-200：先存引用再 show —— 不存引用的裸 show() 没有任何收框入口（onDestroy 收不到）。
+        copyDialog = dialog
+        dialog.show()
     }
 
     /**
-     * BL-186：复制流程收尾 —— 让门禁重新走一遍（BL-182：复制 ≠ 放行）。
+     * BL-186 / BL-197：复制流程收尾 —— 让用户回到"可决策现场"。
      *
-     * 只在页面仍在本页（未 finish）时重渲染：实例已停/Activity 正在销毁时，render 会把
-     * 错误面板/加载态摆出来是对的，但 `isDestroyed` 之后碰 View 会崩，所以先挡一刀。
-     * `compatOk` 已置（复制期间用户在别处放行过）时什么都不做，避免白白重载一次。
+     * fix9 在这里写过 `if (copied) return`："复制成功就不重摆，免得三段闪烁"。那是错的：
+     * 此刻 `loadedUrl=null`（门禁框的 onDismissWithoutChoice 已经复位）、`state_panel` 已被
+     * `showWeb()` 收起、WebView 从未 `loadUrl` ⇒ 屏上没有任何控件，而且不会自愈
+     * （下一次状态发射/onStart 回放才会重摆）。三位独立锐评同判（BL-197）。
+     *
+     * 现在的时序（复制成功与取消**完全一致**）：
+     * 1. 确认框已关闭（本函数由它的 dismiss 监听调用）；
+     * 2. 先 `loadedUrl = null`（与取消路径同一条复位），再 [postRender] 延迟 ≈180ms 重摆门禁 —
+     *    延迟让旧确认框窗口先销毁干净，避免新旧窗口叠影（E1 的 P7：单靠 `decorView.post`
+     *    在 detached 时会被无限期推迟，所以延迟调度改用主线程 Handler，并带空白兜底）；
+     * 3. 门禁框重摆时经 `onDialogWillShow` 再收一次确认框（幂等），并自增
+     *    [decidableDialogSeq] —— 收尾逻辑据此确认"出口真的出来了"。
+     *
+     * 例外（都不允许留在空白页）：
+     * - 复制期间门禁框已被状态回放重新摆出（序号变了）→ 屏上已有出口，不再干预；
+     * - `compatOk` 已置 / 宿主正在销毁 / 没有可重载的 URL → 由纯函数
+     *   [gateResumeAction] 判定；Abort 时同样延迟 render（错误/加载面板带全出口），
+     *   最后统一由 [ensureVisibleExit] 兜"连面板都没有"的极端情况。
      */
-    private fun resumeGateAfterCopyLink(copied: Boolean) {
-        copyLinkFlowActive = false
+    private fun resumeGateAfterCopyLink(copied: Boolean, gateSeqAtStart: Long) {
+        // BL-201：确认框开着期间发生过一次状态回放（Home 往返即可），门禁框已被重新摆出。
+        // 此刻它就是用户要的可决策窗口，再复位重摆只会"收掉刚出现的框、再弹一个一样的"。
+        if (decidableDialogSeq != gateSeqAtStart) {
+            logWeb(
+                "[web] copy link finished while a fresh gate is already on screen " +
+                    "(copied=$copied), no re-show needed"
+            )
+            return
+        }
+        val action = gateResumeAction(
+            copied = copied,
+            compatOk = compatOk,
+            finishing = isFinishing || isDestroyed,
+            // "还有可加载的现场"：状态仍是 Running 且能拿到 URL（带 token）或至少端口已知。
+            // 实例已停/已退出时不该硬摆门禁 —— render 会给出带出口的错误面板。
+            canReload = runnableUrlOrNull() != null,
+        )
+        logWeb("[web] copy link finished (copied=$copied), gate resume action=$action")
+        when (action) {
+            GateResume.ReloadGate -> {
+                loadedUrl = null
+                postRender(GATE_RESUME_DELAY_MS)
+            }
+            GateResume.StayOnPage -> {
+                // 防御性分支（compatOk 为真时门禁根本不会弹）：仍兜一次"屏上什么都没有"。
+                ensureVisibleExit(gateShown = false)
+            }
+            // Abort：宿主已销毁（postRender 会自行早退，什么都不碰），或实例已停/退出 ——
+            // 后者走同一条延迟 render：render 的 Idle/Failed/Exited 分支会摆出带出口的面板，
+            // 末尾的 ensureVisibleExit 再兜一次"连面板都没有"的极端情况。
+            GateResume.Abort -> {
+                loadedUrl = null
+                postRender()
+            }
+        }
+    }
+
+    /** BL-197：当前状态下"能重新过门禁并加载"的 URL；拿不到返回 null。 */
+    private fun runnableUrlOrNull(): String? {
+        val st = DshRuntime.state.value as? DshRuntime.State.Running ?: return null
+        return st.url ?: if (st.port > 0) "http://127.0.0.1:${st.port}/" else null
+    }
+
+    /**
+     * BL-197 兜底：确认屏上**至少有一个可点出口**。
+     *
+     * 出口只有三种：门禁框/崩溃提示（对话框窗口，[gateShown]）、状态面板（布局里的按钮行）、
+     * 已经在加载的页面（[loadedUrl] 非空 ⇒ loadUrl 已发出，页面即将出现）。
+     * 三样都没有就是 BL-197 的空白现场 —— 用现成的错误面板把「重试 / 日志 / 停止 / 关闭」
+     * 露出来。这是 BL-186 验收句（"框消失、页面空白、无出口"）的最后一道闸：
+     * 本页任何路径都不允许以空白收场。
+     *
+     * @param gateShown 本次重摆期间是否真的弹出过对话框（由调用方比对 [decidableDialogSeq] 得出）
+     */
+    private fun ensureVisibleExit(gateShown: Boolean) {
         if (isFinishing || isDestroyed) return
-        // ★ fix9 集成裁定（W2A 自报不确定点 2）：**复制成功后不再重摆门禁**。
-        //   缘由：FCLAlertDialog 任一按钮点击都无条件 dismiss（java:93-106），所以点「复制链接」
-        //   必然先关掉门禁框；若复制成功后还重摆一次，用户看到的是
-        //   "框消失 → 确认框 → 再冒出同一个框" 的三段闪烁，而此刻他手里已经有链接了 ——
-        //   重摆只会逼他再做一个没必要的选择（"仍要继续/外部浏览器"都是他刚才回避掉的路）。
-        //   取消/失败时仍重摆：用户没拿到东西，必须回到可决策的现场，不能停在空白页。
-        //   （这正是 BL-186 要防的"框关了、页面空白、无出口"。）
-        if (copied) return
-        if (compatOk) return
-        loadedUrl = null
-        postRender()
+        if (gateShown) return
+        if (loadedUrl != null) return
+        val panelShown = findViewById<View>(R.id.state_panel).visibility == View.VISIBLE
+        if (panelShown) return
+        // 页面已经在 WebView 里（有 url）就不是空白 —— 别用错误面板把活页面盖掉。
+        if (!webViewDead && runCatching { webView.url }.getOrNull() != null) return
+        logWeb("[web] no gate / panel / page after gate resume; falling back to error panel")
+        // 不用 dsh_webview_stopped：那句话断言"dsh 未在运行"，而走到这里时实例可能好好跑着，
+        // 只是门禁没能摆回来（BL-206 的教训：错误归因比没有文案更糟）。
+        // ⚠ 资源键 dsh_webview_no_exit 由主代理并入三语 strings.xml。
+        showError(getString(R.string.dsh_webview_no_exit))
     }
 
     /**
@@ -985,13 +1169,38 @@ class DshWebViewActivity : FCLActivity() {
      * 此刻对话框还在 show/dismiss 的收尾中；同步再 `dialog.show()`（render → loadUrlChecked →
      * 门禁框）会把新框压在正在消失的旧框窗口上，部分 ROM 上表现为新框被一起带走（黑屏）。
      * post 一拍让旧窗口先销毁干净。
+     *
+     * BL-197：可带延迟（复制流程收尾用 ≈180ms —— 确认框窗口的退出动画通常在这一档内结束）。
+     * **调度器固定用主线程 Handler 而不是 `decorView.post`**：E1 的 P7 指出 `View.post` 在
+     * decorView 已 detach 时会把任务挂到 attach 队列，无限期不执行。Handler 不依赖 attach；
+     * 但宿主已 STOPPED（用户刚按 Home）时**干脆不排任务**：那会儿屏幕上没人看，
+     * 恢复交给用户回来时 onStart 的那次状态回放（`loadedUrl` 已复位 ⇒ 普通 render 即重过门禁）。
+     *
+     * 执行末尾无条件 [ensureVisibleExit]：这条链路唯一不可接受的结局是"什么都不在屏上"。
+     * [resumeGateToken] 让"更晚发起的一次复位"作废在途的旧任务（连续两次复制收尾不乱序）。
      */
-    private fun postRender() {
+    private fun postRender(delayMs: Long = 0L) {
         if (isFinishing || isDestroyed) return
-        window.decorView.post {
-            if (isFinishing || isDestroyed) return@post
-            if (!webViewDead) render(DshRuntime.state.value)
+        // BL-197：宿主不在前台时不排任务。两种调度器在后台都有毛病（View.post 会无限期挂起，
+        // Handler 会在后台 show 对话框）；而**根本不需要**在这里恢复 —— 用户回来时
+        // repeatOnLifecycle(STARTED) 会重放 state，`loadedUrl` 已被复位成 null，
+        // 那条普通的 render 分支自然会重新过门禁。屏幕上此刻也没人看，不存在"空白页"。
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            logWeb("[web] gate resume deferred to the next onStart replay (host not started)")
+            return
         }
+        val token = ++resumeGateToken
+        val task = Runnable {
+            if (token != resumeGateToken) return@Runnable
+            if (isFinishing || isDestroyed) return@Runnable
+            // 门禁框 / 崩溃提示框是对话框窗口，不是布局里的控件 —— 它们"已在屏上"这件事
+            // 只能由 onDialogWillShow 自增的序号来确认（[ensureVisibleExit] 看不到它）。
+            val seqBefore = decidableDialogSeq
+            if (!webViewDead) render(DshRuntime.state.value)
+            ensureVisibleExit(gateShown = decidableDialogSeq != seqBefore)
+        }
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        if (delayMs <= 0L) handler.post(task) else handler.postDelayed(task, delayMs)
     }
 
     /**
@@ -1338,6 +1547,11 @@ class DshWebViewActivity : FCLActivity() {
         logConsoleText = null
         // BL-111：本页销毁时收掉还挂着的兼容对话框，别让它跟着已死窗口泄漏
         //（重建路径先重建后销毁，对话框会由新 WebView 的加载路径重新接管）。
+        // BL-200：复制确认框与门禁框分属两个窗口，onDestroy 必须各收一次；
+        // fix9 只收 compatDialog 单例槽，确认框（裸 show 无引用）在 btn_stop / destroyKeptPages
+        // 两条路径上都会带着活窗口销毁 Activity。两处都幂等、都 runCatching 兜宿已失效。
+        resumeGateToken++ // BL-197：作废在途的延迟重摆（宿主正在销毁，任务不必再跑）
+        runCatching { dismissCopyDialog() }
         runCatching { DshWebViewCompat.dismissCompatDialog() }
         destroyWebView()
         super.onDestroy()
@@ -1392,6 +1606,15 @@ class DshWebViewActivity : FCLActivity() {
 
         /** R14-V2B 附注：出页后崩溃预算的**延迟清零**时长（稳定存活满这么久才恢复满预算） */
         private const val CRASH_BUDGET_RESET_DELAY_MS = 60_000L
+
+        /**
+         * BL-197：复制流程收尾到重摆门禁之间的延迟。
+         *
+         * 确认框的窗口退出动画通常在这一档内结束；同步 `show()` 会让新旧两个窗口叠影
+         * （旧框还在消失、新框已经出现）。只是"视觉让路"，不是正确性依赖 ——
+         * 延迟任务的兜底见 [ensureVisibleExit]。
+         */
+        private const val GATE_RESUME_DELAY_MS = 180L
     }
 }
 
@@ -1414,4 +1637,62 @@ class DshWebViewActivity : FCLActivity() {
 fun trimDeltaFor(totalLines: Int, maxShown: Int, lastTrimmed: Int): Int =
     ((totalLines - maxShown).coerceAtLeast(0) - lastTrimmed.coerceAtLeast(0))
         .coerceAtLeast(0)
+
+/**
+ * BL-197 纯函数（可单测，见 `com.dsh.R23FixTest`）：复制流程收尾时该怎么处置页面。
+ *
+ * 背景：点门禁框的「复制链接」会先关掉门禁框（FCLAlertDialog 的按钮点击无条件 dismiss），
+ * 那一刻 `loadedUrl` 已被 onDismissWithoutChoice 复位为 null、状态面板早被 `showWeb()` 收起。
+ * 确认框关闭后必须**显式**决定"接下来屏上放什么"——fix9 的 `if (copied) return` 就是漏了
+ * 这一决定，留下整屏无控件的空白（BL-197）。
+ *
+ * 判据顺序即优先级（任一分支都不允许返回"什么都不做且屏上无控件"）：
+ * 1. [finishing]：宿主正在销毁 —— 碰 View 会崩，交给系统的既有关闭流程（[GateResume.Abort]，
+ *    调用方另走"不碰 View"的兜底）；
+ * 2. [compatOk]：本页早已放行过（理论上不可达，防御性保留）—— 页面已在或即将在，
+ *    重摆门禁只会白弹一次（[GateResume.StayOnPage]）；
+ * 3. [canReload]：还能拿到可加载的 URL（`Running` 且有 url 或端口）—— 复位 `loadedUrl`
+ *    并延迟重摆门禁，让用户回到"继续 / 复制链接 / 外部浏览器"的决策现场
+ *    （[GateResume.ReloadGate]）。**复制成功与取消同此一支**；
+ * 4. 其余（实例已停/退出、没有 URL）：重摆门禁没有意义，转 [GateResume.Abort]，
+ *    由调用方摆出带出口的错误面板。
+ *
+ * [copied] 只影响日志口径，**不改变**动作 —— 这正是 BL-197 的修复点（fix9 让它决定是否 return）。
+ *
+ * 写成顶层函数而不是成员：单测 harness 的 classpath 没有 androidx，经 Activity 访问会连带
+ * 加载父类链直接崩（同 [trimDeltaFor] 的理由）。
+ */
+enum class GateResume {
+    /** 复位 loadedUrl 并延迟重摆门禁（可决策现场恢复）。 */
+    ReloadGate,
+
+    /** 屏上已有可接受的现场（页面已放行/正在加载），不干预。 */
+    StayOnPage,
+
+    /** 无法恢复门禁：调用方必须摆出带出口的面板，不允许停在空白页。 */
+    Abort,
+}
+
+/**
+ * BL-197：复制流程收尾的决策函数（签名与语义见 [GateResume]）。
+ *
+ * @param copied 确认框里是否真的把链接放进了剪贴板（**不影响**动作，只用于日志）
+ * @param compatOk 本页是否已经放行过版本门禁
+ * @param finishing 宿主是否正在 finish/销毁
+ * @param canReload 当前状态是否还能拿到可加载的 URL
+ */
+@Suppress("UNUSED_PARAMETER") // copied 只进日志口径：刻意不参与判定（BL-197 的修复点）
+fun gateResumeAction(
+    copied: Boolean,
+    compatOk: Boolean,
+    finishing: Boolean,
+    canReload: Boolean,
+): GateResume = when {
+    // 顺序即优先级：销毁态先挡（碰 View 会崩），已放行不干预，能重载就回到决策现场，
+    // 其余一律交调用方摆出带出口的面板。copied 在这里**不出现**是刻意的。
+    finishing -> GateResume.Abort
+    compatOk -> GateResume.StayOnPage
+    canReload -> GateResume.ReloadGate
+    else -> GateResume.Abort
+}
 

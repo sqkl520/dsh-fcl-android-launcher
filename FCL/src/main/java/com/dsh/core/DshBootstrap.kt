@@ -137,15 +137,96 @@ object DshBootstrap {
      *
      * ★ 方案 B：proot / loader / busybox 一律由 **jniLibs** 提供（nativeLibraryDir 有执行位，
      * 才能在 W^X 下 execve），因此不再要求 assets 里存在 proot 副本与版本文件。
+     *
+     * ★ BL-214（fix10）：新增 [scriptsOutdated] 判据。原实现只信 `RuntimeUtils.isLatest`（走
+     *   `Class.getResourceAsStream`），而它在 Android 上的行为在不同 ROM/打包方式下有分歧：
+     *   若解析不到 assets 就**恒返回 true（视为最新）**，于是"脚本 9 → 10"这类升级永远被跳过。
+     *   这里用一条**确定的通路**（`context.assets.open`）独立比对一次脚本版本，两者是 `&&` 关系：
+     *   - `isLatest` 正常 → 两条判据结论一致，无行为变化；
+     *   - `isLatest` 恒 true → 本判据仍能把"脚本过期"判出来，不会假就绪。
+     *
+     *   代价：这一步要读 assets 里 3 字节的 version 文件。调用方（准备页 onCreate / 下载页）
+     *   本来就在做磁盘 stat，量级相同；读失败一律返回 false（见 [scriptsOutdated]），
+     *   宁可多走一次幂等准备，也不误判"已就绪"。
      */
     fun isReady(): Boolean = runCatching {
         RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") &&
             RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") &&
+            !scriptsOutdated(null) &&
             File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile &&
             prootBinReady() &&
             prootLoaderReady() &&
             DshPaths.rootfsLooksUsable()
     }.getOrDefault(false)
+
+    /**
+     * 磁盘上的脚本目录是否落后于 APK 内的脚本（**只读、不触发任何解压**）。BL-214。
+     *
+     * 为什么需要它：启动页（[com.tungsten.fcl.activity.SplashActivity]）只认
+     * `DshSetupActivity.isCompleted()`（`KEY_SETUP_DONE` 一次置真永真）就直接进主壳，而
+     * `install()` 的唯一生产调用点在准备页 —— 存量用户升级后**根本不经过**那条路，脚本版本
+     * 9 → 10 的解压永不发生（BL-191 的新日志因此对他们永远不可见）。启动链调用本方法，
+     * 过期就改道准备页（[com.dsh.ui.setup.DshSetupActivity] 的 `beginPrepare()` 会因
+     * `isReady()` 为 false 而重解压脚本）。
+     *
+     * 读哪两处（有意避开 `Class.getResourceAsStream`）：
+     * - assets：`context.assets.open("$ASSET_ROOT/scripts/version")` —— Android 上确定能读的通路；
+     * - 磁盘：`DshPaths.SCRIPTS_DIR/version` —— 解压时由 `copyAssets` 原样写下的那份。
+     *
+     * 判定（**宁可不打扰，也不误弹**）：
+     * - 磁盘 version 缺失 / 为空 / 与 assets 不同 → `true`（需要重解压）；
+     * - 任一侧读取失败（assets 条目不存在、IO 异常、路径未初始化）→ `false`。
+     *   失败时返回 false 而不是 true：这条判据挂在启动链上，误判为 true 会让每个用户每次
+     *   启动都进准备页；而"磁盘真缺文件"另有 `start-dsh.sh` 存在性兜底（[isReady] / [install]）。
+     *
+     * @param context 任意可拿 assets 的 Context；传 null 时退回进程级 Application Context
+     *                （assets 不随语言/主题变化，用它读版本是安全的）。
+     */
+    @JvmStatic
+    fun scriptsOutdated(context: Context?): Boolean {
+        if (!DshPaths.isLoaded) return false
+        // assets 读不到 = 这个包本身没有版本文件（打包问题）：不据此打扰用户
+        val assetVersion = readAssetScriptsVersion(context) ?: return false
+
+        val diskFile = File(DshPaths.SCRIPTS_DIR, "version")
+        if (!diskFile.isFile) return true
+        // 文件在但读不出（权限/IO）：不确定，按"不打扰"处理
+        val diskVersion = runCatching { diskFile.readText().trim() }.getOrNull() ?: return false
+        if (diskVersion.isEmpty()) return true
+
+        return !sameScriptsVersion(diskVersion, assetVersion)
+    }
+
+    /**
+     * 只读快照：`(磁盘版本, assets 版本)`，读不到的一侧为 null。BL-214 日志用。
+     *
+     * 与 [scriptsOutdated] 同一套读取方式，只为把"X → Y"写进日志（排障时要能一眼看出
+     * 到底哪一版落后，而不是只有一句"过期了"）。任何异常都降级为 null，绝不影响启动链。
+     */
+    @JvmStatic
+    fun scriptsVersionPair(context: Context?): Pair<String?, String?> {
+        val disk = if (!DshPaths.isLoaded) null else runCatching {
+            File(DshPaths.SCRIPTS_DIR, "version").takeIf { it.isFile }?.readText()?.trim()
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
+        return disk to readAssetScriptsVersion(context)
+    }
+
+    /** assets 内的脚本版本号；Context 不可用或条目缺失/为空时返回 null。 */
+    private fun readAssetScriptsVersion(context: Context?): String? = runCatching {
+        val ctx = context ?: DshAppContextHolder.context ?: return@runCatching null
+        ctx.assets.open("$ASSET_ROOT/scripts/version")
+            .use { it.bufferedReader().readText().trim() }
+    }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * 两个脚本版本号是否等价：字符串相等，或两边都是纯数字时数值相等
+     * （与 [RuntimeUtils.isLatest] 的历史兼容口径一致，"007" 与 "7" 视为同版本）。
+     *
+     * BL-214（fix10）：实现挪到文件顶层（`scriptsVersionSame`），理由同 `trimDeltaFor`：
+     * 单测 harness 的 classpath 没有 androidx，经 companion/object 访问会拉起整条父类链。
+     */
+    private fun sameScriptsVersion(installed: String, asset: String): Boolean =
+        scriptsVersionSame(installed, asset)
 
     /**
      * proot 主程序是否\"可用\"。
@@ -221,6 +302,8 @@ object DshBootstrap {
         // （DshInstaller 那条链拿的是 applicationContext，不认启动器语言），详见 DshUiText.contextOrNull()。
         val ui = DshUiText.contextOrNull() ?: context
         try {
+            // BL-214（fix10）：这一步现在也承担"让 [scriptsOutdated] 的路径字段可用"——它读 DshPaths
+            // 的 lateinit 字段，必须在任何脚本版本判定之前初始化（loadPaths 幂等，顺序不变）。
             val pathErr = DshPaths.loadPaths(context)
             if (pathErr != null) {
                 fail(emit, ui.getString(R.string.dsh_bootstrap_data_dir_failed, pathErr))
@@ -237,7 +320,12 @@ object DshBootstrap {
             // 环境解析不到（返回\"已是最新\"），这里仅靠 isLatest 判定就会永远跳过首次解压，导致
             // scripts/probe.sh、start-dsh.sh 缺失、实例永远起不来。加一道\"目标文件在不在\"的硬校验，
             // 文件缺失就无条件补解压（幂等，安全）。
+            // ★ BL-214（fix10）：再加 [scriptsOutdated]（确定的 assets 通路）—— 否则 isLatest 恒 true
+            //   时，"脚本 9 → 10"在准备页里也会被跳过：isReady() 已判否（进入本页），而这里又判\"无需
+            //   解压\"，两个判据互相矛盾，页面就会停在失败/反复重试。三选其一为真即重解 scripts，
+            //   解压动作本身（RuntimeUtils.install + 加执行位）一行未改。
             if (!RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") ||
+                scriptsOutdated(context) ||
                 !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile
             ) {
                 emit(Progress.Stage(ui.getString(R.string.dsh_bootstrap_extract_scripts), 0.05))
@@ -639,4 +727,23 @@ object DshBootstrap {
      * + 10 分钟余量。约定由安装链在调用 [withRuntimeBusyWakeLock] 时传入（本文件只定义常量）。
      */
     const val INSTALL_WAKE_LOCK_TIMEOUT_MS = 40 * 60_000L
+}
+
+/**
+ * 两个脚本版本号是否等价（BL-214，fix10）。
+ *
+ * 口径与 `RuntimeUtils.isLatest` 的历史兼容行为一致：字符串相等，或两边都是纯数字时数值相等
+ * （`"007"` 与 `"7"` 视为同版本 —— 解压写盘的是 assets 原文，理论上不会出现前导零，
+ * 但历史版本文件曾手改过，宽松比较能少一次无谓重解压）。
+ *
+ * 写成**顶层函数**而不是放进 [DshBootstrap]：单测 harness 的 classpath 没有 androidx，
+ * 经 object 访问会拉起父类链（同 `trimDeltaFor` / `isRowBusy` 的既有理由）。
+ */
+fun scriptsVersionSame(installed: String, asset: String): Boolean {
+    if (installed == asset) return true
+    return try {
+        java.lang.Long.parseLong(installed) == java.lang.Long.parseLong(asset)
+    } catch (e: NumberFormatException) {
+        false
+    }
 }

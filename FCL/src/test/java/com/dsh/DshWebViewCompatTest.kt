@@ -1,9 +1,11 @@
 package com.dsh
 
+import com.dsh.core.DshLogBus
 import com.dsh.ui.DshWebViewCompat
 import com.dsh.ui.urlSkeleton
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -121,32 +123,55 @@ class DshWebViewCompatTest {
     // ===== BL-183：外跳日志的 URL 骨架（绝不出现 token 值） =====
 
     /**
-     * 骨架只保留 scheme://host:port + 有无 token；**任何情况下都不许出现 token 值**。
+     * 骨架只保留 scheme://host:port + 有无凭据；**任何情况下都不许出现 token 值**。
      * 这条断言是安全边界：日志会落盘/进日志页，漏一次就把会话凭据写进了可分享的文件。
+     *
+     * BL-202：标记从 `token=present|none` 改为 `auth=yes|no`（见 [urlSkeleton] 的 KDoc）。
      */
     @Test
     fun urlSkeletonNeverLeaksToken() {
         val url = "http://127.0.0.1:38501/?token=SECRET123"
         val skeleton = urlSkeleton(url)
-        assertEquals("http://127.0.0.1:38501/ token=present", skeleton)
+        assertEquals("http://127.0.0.1:38501/ auth=yes", skeleton)
         assertFalse("骨架里绝不能出现 token 值", skeleton.contains("SECRET123"))
     }
 
     /** 裸 URL（无凭据）/ 深路径 / userinfo 的口径。 */
     @Test
     fun urlSkeletonShapes() {
-        assertEquals("http://127.0.0.1:3080/ token=none", urlSkeleton("http://127.0.0.1:3080/"))
+        assertEquals("http://127.0.0.1:3080/ auth=no", urlSkeleton("http://127.0.0.1:3080/"))
         // 深路径统一记根路径（dsh 入口就是 /，深路径是异常，骨架里标记成 / 更醒目）
         assertEquals(
-            "http://127.0.0.1:3080/ token=present",
+            "http://127.0.0.1:3080/ auth=yes",
             urlSkeleton("http://127.0.0.1:3080/api/x?token=abc")
         )
         // userinfo 丢弃：`user:pass@` 也是凭据，不能进日志
-        assertEquals("http://127.0.0.1:3080/ token=none", urlSkeleton("http://u:p@127.0.0.1:3080/"))
+        assertEquals("http://127.0.0.1:3080/ auth=no", urlSkeleton("http://u:p@127.0.0.1:3080/"))
         // 非 URL / 空串 → 占位符，不抛
         assertEquals("(unparseable url)", urlSkeleton(""))
         assertEquals("(unparseable url)", urlSkeleton("   "))
         assertEquals("(unparseable url)", urlSkeleton("not a url"))
+    }
+
+    /**
+     * **BL-202 的管线断言**（本轮唯一新增的"函数正确 ≠ 管线正确"用例）：
+     * 骨架进日志总线前会过 [com.dsh.core.DshLogBus.sanitize] 的 `(?i)(token=)[A-Za-z0-9_\-]+`。
+     * 旧标记 `token=present|none` 在那里被同形抹成 `token=***`（两种状态不可区分，且 `***` 会被读成
+     * "当时有凭据"）；现在必须**原样存活**、且两种状态**互不相同**。
+     *
+     * 为什么断言"互不相同"而不是硬编码两个字符串：这是真正要保住的性质 —— 只要将来有人把标记
+     * 改回会被脱敏正则命中的形态，这条就会红。
+     */
+    @Test
+    fun urlSkeletonAuthMarkerSurvivesSanitize() {
+        val withToken = DshLogBus.sanitize(urlSkeleton("http://127.0.0.1:3080/?token=SECRET123"))
+        val withoutToken = DshLogBus.sanitize(urlSkeleton("http://127.0.0.1:3080/"))
+        assertTrue("带凭据的骨架不应被脱敏改写: $withToken", withToken.endsWith("auth=yes"))
+        assertTrue("裸 URL 的骨架不应被脱敏改写: $withoutToken", withoutToken.endsWith("auth=no"))
+        assertNotEquals("两种状态在日志里必须可区分（BL-202）", withToken, withoutToken)
+        // 反向守卫：标记串里绝不能出现 `token=`，否则又会被脱敏正则吃掉。
+        assertFalse("标记不得含 token= 形态: $withToken", withToken.contains("token="))
+        assertFalse("标记不得含 token= 形态: $withoutToken", withoutToken.contains("token="))
     }
 
     /**
