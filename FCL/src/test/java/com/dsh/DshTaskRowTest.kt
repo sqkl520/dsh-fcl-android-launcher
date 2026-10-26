@@ -53,6 +53,27 @@ class DshTaskRowTest {
         assertFalse(isRowBusy(false, false, DshInstance.State.READY))
     }
 
+    // --- A7（R24）：停止态 ----------------------------------------------------
+
+    /**
+     * A7：停止中 = 忙（按钮显示「正在停止…」且不可点）。
+     *
+     * 这条同时钉住"新参数有默认值"这件事：上面 9 处三实参调用仍在编，说明
+     * `stopping` 的默认值是 `false`（否则它们编译失败，不是变红）。
+     */
+    @Test
+    fun busyWhenStopping() {
+        assertTrue(isRowBusy(false, null, DshInstance.State.READY, stopping = true))
+        assertTrue(isRowBusy(false, false, DshInstance.State.READY, stopping = true))
+    }
+
+    /** A7：停止中不改变三个老判据的语义 —— 默认值 false 时必须与改前逐条一致。 */
+    @Test
+    fun stoppingDefaultsToFalse() {
+        assertFalse(isRowBusy(false, null, DshInstance.State.READY))
+        assertFalse(isRowBusy(false, null, DshInstance.State.READY, stopping = false))
+    }
+
     // --- BL-021：任务标题拼接 -------------------------------------------------
 
     /** 正常两段拼成「实例名 · 阶段」。 */
