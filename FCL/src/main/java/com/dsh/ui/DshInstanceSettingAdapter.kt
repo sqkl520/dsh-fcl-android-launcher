@@ -34,6 +34,16 @@ class DshInstanceSettingAdapter(
         private const val TYPE_GROUP = 0
         private const val TYPE_VALUE = 1
         private const val TYPE_ACTION = 2
+
+        /**
+         * ★ A7（R24）：动作按钮禁用态的压暗系数。取值照 [com.dsh.ui.shell.DshMainActivity] 的
+         * `RIGHT_ALPHA_DISABLED = 0.4f` —— 卡片主按钮、右面板、本页三处对"不可用的动作按钮"
+         * 用同一个灰，否则同一台设备上会像三套设计（BL-179 定的口径）。
+         */
+        private const val ACTION_ALPHA_DISABLED = 0.4f
+
+        /** 与 [ACTION_ALPHA_DISABLED] 成对：可用态必须显式写回 1f（行是复用的）。 */
+        private const val ACTION_ALPHA_ENABLED = 1f
     }
 
     /**
@@ -96,13 +106,21 @@ class DshInstanceSettingAdapter(
             val editable: Boolean = true
         ) : Row()
 
-        /** 按钮行：右侧一个动作按钮（[dangerous] 用于删除这类破坏性操作） */
+        /**
+         * 按钮行：右侧一个动作按钮（[dangerous] 用于删除这类破坏性操作）。
+         *
+         * [enabled]（A7 / R24）：动作按钮此刻能不能点。停止中的实例要把启停行画成
+         * 「正在停止…」且不可点 —— 只改文案不改可点性，就是又一处"写着停止、点下去没反应"。
+         * **必须带默认值 `true`**：本文件之外还有多处构造点（runRows 的四行、configRows 的两行），
+         * 不带默认值全部编译失败。
+         */
         data class Action(
             val title: Int,
             val description: Int,
             val actionText: Int,
             val tag: Tag,
-            val dangerous: Boolean = false
+            val dangerous: Boolean = false,
+            val enabled: Boolean = true
         ) : Row()
     }
 
@@ -195,6 +213,11 @@ class DshInstanceSettingAdapter(
                     b.description.visibility = View.GONE
                 }
                 b.action.setText(row.actionText)
+                // ★ A7（R24）：可点性 + 视觉压暗一起管（照 BL-179 右面板 setRightEnabled 的口径）：
+                //   FCLButton 没有 disabled 视觉，只写 isEnabled 在屏幕上看不出"这行现在点不动"。
+                //   两个方向都显式赋值：行是复用的，不写回 1f 会让下一行继承上一行的灰。
+                b.action.isEnabled = row.enabled
+                b.action.alpha = if (row.enabled) ACTION_ALPHA_ENABLED else ACTION_ALPHA_DISABLED
                 b.action.setOnClickListener { onAction(row) }
                 applyRowBackground(holder.itemView, position)
             }

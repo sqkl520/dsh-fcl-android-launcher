@@ -134,10 +134,33 @@ object DshRuntime {
         }
     }
 
-    /** 进程句柄抽象：真实 Process 或"按 pid 管"的孤儿进程 */
-    private interface Handle {
+    /**
+     * 进程句柄抽象：真实 Process 或"按 pid 管"的孤儿进程。
+     *
+     * ★ R24 / A8：从 `private` 提到 `internal` —— 测试需要能声明这个类型才能注入 fake handle
+     *   （E5 实测：`private interface` 在 JVM 侧是 package-private，测试类无法引用，
+     *   于是"可测的 fork 点"这段 seam 根本写不出来）。只改可见性，方法签名一字未动。
+     */
+    internal interface Handle {
         val pid: Long
         fun isAlive(): Boolean
+
+        /**
+         * ★ Round24 N-3：活着 **且** 身份仍是本实例的 proot —— 只给"能否复用现有 run"
+         * （[canJoinExistingRunLocked]）这一条判据用。
+         *
+         * 为什么单开一个判据，而不是把身份校验塞进 [isAlive]：
+         * 1) [isAlive] 还是 terminate 的第一步（`if (!isAlive()) return`）。若那里也要求 cmdline 可读，
+         *    一旦设备/SELinux 一时读不到 `/proc/<pid>/cmdline`，"停止"就退化成什么都不做 —— 真孤儿
+         *    比"误判可复用"更糟（后者最坏只是多 fork 一次，有端口避让兜底）。停止侧的身份校验
+         *    本来就另有 canSendQuitSignal 把门，不靠这个判据。
+         * 2) 两个场景的失败方向相反（PLAN D-1b）：复用不确定时应判"死"（宁可多 fork），
+         *    停止不确定时应"不要动"（宁可留一行诊断）。
+         *
+         * 默认 = [isAlive]：[ProcessHandle] 背后是真实 `Process`，pid 不会被系统复用。
+         */
+        fun isAliveAndOwned(): Boolean = isAlive()
+
         suspend fun terminate(graceMillis: Long)
     }
 
@@ -239,6 +262,24 @@ object DshRuntime {
      */
     private class PidHandle(override val pid: Long, private val instanceId: String) : Handle {
         override fun isAlive(): Boolean = ProcessUtil.isAlive(pid)
+
+        /**
+         * ★ Round24 N-3：pid 活 **且** cmdline 仍含 `proot` + 本实例 instanceId。
+         *
+         * 为什么必须查身份：A1a 把 [canJoinExistingRunLocked] 的"进程还活着"判据抬成了
+         * "能否复用现有 run"的唯一 gates。认领态（[DshRuntime.adoptOrphan] 造的 [PidHandle]）
+         * 的 pid 来自 pid 文件，而 pid 会被系统复用 —— 原 proot 已死、pid 被任何进程（甚至别的
+         * 实例的 proot）用掉时，只看 `/proc/<pid>` 存在 ⇒ 每次点启动都命中"已在运行，复用现有进程"，
+         * **永远不 fork**，要等 [DshRuntime.watchAdopted] 的 10s 巡检同时确认"pid 不在 且 端口关"
+         * 才自愈；若端口恰被另一个 dsh 占着，两个条件永不成立 ⇒ 永久卡住（E4-N-3）。
+         *
+         * 口径复用 [canSendQuitSignal]（顶层纯函数，pid>0 ∧ cmdline 含 proot ∧ 含 instanceId）。
+         * 它对"cmdline 读不到"取**严**（判 false）：这里不确定 = 不复用 = 走 fork，
+         * 与 PLAN D-1b 的默认方向一致（宁可多 fork 一次，也不要界面空转 180 秒）。
+         */
+        override fun isAliveAndOwned(): Boolean =
+            isAlive() && canSendQuitSignal(pid, ProcessUtil.cmdline(pid).orEmpty(), instanceId)
+
         override suspend fun terminate(graceMillis: Long) = withContext(Dispatchers.IO) {
             if (!isAlive()) return@withContext
             if (pid > 0) {
@@ -376,9 +417,10 @@ object DshRuntime {
                 if (stopAndWait(reason = stopReasonDefault())) {
                     return@withLock startLocked(context, instance, noSeccomp = false)
                 }
-                // 超时（8s 上限，已远大于 SIGQUIT/TERM/KILL 链的最坏耗时）：旧进程可能还活着。
-                // 保持与改动前同款的兜底清理再启动（killStale / terminateNodeProcess 都带
-                // pid 文件 + cmdline 身份校验，是窄口径清理，不会误伤别的进程）。
+                // 超时（★ Round24 N-1：13s 上限，见 stopAndWait 的 KDoc —— 它比 stop() 最坏
+                // 耗时 ≈12s 略高；旧注释写的 8s 与四段常量矛盾，是"停后秒启走兜底分支"的成因）：
+                // 旧进程可能还活着。保持与改动前同款的兜底清理再启动（killStale / terminateNodeProcess
+                // 都带 pid 文件 + cmdline 身份校验，是窄口径清理，不会误伤别的进程）。
                 DshLogBus.appendFor(
                     instance.id,
                     "[runtime] previous stop of ${instance.name} did not finish within grace; " +
@@ -428,6 +470,38 @@ object DshRuntime {
     }
 
     /**
+     * ★ Round24 A1a：能否复用"已经在跑的这一次"（H1 / BL-012 修复）。
+     *
+     * **为什么不是 [runningInstanceId]**：它只看状态，**不看进程是否还活着**。seccomp 重试
+     * （[retryIfSeccompLooksGuilty]）在 [onProcessExit] 已清 `handle` 之后调进来，状态仍是
+     * `Starting(A)` ⇒ 旧判据打"已在运行，复用现有进程"直接返回 ⇒ 新 proot 从未 fork
+     * ⇒ 界面空转 180 秒报超时（E4 已用独立模型在 fix10 上跑红复现）。
+     *
+     * 三元组：状态属于本实例 ∧ 状态是 `Starting`/`Running` ∧ 有**活**句柄。
+     * - 不带 gen 校验：（E1-05）`Handle` 接口不暴露 owner，A 版无法校验归属；但
+     *   [onProcessExit] 先清 `handle`、后进重试 ⇒ 重试路径必然读到 null。
+     * - isAlive 的失败方向：取"偏死"（不确定 = 不复用 = 走 fork）—— 复用错了的后果是界面空转
+     *   180 秒 + 孤儿；fork 错了只是短暂两个 proot，有端口避让（`resolveLaunchPort`）和
+     *   SIGQUIT 清理兜底，可恢复性更好（PLAN D-1b）。
+     *   ⚠️ 这与 terminate 里的用法方向相反（那里 `!isAlive()` 早退意味着"停止什么都不做"），
+     *   所以身份校验另开了 [Handle.isAliveAndOwned]，没有塞进 [Handle.isAlive]（见那里的注释）。
+     *
+     * 判据本体在顶层纯函数 [canJoinExistingRun] 里（JVM 单测直接钉，不依赖 android）。
+     */
+    @Synchronized
+    private fun canJoinExistingRunLocked(instanceId: String): Boolean {
+        val st = _state.value
+        // 先做两条零代价判据（归属/状态）：[Handle.isAliveAndOwned] 对 PidHandle 要读
+        // /proc/<pid>/cmdline，而本函数在对象监视器里被调用 —— 不该为"状态本来就不匹配"的
+        // 绝大多数情形去读文件。判据本体仍是顶层纯函数（这里只是它的短路形式）。
+        if (!runStateAllowsJoin(instanceId, st)) return false
+        val h = handle ?: return false
+        // runCatching 默认 false：判活本身抛异常（SELinux 挡 /proc 等）时按"死"处理 ——
+        // 宁可多 fork 一次，也不要把状态机永远钉在"复用"上（PLAN D-1b 的默认方向）。
+        return runCatching { h.isAliveAndOwned() }.getOrDefault(false)
+    }
+
+    /**
      * [start] 的实现体。[noSeccomp] = true 时额外注入 `PROOT_NO_SECCOMP=1`
      * （部分设备内核对 proot 的 ptrace/seccomp 加速不兼容，导致 rootfs 内的进程一启动就被杀）。
      * 同一次"用户主动启动"里最多自动兜底一次，见 [seccompFallbackUsed]。
@@ -436,7 +510,13 @@ object DshRuntime {
     private fun startLocked(context: Context, instance: DshInstance, noSeccomp: Boolean): StartOutcome {
         appContext = context.applicationContext
         nameOf[instance.id] = instance.name
-        stopRequestedFor = null // 新生命周期开始，清掉上一次的\"主动停止\"标记
+        // ★ Round24 A3（含 E4-N-4 的归属收紧）：只清**本实例**的"主动停止"标记（判据见纯函数
+        //   [shouldClearStopRequested]）。旧实现无条件 `stopRequestedFor = null`："停 A → 立刻起 B"
+        //   时会把 A 的标记偷走，于是 A 的进程随后退出（code=143）被当成"意外退出"上报
+        //   （错误 Toast + 任务区 DONE）。反过来，本实例自己的旧标记必须清掉：不清的话，
+        //   seccomp 重试/停后秒启起来的新 run 若是自己崩掉（而不是被停），onProcessExit 会读到
+        //   一个过期的"主动停止"标记，把崩溃静默成"已停止"（E4 A3 CONFIRMED）。
+        if (shouldClearStopRequested(stopRequestedFor, instance.id)) stopRequestedFor = null
         adoptWatcher?.cancel()  // 新一轮启动接管：旧的"认领巡检"立即失效
         if (!noSeccomp) seccompFallbackUsed.remove(instance.id) // 每次用户主动启动都重新给一次兜底机会
         // 新生命周期：清掉上一次记下的 node pid（那是上一个实例的，留着只会误导停止逻辑）
@@ -472,7 +552,9 @@ object DshRuntime {
         }
 
         // 同一实例已经在跑：直接复用
-        if (runningInstanceId() == instance.id) {
+        // ★ Round24 A1a：判据从 runningInstanceId() 换成三元组（见 [canJoinExistingRunLocked]）。
+        //   旧判据只看状态不看进程死没死 —— 正是 H1（seccomp 重试永不 fork）的成因。
+        if (canJoinExistingRunLocked(instance.id)) {
             // 实例级：讲的是"这个实例自己已经在跑"，属于它本次生命周期的一部分
             DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已在运行，复用现有进程")
             return StartOutcome.Started
@@ -675,10 +757,22 @@ object DshRuntime {
         val port = meta.port
         if (port <= 0 || !Probe.isPortOpen(port)) return false
         // 认领是异步做的（读 /proc + 探端口都要时间）：这期间用户完全可能已经手动启动了别的实例，
-        // 此时再无条件写 _state 会把新实例的状态覆盖掉（界面显示 A 在跑，实际 B 在跑）。有实例在
-        // 启动/运行时直接放弃认领。同时清掉上一轮的"主动停止"标记，避免它影响本次生命周期。
-        if (runningInstanceId() != null) return false
-        stopRequestedFor = null
+        // 此时再无条件写 _state 会把新实例的状态覆盖掉（界面显示 A 在跑，实际 B 在跑）。
+        //
+        // ★ Round24 A4：判据从 `runningInstanceId() != null` 换成 `ownerOf(...) != null`（"无归属"）。
+        //   旧判据有两个洞：
+        //   a) runningInstanceId() 对 Failed/Exited 返回 null ⇒ 慢探活（三源各 2s）期间实例启动失败
+        //      落了 Failed，这里照样放行：把**失败态**覆盖成 Running(adopted)、把 handle 换成
+        //      PidHandle(死 pid)，用户看不到失败原因（F12）；
+        //   b) 它对 Stopping 也返回 null ⇒ 停止窗口内重建实例页会走真实认领路径（E4 实证）。
+        //   新判据：Idle 之外**任何**状态都占着运行时通道（Starting/Running/Stopping 有在途进程，
+        //   Failed/Exited 有尚未被用户确认的失败结论），一律拒绝认领（纯函数 [adoptionAllowed]）。
+        //   ⚠️ 这条只挡"认领提交"这一段，挡不住 F21 的锁外窗口（读判据 → 锁外阻塞段 → 取锁），
+        //   A 版只缩小窗口、不消除，见 IMPL-PLAN 一/A4 与 PLAN F21。
+        if (!adoptionAllowed(_state.value)) return false
+        // ★ Round24 A3 同族：认领成功 = 新生命周期的开始。只清**本实例**的旧标记
+        //   （与 startLocked 的清理同口径，理由见那里的注释；无条件清会偷走别的实例的"主动停止"）。
+        if (shouldClearStopRequested(stopRequestedFor, instance.id)) stopRequestedFor = null
 
         // ★ BL-135（R16/fix4，401 主根因修复）：优先用 pid 文件里持久化的**带 token URL**。
         //   dsh 的 token 是进程级的（只在该进程启动时打过一次），认领时没有任何其他恢复途径；
@@ -828,7 +922,11 @@ object DshRuntime {
             )
         }
         synchronized(this) {
-            if (runningInstanceId() != null) return false
+            // ★ Round24 A4：与上面第一道判据同口径 —— 用"无归属"而不是 runningInstanceId()。
+            //   复核必须在同一临界区里（下面马上要写 handle/_state，check-then-act 中间不许有缝）；
+            //   这里比第一道严格一档是**有意**的：慢探活窗口里用户可能已经把实例启动起来了
+            //   （Starting/Running），也可能刚点了停止（Stopping）—— 三种情况都不许抢。
+            if (!adoptionAllowed(_state.value)) return false
             handle = PidHandle(meta.pid, instance.id)
             nameOf[instance.id] = instance.name
             // 认领来的实例同样要知道 node 的 pid：停止时要按它终止 rootfs 内的 node（B10）。
@@ -942,6 +1040,35 @@ object DshRuntime {
         adoptWatcher?.cancel()
         adoptWatcher = null
         if (instanceId == null) {
+            // ★ Round24 N-2：没有"在跑"的实例，但句柄字段可能还留着一个**上一次停止没成功**的
+            //   句柄（见下面收尾协程的保留逻辑）。这里补一次终止 —— 否则"失败后保留句柄以便重试"
+            //   只是一句空话：状态已落 Idle/Failed，再没有任何入口会去用它。
+            //   只在状态本来就没有归属时才走到这里，不会与在跑的 run 抢（新 run 的句柄是在
+            //   Starting 之后才写入的，那时状态不是 Idle/Failed/Exited）。
+            val leftover = handle
+            if (leftover != null) {
+                scope.launch {
+                    // 再核一次"它还是当前句柄吗"：本协程是异步的，调度期间新 run 可能已经起来
+                    // （startLocked 换了 handle）。那时这个 leftover 属于上一轮，绝不能对着它发信号
+                    // （万一同实例的新 proot 恰好复用了同一个 pid，cmdline 身份校验也会通过）。
+                    val stillCurrent = synchronized(this@DshRuntime) { handle === leftover }
+                    if (!stillCurrent) return@launch
+                    var leftoverFailed = false
+                    runCatching { leftover.terminate(5000) }.onFailure { e ->
+                        leftoverFailed = true
+                        // 归属未知（状态已无归属，句柄是上一轮留下的）⇒ 宁可归全局，不要猜实例
+                        DshLogBus.append(
+                            "[runtime] retry terminate of leftover proot handle failed (pid=${leftover.pid}): ${e.message}"
+                        )
+                    }
+                    val pid = leftover.pid
+                    val gone = pid <= 0 || !ProcessUtil.isAlive(pid)
+                    synchronized(this@DshRuntime) {
+                        // 引用相等：期间若已有人换了句柄（新 run / 认领），一个都不许动。
+                        if (handle === leftover && gone && !leftoverFailed) handle = null
+                    }
+                }
+            }
             _state.value = State.Idle
             _running.value = null
             return
@@ -951,8 +1078,15 @@ object DshRuntime {
         _state.value = State.Stopping(instanceId, name)
         // 实例级：停止动作发生在该实例的生命周期里，实例页要能看到"谁在什么时候停了它"
         DshLogBus.appendFor(instanceId, "[runtime] 停止 $name（$resolvedReason）")
+        // ★ Round24 N-2：这里**不再**同步 `handle = null`。旧实现"先丢句柄再终止"：终止一旦失败
+        //   （terminate 抛异常 / proot 顽固），句柄已经没了 —— 而 Stopping 期的二次 stop 是 no-op
+        //   （BL-036a），收尾协程随后又把状态落 Idle ⇒ 这个 proot 再也没有任何代码路径能拿到它，
+        //   彻底变成杀不掉的孤儿（E4-N-2 CONFIRMED）。
+        //   现在：句柄先留在字段里给收尾协程用，**确认进程已不在**之后才清（见协程末尾的
+        //   `handle === h` 引用校验）；终止失败/进程仍活时保留句柄并留一行诊断。
+        //   期间状态是 Stopping，[canJoinExistingRunLocked] 会因状态不匹配拒绝复用，
+        //   所以"留着句柄"不会被误判成"还活着可复用"。
         val h = handle
-        handle = null
         val np = nodePid
         nodePid = 0
         // proot 进程本身拿不到 pid 时，"孤儿认领/清理"这条路是断的（挂在 [ProotRunner.Handle.pid]：
@@ -984,20 +1118,45 @@ object DshRuntime {
             // BL-046：terminate 失败原先静默 —— 停止链最关键的一步（SIGQUIT→TERM/KILL）若整体
             // 抛出，verifyProotGone 会给出"仍存活"的结论，但**为什么**失败查无实据。补英文诊断，
             // 控制流不变。
+            var terminateFailed = false
             runCatching { h?.terminate(5000) }.onFailure { e ->
+                terminateFailed = true
                 DshLogBus.appendFor(instanceId, "[runtime] terminate of proot handle failed during stop (pid=$prootPid): ${e.message}")
             }
             verifyProotGone(instanceId, prootPid)
-            // K03 compare-and-delete：只有当 pid 文件仍记着**我们正在停的这个** proot/node 时才删，
-            // 否则"停后秒启"里新进程刚写好的 pid 文件会被这里的收尾误删 → 新进程失联成孤儿。
-            ProcessUtil.removePidFile(instanceId, prootPid)
-            deleteNodePidFile(instanceId, np)
+            // ★ Round24 N-2（同族）：停止没成功时**也不删 pid 文件** —— 它是下一次启动的
+            //   `killStale`（带 cmdline 身份校验）唯一能定位到这个残留 proot 的线索。旧实现无条件删，
+            //   于是"终止失败 + 句柄已丢 + pid 文件已删"三件套一起发生，这个 proot 就彻底失联了。
+            //   成功与否的判据与下面清句柄用同一组（gone && !terminateFailed），保证两者不会分叉。
+            val gone = prootPid <= 0 || !ProcessUtil.isAlive(prootPid)
+            val stopSucceeded = gone && !terminateFailed
+            if (stopSucceeded) {
+                // K03 compare-and-delete：只有当 pid 文件仍记着**我们正在停的这个** proot/node 时才删，
+                // 否则"停后秒启"里新进程刚写好的 pid 文件会被这里的收尾误删 → 新进程失联成孤儿。
+                ProcessUtil.removePidFile(instanceId, prootPid)
+                deleteNodePidFile(instanceId, np)
+            } else {
+                DshLogBus.appendFor(
+                    instanceId,
+                    "[runtime] stop incomplete: pid files + handle kept (pid=$prootPid, " +
+                        "terminateFailed=$terminateFailed, stillAlive=${!gone}); " +
+                        "the next start's stale cleanup (killStale, cmdline-checked) can still reach this proot"
+                )
+            }
             // 关键：终止是异步的（最长 5s）。期间用户可能已经启动了新实例，
             // 只有当前状态仍停在这个实例上时才允许置 Idle / 收服务，否则会把新实例的
             // Starting/Running 覆盖掉，并且误杀它的前台通知。
             // 注意：对\"进程句柄\"（ProcessHandle）而言，terminate 会触发 onProcessExit，
             // 那里已把状态落到 Idle；这里主要覆盖\"孤儿进程句柄\"（PidHandle）没有 onExit 回调的情况。
             synchronized(this@DshRuntime) {
+                // ★ Round24 N-2：句柄在这里才清 —— 且只在"仍是本次停的那个句柄"时清。
+                //   ① 进程确实已不在（prootPid<=0 = 拿不到 pid，无从判活，按已结束处理）；
+                //   ② 终止没抛异常。两条有一条不满足 = 本次停止没成功：**保留 handle**
+                //   （旧实现先清句柄，终止失败后这个 proot 再也没有代码路径能拿到它 → 杀不掉的孤儿，E4-N-2）。
+                //   用引用相等（handle === h）兜"停后秒启"：新 run 若已经换了句柄，这里一个都不许动。
+                if (handle === h) {
+                    if (h != null && stopSucceeded) handle = null
+                }
                 val cur = _state.value
                 if (cur is State.Stopping && cur.instanceId == instanceId) {
                     _state.value = State.Idle
@@ -1265,8 +1424,19 @@ object DshRuntime {
      * 是否继续（至少要避免\"删目录时进程还在写\"）。
      *
      * @return true 表示已离开 Stopping；false 表示 [timeoutMs] 内仍未停完。
+     *
+     * ★ Round24 N-1：默认值 8_000 → 13_000。旧注释说"8s 已远大于最坏耗时"是**错的**：
+     * [stop] 的收尾链最坏耗时可到 ≈12s，四段构成（常量见本文件顶部）：
+     * 1) 按 pid 终止 node：TERM → 等 [NODE_KILL_GRACE_MS]（2s）→ KILL，另有身份复核/文件 IO；
+     * 2) proot SIGQUIT 后等一半宽限：`terminate(5000)` 里 `quitBudget = 5000/2` = 2.5s；
+     * 3) 剩余宽限交给 TERM/KILL：同上 2.5s；
+     * 4) [verifyProotGone] 两段宽限：1s + 4s = 5s。
+     * 合计 2 + 2.5 + 2.5 + 5 ≈ 12s（单实例 stop 的 `terminate(5000)` 口径；[failAndCleanup]
+     * 那条路径同量级）。8s 落在 2)~4) 中间 ⇒ "停后秒启"的兜底分支（超时后强行启动）**是常规路径**
+     * 而不是边角，会把 Stopping 覆写成 Starting 并把 SIGKILL 打到正走 SIGQUIT 的 proot 上（E4-N-1）。
+     * 13_000 比最坏值留 1s 余量；多等 5s 只发生在"proot 真的顽固"的设备上，正常收尾 <3s 就返回。
      */
-    suspend fun stopAndWait(reason: String, timeoutMs: Long = 8_000): Boolean {
+    suspend fun stopAndWait(reason: String, timeoutMs: Long = 13_000): Boolean {
         // ★ BL-036：判据用 activeInstanceId()（含 Stopping）而不是 runningInstanceId()。
         //   旧实现在 Stopping 窗口进来时走"本来就没在跑"分支 → 立即 `_state.value = State.Idle`
         //   （二次停止秒置 Idle 的另一条出口，还把删除实例的等待条件整个跳过——进程还活着就删目录）。
@@ -1418,6 +1588,23 @@ object DshRuntime {
                 "自动带 PROOT_NO_SECCOMP=1 重试一次"
         )
         scope.launch {
+            // ★ Round24 A1b（E1-01 / E2-3）：这条重试**绕过 startMutex**，而 onProcessExit 清的是
+            //   **全局** handle —— 从"决定重试"到"真的进 startLocked"之间（调度延迟 + 日志 IO），
+            //   用户完全可能已经启动了另一个实例（甚至同实例的新一次 run）。不复核的话，这次迟到
+            //   的重试会带着 noSeccomp 把新 run 的句柄/状态整个覆盖掉（E1-01 🔴）。
+            //   判据：我还拥有通道，且状态仍是我这次生命周期留下的 Starting。
+            //   ⚠️ 不能改成走 start()：start() 不接 noSeccomp 参数，`PROOT_NO_SECCOMP=1` 会丢，
+            //   重试等于没重试（E2-3）。
+            val stillMine = synchronized(this@DshRuntime) {
+                ownerOf(_state.value) == instance.id && _state.value is State.Starting
+            }
+            if (!stillMine) {
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[runtime] seccomp retry skipped: another run took over (owner/state changed)"
+                )
+                return@launch
+            }
             runCatching { startLocked(ctx, instance, noSeccomp = true) }
                 .onFailure {
                     DshLogBus.appendFor(instance.id, "[runtime] seccomp 兜底重试失败：${it.message}")
@@ -1498,8 +1685,36 @@ object DshRuntime {
             return
         }
         val port = UrlScanner.portOf(url) ?: instance.port
-        _state.value = State.Running(instance.id, instance.name, url, port)
-        _running.value = Running(instance.id, port, url)
+        // ★ Round24 A5（E2 实测：锁外读-判-写可被 stop() 插进来，把 Stopping 覆盖回 Running）：
+        //   "判定 + 写状态"必须在同一个临界区（与 startLocked/stop 同一把对象监视器），且
+        //   **锁内重读**状态 —— 不能闭包捕获上面锁外读到的 cur（那是旧值，判了也白判）。
+        //   判据保持"仍是本实例的 Starting"：这是整段唯一想做的迁移（就绪）。
+        //   锁内只做状态与 _running 的配对写；下面所有副作用（pid 文件、token 侧车、端口回写、
+        //   日志、任务上报）全部留在锁外 —— E2 的实测前提之一，避免把 IO 拖进 stop 的等待里。
+        val becameRunning = synchronized(this) {
+            val cur = _state.value
+            if (cur is State.Starting && cur.instanceId == instance.id) {
+                _state.value = State.Running(instance.id, instance.name, url, port)
+                _running.value = Running(instance.id, port, url)
+                true
+            } else {
+                // 已是**本实例的** Running（另一条路径刚把同一迁移做完了）：迁移本身不再需要，
+                // 但下面的副作用（token URL 落 pid 文件/侧车）仍是幂等且必须做的 —— 吞掉它们会
+                // 丢掉"App 被杀后认领孤儿还能拿到 token"的唯一来源。除此之外（Stopping/Failed/
+                // 别的实例）一律拒绝，连副作用也不做。
+                cur is State.Running && cur.instanceId == instance.id
+            }
+        }
+        if (!becameRunning) {
+            // 锁外读到的 Starting 已被别人改写（典型：用户刚点了停止 → Stopping）。
+            // 这条 URL 仍是该实例进程的真实输出（上面已进实例日志），但不再参与状态变更。
+            DshLogBus.appendFor(
+                instance.id,
+                "[runtime] ready marker ignored: state changed before transition " +
+                    "(now ${_state.value::class.simpleName}); not writing Running"
+            )
+            return
+        }
         // ★ BL-135：把**就绪时的带 token URL** 连同 pid 一起落进 pid 文件 —— 它是"App 被杀后
         //   认领孤儿还能拿到 token"的唯一来源（token 进程级、日志已脱敏、dsh 自身不落盘）。
         //   仅当次解析出的 url 带 token 时才存（writePidFile 内部再校验一次；②级 READY url=
@@ -1659,10 +1874,27 @@ object DshRuntime {
         if (instanceId == null) DshLogBus.clear() else DshLogBus.clearFor(instanceId)
     }
 
-    /** 状态复位（界面确认过失败信息后调用） */
+    /**
+     * 状态复位（界面确认过失败信息后调用）。
+     *
+     * ★ Round24 A6：加锁 + 只从终态复位。
+     * - 旧实现是**无锁**的两次独立读（`!is Running && !is Starting` 各读一次 `_state.value`）：
+     *   读到"非 Starting"之后、写 Idle 之前，并发的 startLocked 可能已经落了新的 Starting
+     *   ⇒ 这次复位会把**刚起来的那个实例**抹成 Idle（F13(a)），界面显示"没在跑"而进程是真活的。
+     * - 判据改成**显式白名单** Failed/Exited → Idle：只有"有明确终态结论、用户已看过"的状态才可
+     *   复位。Stopping 不许复位（进程还在收尾，抹成 Idle 会让 stop 的收尾协程见 cur != Stopping
+     *   而跳过"已停止"落点）；Idle 本身是幂等 no-op。
+     * - 不复用 [setStateIfOwned]：它是"同归属任意→任意"的通行证（E4-N-7），用它等于把整张
+     *   迁移约束绕过去；这里要的恰好是"只允许一条边"。
+     * 三个调用点（DshLauncher 有归属守卫 / DshInstancesUI 无守卫 / Exited 后无条件）语义都不变：
+     * 它们在 Running/Starting/Stopping 时本来就不该复位，现在只是从"靠调用方自觉"变成"结构拒绝"。
+     */
+    @Synchronized
     fun resetState() {
-        if (_state.value !is State.Running && _state.value !is State.Starting) {
+        val cur = _state.value
+        if (cur is State.Failed || cur is State.Exited) {
             _state.value = State.Idle
+            _running.value = null
         }
     }
 
@@ -1697,6 +1929,66 @@ fun ownerOfState(state: DshRuntime.State): String? = when (state) {
 /** K05：当前状态是否仍属于 [instanceId]（只有属于时才允许把它写成 Failed，避免覆盖已启动的新实例）。 */
 fun stateOwnedBy(state: DshRuntime.State, instanceId: String): Boolean =
     ownerOfState(state) == instanceId
+
+/**
+ * ★ Round24 A1a：`startLocked` 的"复用现有 run"判据（纯函数，便于 JVM 单测）。
+ *
+ * 三元组：状态属于本实例 ∧ 状态是 `Starting`/`Running` ∧ 有**活**句柄。
+ *
+ * @param handleAlive 句柄是否活着。`null` = 根本没有句柄。两者都判 false，但语义分开表达，
+ *   测试也分两条钉（"handle 已死" 与 "handle 为 null" 是两种不同的现场）。
+ *   注意：对认领来的 [DshRuntime] 内部 `PidHandle`，调用方传的是 **活且身份匹配**
+ *   （[DshRuntime] 内部的 `Handle.isAliveAndOwned`，见 N-3），不只是"/proc 里有个 pid"。
+ *
+ * 为什么必须是它（H1）：旧判据只有"状态同 id"，而 seccomp 重试恰在 `onProcessExit` 已清 handle
+ * 之后调进来，状态仍是 `Starting(A)` ⇒ 旧判据直接"复用" ⇒ 新 proot 从未 fork ⇒ 界面空转 180 秒。
+ *
+ * 为什么 `Stopping` 不算（哪怕有活句柄）：停止中的进程马上就没了，复用等于把"正在拆的房子"当成
+ * "可以住的房子"；`Failed`/`Exited` 同理（归属还在，但没有可复用的 run）。这条在 N-2 之后尤其重要：
+ * 停止失败时句柄会**故意保留**在字段里给下次 stop 用。
+ *
+ * 写成顶层函数而不是 private：[DshRuntime] 是 object、依赖 android，单测 harness 只加载顶层
+ * 静态方法（同 [ownerOfState] / [pidFileBelongsTo] 的惯例）。
+ */
+fun canJoinExistingRun(
+    instanceId: String,
+    state: DshRuntime.State,
+    handleAlive: Boolean?
+): Boolean = runStateAllowsJoin(instanceId, state) && handleAlive == true
+
+/**
+ * ★ Round24 A1a 的零代价前半：状态归属 + 状态种类允许复用（不碰句柄）。
+ *
+ * 单独抽出来给 [DshRuntime] 的 `canJoinExistingRunLocked` 做短路：句柄判活对认领态要读
+ * `/proc/<pid>/cmdline`，而那条判据在对象监视器里被调用，不该为"状态本来就不匹配"的绝大多数
+ * 情形读文件。语义与 [canJoinExistingRun] 的前两元完全相同（单测两边都钉）。
+ */
+fun runStateAllowsJoin(instanceId: String, state: DshRuntime.State): Boolean {
+    if (ownerOfState(state) != instanceId) return false
+    return state is DshRuntime.State.Starting || state is DshRuntime.State.Running
+}
+
+/**
+ * ★ Round24 A3（含 E4-N-4）：这个"主动停止"标记该不该在**新生命周期开始**时清掉。
+ *
+ * 只清**本实例**的：无条件清会把别的实例的标记偷走 —— "停 A → 立刻起 B"时 A 的进程随后退出
+ * （code=143）会被当成"意外退出"上报（错误 Toast + 任务区 DONE）。反过来，本实例自己的旧标记
+ * 必须清掉：不清的话，重试/停后秒启起来的新 run 若自己崩掉，会读到一个过期的"主动停止"标记，
+ * 把崩溃静默成"已停止"。
+ */
+fun shouldClearStopRequested(stopRequestedFor: String?, instanceId: String): Boolean =
+    stopRequestedFor != null && stopRequestedFor == instanceId
+
+/**
+ * ★ Round24 A4：认领（adopt）只能在"运行时通道无归属"时进行。
+ *
+ * 与 [activeOwnerOf] 的差别是**有意**的：认领要挡的不只是"正在跑/正在停"（Starting/Running/Stopping
+ * 都占通道），还包括 **Failed/Exited** —— 它们的归属仍在，代表一个有结论但用户尚未确认的失败
+ * （[DshRuntime.resetState] 才把终态复位）。旧判据 `runningInstanceId() != null` 对
+ * Failed/Exited 返回 null ⇒ 慢探活期间实例启动失败落了 Failed，认领提交段照样放行：
+ * 把失败态覆盖成 Running(adopted)、把 handle 换成 PidHandle(死 pid)（F12）。
+ */
+fun adoptionAllowed(state: DshRuntime.State): Boolean = ownerOfState(state) == null
 
 /**
  * K04：端口被自动避让后，是否应把实际端口回写进实例配置。
