@@ -71,6 +71,16 @@ class DshInstanceAdapter(
     private var items: List<DshInstance> = emptyList()
     private var runningId: String? = null
     private var deleting: Set<String> = emptySet()
+
+    /**
+     * 正在停止的实例 id（A7 / R24）。
+     *
+     * 单独存一个字段而不是从 `runningId` 反推：`Running → Stopping` 时 `runningId` 前后是
+     * **同一个字符串**（`DshInstancesUI` 把这两态都映射成 `state.instanceId`），只靠它无法
+     * 判断"这一帧要不要重绑"。见 [submit] 里把 `prevStopping` 并入 affected 的那段。
+     */
+    private var stoppingId: String? = null
+
     private var installStatus: Map<String, DshInstaller.InstallStatus> = emptyMap()
 
     /**
@@ -93,10 +103,21 @@ class DshInstanceAdapter(
     private val sizeCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val sizePending = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    fun submit(list: List<DshInstance>, runningInstanceId: String?, deletingIds: Set<String> = emptySet()) {
+    /**
+     * @param stoppingInstanceId 当前处于 `Stopping` 的实例 id（A7 / R24）。**必须是独立的第四个
+     *   参数**，不能从 `runningInstanceId` 反推：`DshInstancesUI` 把 Running/Starting/Stopping
+     *   都映射成同一个 [runningId]，`Running → Stopping` 时它前后相等 —— 见下面 affected 的注释。
+     */
+    fun submit(
+        list: List<DshInstance>,
+        runningInstanceId: String?,
+        deletingIds: Set<String> = emptySet(),
+        stoppingInstanceId: String? = null
+    ) {
         val newItems = ArrayList(list)
         val prevRunning = runningId
         val prevDeleting = deleting
+        val prevStopping = stoppingId
         val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
             override fun getOldListSize(): Int = items.size
             override fun getNewListSize(): Int = newItems.size
@@ -119,6 +140,7 @@ class DshInstanceAdapter(
         items = newItems
         runningId = runningInstanceId
         deleting = deletingIds
+        stoppingId = stoppingInstanceId
         diff.dispatchUpdatesTo(this)
 
         // ★ DiffUtil 只比较"实例对象的内容"，而"是不是正在运行""是不是正在删除"是 Adapter 自己的
@@ -132,6 +154,16 @@ class DshInstanceAdapter(
         }
         if (prevDeleting != deleting) {
             (prevDeleting + deleting).forEach { id -> addIndex(items, id, affected) }
+        }
+        // ★ A7（R24，E6 §2.2②）：停止态**必须**自己参与 affected 计算。
+        //   `Running → Stopping` 时 runningId 前后都是同一个 id（UI 侧两态映射同一字段），
+        //   上面的 prevRunning != runningId 不成立；而 DshInstance 对象本身不含运行态，
+        //   DiffUtil 也不会有更新 ⇒ 不加这一段就**一次 notifyItemChanged 都没有**：
+        //   用户点「停止」后按钮继续显示可点的「停止」，直到某次无关重绑才突然变。
+        //   旧值、新值各加一次：旧行要恢复成「启动」，新行要换成「正在停止…」。
+        if (prevStopping != stoppingId) {
+            addIndex(items, prevStopping, affected)
+            addIndex(items, stoppingId, affected)
         }
         affected.forEach { notifyItemChanged(it) }
     }
@@ -270,6 +302,10 @@ class DshInstanceAdapter(
 
         val isRunning = inst.id == runningId
         val isDeleting = deleting.contains(inst.id)
+        // ★ A7（R24）：本行是否正在停止。与 isRunning 分开判 —— isRunning 的语义是
+        //   "这一行归当前运行时通道所有"（Running/Starting/Stopping 三态共用），而停止中
+        //   要的是另一件事：按钮换状态词、不可点。见下面 busyLabel/locked 两处用法。
+        val isStopping = inst.id == stoppingId
         val status = installStatus[inst.id]
 
         // ★ BL-122：这一 VH 上次画的是不是同一个实例 —— 决定进度补间的起点
@@ -346,6 +382,11 @@ class DshInstanceAdapter(
         // BL-029：判据必须含 inst.state==INSTALLING —— 状态流空窗期 status 为 null，
         // 那时仅看 status?.running 会误判"不忙"而短暂可点（见 isRowBusy）。
         val busy = isRowBusy(isDeleting, status?.running, inst.state)
+        // ★ A7（R24）：停止中同样"不可点"，但**不能**并进上面的 busy —— busy 还决定
+        //   「更多」菜单只剩「日志」、以及忙态图标画下载箭头（E6 §2.2③ 的两个非预期副作用：
+        //   停止中把设置/删除藏起来会让用户以为实例数据丢了，下载箭头会被读成"正在下载"）。
+        //   所以分成两个值：busy = 安装中/删除中（沿用原语义），locked = 再并上停止中（只管能不能点）。
+        val locked = isRowBusy(isDeleting, status?.running, inst.state, stopping = isStopping)
         // 安装失败的实例：主按钮变成「重试」（直接重装同版本），
         // 否则用户只能在「更多 → 重装」里找，或者再点一次下载——后者正是"堆一堆损坏实例"的来源之一
         val canRetry = !busy && inst.state == DshInstance.State.BROKEN
@@ -364,11 +405,26 @@ class DshInstanceAdapter(
             isDeleting -> R.string.dsh_state_deleting
             status?.running == true || inst.state == DshInstance.State.INSTALLING ->
                 R.string.dsh_state_installing
+            // ★ A7（R24）：停止中显示「正在停止…」。
+            //   **必须用 dsh_task_stopping**（无占位符，三语齐全：Stopping… / 正在停止… / 正在停止…），
+            //   **不能**用 dsh_state_stopping —— 后者带 `%1$s`，而下面渲染点是
+            //   `b.btnStartText.setText(actionRes)`（只取资源原文，不做 String.format），
+            //   会把字面量 `%1$s 停止中…` 原样画到按钮上（E6 §2.2① / R24-E6-1）。
+            isStopping -> R.string.dsh_task_stopping
             else -> null
         }
         b.btnStart.visibility = View.VISIBLE
-        b.btnStart.isEnabled = !busy && (isRunning || notInstalled ||
+        // ★ A7：能不能点看 [locked]（含停止中），文案/图标仍看 [busyLabel] —— 两件事分开，
+        //   避免把停止中并进 busy 之后连带改掉「更多」菜单与忙态图标（见 locked 的注释）。
+        val startEnabled = !locked && (isRunning || notInstalled ||
             inst.state == DshInstance.State.READY || canRetry)
+        b.btnStart.isEnabled = startEnabled
+        // ★ A7：FCL 控件无 disabled 视觉（BL-020 家族），只写 isEnabled 在屏幕上看不出禁用 ——
+        //   与 BL-179 右面板 setRightEnabled 同口径压暗。**只压"按钮画的确实是停止状态词"那一态**：
+        //   按 busyLabel 的结果判（而不是只看 isStopping），删除中与停止极少见地重叠时保持删除中
+        //   原本的满色观感；两个方向都显式赋值 —— 行是复用的，不写回 1f 会让下一行继承上一行的灰。
+        b.btnStart.alpha =
+            if (busyLabel == R.string.dsh_task_stopping) CARD_DISABLED_ALPHA else CARD_ENABLED_ALPHA
 
         // ===== 主操作（图标 + 文字）=====
         // 布局里 btn_start 是"clickable 容器 + 图标 + 文字"（照外壳右面板的启动键形态），
@@ -388,9 +444,14 @@ class DshInstanceAdapter(
         b.btnStartText.setText(actionRes)
         b.btnStartIcon.setBackgroundResource(
             when {
-                // BL-162：忙态图标与状态词同源（删除中用垃圾桶、安装中用下载箭头）
-                busyLabel != null ->
-                    if (isDeleting) R.drawable.ic_baseline_delete_24 else R.drawable.ic_baseline_download_24
+                // ★ A7：停止中**不能**走忙态那条下载箭头（E6 §2.2③："停止中"配下载箭头会被读成
+                //   "正在下载"）。单独一支，用任务区「停止」同一个图标（仓库已有，零新增资源）。
+                //   判断顺序：删除中优先级最高（删除中的行连"停止"都无从谈起），其次才是停止中，
+                //   最后才是安装那条下载箭头。
+                isDeleting -> R.drawable.ic_baseline_delete_24
+                isStopping -> R.drawable.ic_baseline_stop_24
+                // BL-162：忙态图标与状态词同源（安装中用下载箭头）
+                busyLabel != null -> R.drawable.ic_baseline_download_24
                 isRunning -> R.drawable.ic_baseline_close_24
                 canRetry -> R.drawable.ic_baseline_refresh_24
                 notInstalled -> R.drawable.ic_baseline_download_24
@@ -407,7 +468,9 @@ class DshInstanceAdapter(
         b.btnStart.setOnClickListener {
             // BL-162：忙态按钮只是"状态指示"，点击静默（与详情页安装中的口径一致）。
             // 显式挡一层：FCLButton 容器的 enabled 语义不保证与系统 View 完全一致。
-            if (busy) return@setOnClickListener
+            // ★ A7：判据用 [locked]（含停止中）—— 停止中再点「停止」在运行时里是静默 no-op，
+            //   给用户看到"可点却没反应"正是本轮要消灭的形态。
+            if (locked) return@setOnClickListener
             when {
                 isRunning -> onStop(inst)
                 canRetry -> onReinstall(inst)
@@ -595,6 +658,16 @@ class DshInstanceAdapter(
         private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
         /**
+         * ★ A7（R24）：主按钮禁用态的压暗系数。取值照 [com.dsh.ui.shell.DshMainActivity] 的
+         * `RIGHT_ALPHA_DISABLED = 0.4f` —— 同一台设备上"不可用的动作按钮"应当是同一种灰，
+         * 否则卡片与右面板并排时会像两套设计（BL-179 已为右面板定过这个口径）。
+         */
+        private const val CARD_DISABLED_ALPHA = 0.4f
+
+        /** 与 [CARD_DISABLED_ALPHA] 成对：可用态必须显式写回 1f（行是复用的，见绑定点注释）。 */
+        private const val CARD_ENABLED_ALPHA = 1f
+
+        /**
          * 安装状态 change payload（BL-120 A2）。
          *
          * payload 非空 → DefaultItemAnimator 走 `canReuseUpdatedViewHolder(vh, payloads)=true`
@@ -616,13 +689,19 @@ class DshInstanceAdapter(
  * 顶层函数无类初始化负担，单测可直接调。
  * `statusRunning` 只看 `InstallStatus.running`（`null` = 无安装状态条目），
  * `state` 是实例自己的状态字段 —— 两侧互相兜底，任何一侧说"在装"都算忙。
+ *
+ * ★ A7（R24）：新参数 [stopping] **必须带默认值 `false`** —— [DshTaskRowTest] 原有 9 处
+ * 三实参调用（另有本轮新增的一条），不带默认值是**编译失败**（不是变红，E6 §2.2② / IMPL-PLAN A7-3）。
+ * 语义分工：三个老参数说"这一行现在是不是在装/在删"（决定按钮文案、「更多」菜单、图标），
+ * `stopping` 只说"现在能不能点"（停止中按钮要显示状态词且不可点，但不该把「更多」压成只剩日志）。
  */
 fun isRowBusy(
     isDeleting: Boolean,
     statusRunning: Boolean?,
-    state: DshInstance.State
+    state: DshInstance.State,
+    stopping: Boolean = false
 ): Boolean = isDeleting || statusRunning == true ||
-    state == DshInstance.State.INSTALLING
+    state == DshInstance.State.INSTALLING || stopping
 
 /**
  * "这一帧新出现"的 id：出现在 [current]、却不在 [seen] 里的那些（BL-120 入场动画去重）。

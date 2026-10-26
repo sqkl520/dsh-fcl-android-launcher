@@ -192,8 +192,21 @@ class DshInstanceSettingPage(
         //   "在跑" = Starting / Running / Stopping 且归属本实例，与 onAction 的点击判据同一表达。
         //   旧判据只看 Running：Starting 期文案显示「启动」，点击被 isBusy 静默吞掉 ——
         //   "显示能启动、实际什么都不会发生"，正是 V8-3 的名实两张皮。
+        //   ★ A7（R24）：Stopping 从这条判据里**单独摘出**（见下面 stopping 分支）——
+        //   它不再是"可以再点一次的停止"，而是一个不可点的过渡态。
         val active = DshRuntime.activeInstanceId() == instanceId
+        // ★ A7（R24 / E6 §2.3）：停止中单独成一支 —— 文案「正在停止…」、按钮不可点。
+        //   改前这一态落进 `active` 分支显示「停止」且可点，而 onAction 的 stopIf 在 Stopping 期
+        //   返回 false、静默忽略 ⇒ 卡片（本轮起显示「正在停止…」）与详情页同屏两种说法，
+        //   且详情页那种是"亮着可点、点了没反应"。两处必须同源。
+        //   判据刻意用本页订阅的帧 [runtimeState]（不新读 activeInstanceId()）：这一支要判断的是
+        //   "这一帧画出来的状态行说的是不是停止中"，与 statusText 同一份输入才不会自相矛盾。
+        //   `active` 保持 BL-127 的原判据（activeInstanceId()）不动 —— 那是与点击同源的既有约定。
+        val stopping = (runtimeState as? DshRuntime.State.Stopping)?.instanceId == instanceId
+        // 文案 key 必须是无占位符的 dsh_task_stopping：dsh_state_stopping 带 `%1$s`，
+        // 而按钮走 setText(资源 id) 不传参，会画出字面量 `%1$s 停止中…`（E6 §2.2① / R24-E6-1）。
         val actionText = when {
+            stopping -> R.string.dsh_task_stopping
             active -> R.string.dsh_action_stop
             // 安装中：没有可启动的东西（与实例列表页的 busy 语义一致）。按钮切成状态词
             // 「安装中」，点击静默不做（见 onAction）—— 不出现"写着启动、点不动"的形态。
@@ -213,7 +226,9 @@ class DshInstanceSettingPage(
                 { statusText() }, DshInstanceSettingAdapter.Tag.STATUS, editable = false
             ),
             DshInstanceSettingAdapter.Row.Action(
-                actionText, 0, actionText, DshInstanceSettingAdapter.Tag.START_STOP
+                actionText, 0, actionText, DshInstanceSettingAdapter.Tag.START_STOP,
+                // ★ A7：停止中不可点（按钮本身也压暗，见适配器 Row.Action 的绑定点）。
+                enabled = !stopping
             ),
             // 打开界面：**运行中或启动/停止中可点**。用 `editable` 表达可点性 —— 值行布局只有
             // 这一个可点提示（右侧图标），不可点时整行不响应、图标也不显示，语义正好。
@@ -521,16 +536,18 @@ class DshInstanceSettingPage(
         val i = inst ?: return
         when (row.tag) {
             DshInstanceSettingAdapter.Tag.START_STOP -> {
+                // ★ A7（R24）：停止中行已设 enabled=false（点不到），这里再挡一层 ——
+                //   与卡片主按钮的 `if (locked) return` 同一态度：FCL 控件的 enabled 语义
+                //   不保证与系统 View 完全一致，静默的 no-op 点击是这个项目反复登记过的形态。
+                if ((runtimeState as? DshRuntime.State.Stopping)?.instanceId == i.id) return
                 // fix2 / BL-127：判据与文案、点击行为**同源**（DshRuntime.activeInstanceId()）。
                 // 旧实现"文案看 Running、点击看 isBusy + Running"两张皮：Starting 期写着「启动」，
-                // 点下去被 busy 静默吞掉（V8-3）。现在 Starting/Stopping 也计入"在跑"（文案「停止」），
-                // 点击落到同一个停止动作上。
+                // 点下去被 busy 静默吞掉（V8-3）。现在 Starting 也计入"在跑"（文案「停止」），
+                // 点击落到同一个停止动作上；Stopping 已在上面提前返回（A7：文案「正在停止…」）。
                 if (DshRuntime.activeInstanceId() == i.id) {
                     // 在跑（含 Starting）：停。★ 用 stopIf 而不是 stop()：stop() 停的是"当前在跑的
                     // 那个"，从行渲染到用户点击之间状态可能已换实例（TOCTOU），stopIf 在运行时
                     // 同一把锁里重新判定"跑的是不是它"，不会误停别的实例。
-                    // Stopping 期点击会在 stopIf 内部判 false（已在停、无物可停）——此刻文案也是
-                    // 「停止」，重复下发只会让运行时收到自相矛盾的指令，静默忽略是对的。
                     DshRuntime.stopIf(i.id)
                 } else if (i.state == DshInstance.State.INSTALLING) {
                     // 安装中：与列表页 busy 语义一致（安装中本来就没有可启动的东西），点击静默不做。

@@ -505,7 +505,13 @@ private class InstanceListPage(
                         is DshRuntime.State.Stopping -> state.instanceId
                         else -> null
                     }
-                    adapter.submit(list, runningId, deleting)
+                    // ★ A7（R24 / E6 §2.2②）：停止中的实例 id 必须**单独**传给 Adapter。
+                    //   上面 runningId 在 Running → Stopping 前后是同一个字符串，Adapter 只靠
+                    //   它无法判断"这一帧要重绑"（见 DshInstanceAdapter.submit 的 affected 计算）。
+                    //   只有 Stopping 一支给值：Starting 期卡片仍显示可点的「停止」，这是显式不变项
+                    //   （E6 表 #8，IMPL-PLAN 5.3 U2）。
+                    val stoppingId = (state as? DshRuntime.State.Stopping)?.instanceId
+                    adapter.submit(list, runningId, deleting, stoppingId)
                     val empty = list.isEmpty()
                     binding.emptyHint.visibility = if (empty) View.VISIBLE else View.GONE
                     binding.instanceList.visibility = if (empty) View.GONE else View.VISIBLE
