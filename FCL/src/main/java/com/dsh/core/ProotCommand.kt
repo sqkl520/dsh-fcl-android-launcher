@@ -42,7 +42,16 @@ object ProotCommand {
         /** 通过命令行 `/usr/bin/env` 传入的非敏感变量（保持与 PoC 验证过的行为一致） */
         val argvEnv: Map<String, String>,
         /** 通过 ProcessBuilder 环境传入的变量（含密钥，不出现在 argv 里） */
-        val procEnv: Map<String, String>
+        val procEnv: Map<String, String>,
+        /**
+         * 宿主侧进程环境的 `HOME`（R27 / P0-A）。
+         *
+         * ★ 必须与 argv 里的 `HOME=` **取同一个值**：`/usr/bin/env HOME=x sh script` 里的
+         *   `HOME=x` 覆盖的是**脚本进程**的环境，而 `proot` 自己在 exec 之前读的是
+         *   ProcessBuilder 的 `env`。两处不一致时，"proot 启动阶段"与"guest 内脚本"会看到
+         *   不同的 HOME —— 这类分叉正是本项目反复踩过的坑，所以显式收成一个字段。
+         */
+        val homeRootfs: String = "/root"
     ) {
         fun toProcessBuilder(): ProcessBuilder {
             val pb = ProcessBuilder(argv)
@@ -51,7 +60,8 @@ object ProotCommand {
             val env = pb.environment()
             env.clear()
             env["PATH"] = DEFAULT_PATH
-            env["HOME"] = "/root"
+            // R27 / P0-A：从写死的 /root 改为与 argv 同一个值（见 [homeRootfs] 的 KDoc）
+            env["HOME"] = homeRootfs
             procEnv.forEach { (k, v) -> if (isAllowedEnvKey(k)) env[k] = v }
             argvEnv.forEach { (k, v) -> if (isAllowedEnvKey(k)) env[k] = v }
             return pb
@@ -122,7 +132,22 @@ object ProotCommand {
      * @param argvEnv 非敏感配置（INSTANCE_DIR/PORT/PROFILE/...）
      * @param procEnv 不宜出现在命令行里的值（当前是 PROOT_NO_SECCOMP；见 [isAllowedEnvKey] 的说明）
      * @param workDirRootfs 初始工作目录（默认 /root；实例运行时应传实例 workspace）
+     * @param homeRootfs guest 内的 `HOME`（默认 /root；实例运行时应传实例 workspace，见下方 KDoc）
      * @param bindCacheAsTmp 是否把宿主 cacheDir/dsh/tmp 挂成 /tmp（默认是）
+     *
+     * ## 为什么 `HOME` 必须与 `workDirRootfs` 分开成参数（R27 / P0-A）
+     *
+     * dsh 的目录选择器（`@deepseek-ai/dsh-host-directory-picker-browse`）在"打开对话框"时
+     * 用 `homedir()` 作为初始目录，而 `homedir()` 在 POSIX 上就读 `$HOME`。过去这里把 `HOME`
+     * 写死成 `/root`，而 rootfs 的 `/root` **是空目录**（只有 `.profile`/`.bashrc`，零子目录），
+     * 加上 picker 只列目录 ⇒ 列表恒为空 ⇒ 用户看到"选择工作区目录"是一个空框。
+     *
+     * 实例启动时把 `HOME` 指向实例自己的 workspace，对话框打开即落在用户真正能用的目录上。
+     *
+     * **与 `DSH_HOME` 无关**：dsh 的配置/凭据/cookie 落在 `DSH_HOME`（脚本里显式设为
+     * `$INSTANCE_DIR/home`），不读 `$HOME/.dsh`，所以改 `HOME` 不会让任何配置"搬家"。
+     * npm 缓存同理走显式的 `NPM_CONFIG_CACHE`（`<filesDir>/dsh/npm-cache`），
+     * 改 `HOME` 不会导致重新下载依赖。
      */
     @JvmStatic
     fun build(
@@ -132,7 +157,8 @@ object ProotCommand {
         procEnv: Map<String, String> = emptyMap(),
         workDirRootfs: String = "/root",
         rootfsDir: String = DshPaths.ROOTFS_DIR,
-        bindCacheAsTmp: Boolean = true
+        bindCacheAsTmp: Boolean = true,
+        homeRootfs: String = "/root"
     ): Spec {
         val prootBin = DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR).absolutePath
         val argv = buildList {
@@ -155,7 +181,9 @@ object ProotCommand {
             // 干净环境下执行目标脚本；非敏感项走 argv，敏感项走 procEnv
             add("/usr/bin/env")
             add("PATH=$DEFAULT_PATH")
-            add("HOME=/root")
+            // R27 / P0-A：HOME 从写死的 /root 改为可传参（实例启动时指向实例 workspace）。
+            // 见 [build] 的 KDoc：dsh 的目录选择器用 homedir() 当初始目录，而 /root 是空目录。
+            add("HOME=$homeRootfs")
             add("TMPDIR=/tmp")
             add("LANG=C.UTF-8")
             add("TERM=xterm-256color")
@@ -168,7 +196,7 @@ object ProotCommand {
         env["PROOT_LOADER"] = DshPaths.resolveProotLoader(FCLPath.NATIVE_LIB_DIR).absolutePath
         // 子进程环境：密钥在这里，不出现在命令行
         procEnv.forEach { (k, v) -> if (isAllowedEnvKey(k)) env[k] = v }
-        return Spec(argv, argvEnv, env)
+        return Spec(argv, argvEnv, env, homeRootfs)
     }
 
     /**
