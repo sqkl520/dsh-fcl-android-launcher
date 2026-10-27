@@ -85,14 +85,16 @@ class ProotProcessExecutor(
             // BL-001：从不往子进程 stdin 写东西，start 后立即关掉写端 —— 否则 FD 泄漏到整个任务生命周期；
             //   且子进程若读 stdin 会看到 EOF 而不是永久阻塞。
             runCatching { p.outputStream.close() }
-            // pid 解析复用 ProotRunner.Handle（反射 → children 差集 → /proc 全扫，真机走全扫）；
-            // fix2：带上身份标记（argv 里现成的 INSTANCE_DIR=<实例路径> 项），供全扫的
-            // cmdline 身份匹配用；拿不到返回 -1。
+            // 进程身份标记（fix2）：argv 里现成的 `INSTANCE_DIR=<实例路径>` 整项，供全扫的
+            // cmdline 身份匹配用；拿不到返回空串。
             val identityMarker = ProotRunner.identityMarkerFromArgv(spec.argv)
             val pid = runCatching {
                 ProotRunner.Handle(p, preExisting, identityMarker).pid()
             }.getOrDefault(-1L)
-            val active = Active(tag, p, pid)
+            // ★ fix12（C-12）：身份标记随 Active 记下来 —— [terminate] 发 SIGQUIT 前要用它复核目标。
+            //   这里存**空串转 null**：null 明确表示"没有身份标记"（自检 probe.sh 路径），
+            //   而 terminate 对 null 的处理是"无法复核 ⇒ 不发 SIGQUIT"（见那里）。
+            val active = Active(tag, p, pid, identityMarker.takeIf { it.isNotBlank() })
             synchronized(this) { actives += active }
             // fix2 / BL-041 接口（W1C 用）：pid 解析成功（>0）时向调用方回报一次 —— 安装路径拿它
             // 立刻写 pid 文件。-1 不回调：宁可没有文件，也不写假 pid（下次清理会误杀）。
@@ -172,6 +174,12 @@ class ProotProcessExecutor(
                 // tag 过滤语义不变（见 [ProotTermination.tagMatches]）：传 null 杀全部，传 instanceId 只杀它。
                 if (ProotTermination.tagMatches(tag, a.tag)) terminate(a)
             }
+        }.onFailure { e ->
+            // ★ fix12（C-11 留痕）：旧实现整段静默 —— 取消安装时若这里抛了，日志里一个字都没有，
+            //   用户只看到"取消了"而 npm 还在写盘。控制流不变（异常仍被吞：取消是 best-effort），
+            //   只补一条可归因的诊断（E3 的 C-11 反证：**只留痕、不返回结论**，因为 terminate
+            //   是非阻塞的，"返回时进程是否已死"在这里是未知，给出取值就是伪造结论）。
+            DshLogBus.append("[proot] destroyActive failed: ${e.message}")
         }
     }
 
@@ -189,27 +197,84 @@ class ProotProcessExecutor(
         val p = active.process
         when (ProotTermination.firstStopSignal(active.pid)) {
             // SIGQUIT 让 proot 走 kill_all_tracees：先把 npm/node 全 SIGKILL，再自己退出。
-            ProotTermination.StopSignal.SIGQUIT ->
-                runCatching { android.os.Process.sendSignal(active.pid.toInt(), ProotTermination.SIGQUIT) }
+            //
+            // ★ fix12（C-12）：发之前必须复核**目标身份**。pid 是会被系统复用的，而这个 pid 来自
+            //   "启动后 /proc 差集/全扫"的重解析 —— 在 pid 解析不可用的机型上它可能是自检的
+            //   proot、甚至另一实例的 proot。SIGQUIT 对 proot 意味着"带走全部 tracee 再退出"，
+            //   发错就是把别人的整条任务连根拔掉。
+            //   身份来源是 `spec.argv` 的 `INSTANCE_DIR=` 标记（[Active.identityMarker]），
+            //   **不是 tag**：自检路径不传 tag（E3 C-12 的反证第 1 条）。
+            ProotTermination.StopSignal.SIGQUIT -> {
+                // cmdline 读不到 → orEmpty() → 不匹配任何标记 ⇒ 下面 ok=false（"不确定就不发"）
+                val cmd = ProcessUtil.cmdline(active.pid).orEmpty()
+                val marker = active.identityMarker
+                // marker == null（自检路径没有 INSTANCE_DIR）同样**不发**：无法复核身份。
+                // 判据复用 DshRuntime.kt 的顶层纯函数 canSendQuitSignal（pid>0 ∧ 含 proot ∧ 含标记）。
+                val ok = marker != null && canSendQuitSignal(active.pid, cmd, marker)
+                if (ok) {
+                    runCatching { android.os.Process.sendSignal(active.pid.toInt(), ProotTermination.SIGQUIT) }
+                        .onFailure { e ->
+                            // ★ fix12（E3-N-6）：发不出去不许静默 —— 否则"取消成功"只是个假象。
+                            DshLogBus.append(
+                                "[proot] sendSignal(SIGQUIT) failed for pid=${active.pid}: ${e.message}; " +
+                                    "falling back to destroyForcibly"
+                            )
+                        }
+                } else {
+                    // 复核不过（没有标记 / cmdline 读不到 / 标记不匹配）：不发 SIGQUIT，退化为 destroy()。
+                    runCatching { p.destroy() }.onFailure { e ->
+                        DshLogBus.append(
+                            "[proot] destroy() failed for pid=${active.pid}: ${e.message}"
+                        )
+                    }
+                    DshLogBus.append(
+                        "[proot] SIGQUIT skipped for pid=${active.pid}: identity unverified; degrade to destroy()"
+                    )
+                }
+            }
             // 拿不到 pid：只剩 Process.destroy() 这个把手（对 proot 无效，但没有别的办法了）。
-            ProotTermination.StopSignal.DESTROY -> runCatching { p.destroy() }
+            ProotTermination.StopSignal.DESTROY -> {
+                // ★ fix12（E3-N-6 / C-11）：这一支过去完全无痕 —— 而它恰恰是真机常态
+                //   （pid 解析三条路全失败）。`destroy()` 对 proot 装死，所以必须留一行，
+                //   让"取消了但 npm 还在写盘"有据可查。S9 的验收文案就是这一行。
+                DshLogBus.append("[proot] cancel: no pid, degrade to destroy()")
+                runCatching { p.destroy() }.onFailure { e ->
+                    DshLogBus.append("[proot] destroy() failed (no pid): ${e.message}")
+                }
+            }
         }
         Thread {
             try {
                 val exited = runCatching { p.waitFor(ProotTermination.TERMINATION_GRACE_MS, TimeUnit.MILLISECONDS) }
                     .getOrDefault(false)
+                // ★ C-13 本轮**不做**：`getOrDefault(false)` 保持原样（E3 第五节已否决"默认改 true"）。
                 if (!exited && ProotTermination.shouldForceKill(runCatching { p.isAlive }.getOrDefault(false))) {
                     // 最后手段 destroyForcibly()=SIGKILL。proot 被 SIGKILL 时来不及 kill_all_tracees，
                     // rootfs 内的 node 可能存活 —— 那条按 pid 文件收 node 的兜底在 DshRuntime（本文件管不到）。
-                    runCatching { p.destroyForcibly() }
+                    runCatching { p.destroyForcibly() }.onFailure { e ->
+                        // ★ fix12（C-11）：守护线程里的失败过去同样无痕（E3 第三节倒数第二行）
+                        DshLogBus.append(
+                            "[proot] destroyForcibly() failed for pid=${active.pid}: ${e.message}"
+                        )
+                    }
                 }
             } catch (_: InterruptedException) {
             }
         }.apply { isDaemon = true; name = "dsh-proot-kill"; start() }
     }
 
-    /** 当前活跃子进程（含归属标记与 pid；pid<=0 表示没解析到，[terminate] 会退化为 destroy()） */
-    private class Active(val tag: String?, val process: Process, val pid: Long)
+    /**
+     * 当前活跃子进程（含归属标记与 pid；pid<=0 表示没解析到，[terminate] 会退化为 destroy()）。
+     *
+     * ★ fix12（C-12）：[identityMarker] = argv 里 `INSTANCE_DIR=<实例路径>` 那一项（整项，含前缀）；
+     *   null = argv 里没有（自检 probe.sh 路径）⇒ [terminate] 不发 SIGQUIT。空串在构造时已折成 null。
+     */
+    private class Active(
+        val tag: String?,
+        val process: Process,
+        val pid: Long,
+        val identityMarker: String?
+    )
 
     /** 所有在跑的子进程（CopyOnWriteArrayList：读多写少，且要能在并发下安全遍历） */
     private val actives = java.util.concurrent.CopyOnWriteArrayList<Active>()

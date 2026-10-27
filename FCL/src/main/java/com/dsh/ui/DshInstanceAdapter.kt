@@ -423,8 +423,13 @@ class DshInstanceAdapter(
         //   与 BL-179 右面板 setRightEnabled 同口径压暗。**只压"按钮画的确实是停止状态词"那一态**：
         //   按 busyLabel 的结果判（而不是只看 isStopping），删除中与停止极少见地重叠时保持删除中
         //   原本的满色观感；两个方向都显式赋值 —— 行是复用的，不写回 1f 会让下一行继承上一行的灰。
+        //
+        // ★ R2c-2（fix12 收尾）：判据从"是不是停止中"改成"是不是**不可点**"。
+        //   原来只有停止中压暗，于是安装中 / 删除中的卡片是**满色死按钮**——而详情页与右面板
+        //   这两态都已压暗，卡片成了唯一漏网出口（BL-020 的原样复现）。
+        //   口径统一成一条：**凡是 startEnabled=false 且确实画着一个状态词，就压暗**。
         b.btnStart.alpha =
-            if (busyLabel == R.string.dsh_task_stopping) CARD_DISABLED_ALPHA else CARD_ENABLED_ALPHA
+            if (!startEnabled && busyLabel != null) CARD_DISABLED_ALPHA else CARD_ENABLED_ALPHA
 
         // ===== 主操作（图标 + 文字）=====
         // 布局里 btn_start 是"clickable 容器 + 图标 + 文字"（照外壳右面板的启动键形态），

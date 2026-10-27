@@ -37,6 +37,8 @@
         <string name="dsh_delete_message">刪除"%1$s"？會一併移除它的 dsh 安裝與設定（約 300MB），且無法復原。</string>
         <string name="dsh_delete_started">正在刪除實例…</string>
         <string name="dsh_delete_title">刪除實例</string>
+        <!-- fix12：清單讀取失敗期間 delete() 直接拒絕（不寫盤就不動目錄），要把「為什麼沒刪」說出來 -->
+        <string name="dsh_delete_refused">無法刪除：實例清單讀取失敗中</string>
         <string name="dsh_disk_usage">佔用空間：%1$s</string>
         <string name="dsh_download_error">載入失敗：%1$s</string>
         <string name="dsh_download_show_prerelease">顯示預覽版</string>
@@ -62,7 +64,17 @@
         <string name="dsh_install_started_message">正在背景下安裝 %1$s，可在實例清單查看進度。</string>
         <string name="dsh_install_started_title">已開始安裝</string>
         <string name="dsh_installed">已安裝</string>
+        <!-- fix12 / E6-4：版本列「該版本的安裝失敗」角標。**只允許 state == BROKEN 使用**；
+             使用者主動取消 ≠ 安裝失敗（那是 NOT_INSTALLED，版本列應顯示「未安裝」）。
+             與實例卡片的 dsh_state_broken（損壞）是措辭差異，不是同一句話 ——
+             版本頁每列就是一個版本、角標緊鄰安裝按鈕，語境已把它錨定在「這個版本」上。 -->
+        <string name="dsh_installed_broken">安裝失敗</string>
         <string name="dsh_install_skipped">%1$s 已安裝，可直接啟動</string>
+        <!-- fix12 / E6-4：詳情頁動作列依 DispatchReason 分叉。dsh_install_skipped 仍是「安裝入口
+             發現目標版本已就緒，於是跳過」（帶版本號）；下面兩條是不帶版本號的**結論**文案，
+             給「你點的這個版本已經裝好了」和「這個版本正在裝」兩種狀態用。 -->
+        <string name="dsh_install_already_installed">該版本已安裝，可直接啟動</string>
+        <string name="dsh_install_in_flight">該版本正在安裝中</string>
         <string name="dsh_instance_gone">實例已不存在</string>
         <string name="dsh_instance_subtitle">版本 %1$s · 連接埠 %2$s · %3$s</string>
         <!-- 實例詳情頁：一個實例 = 一個頁面，頁內再用 tab 切換執行／日誌／設定。
@@ -76,6 +88,13 @@
         <string name="dsh_instance_detail_empty">該實例已不存在</string>
         <string name="dsh_instances_empty">還沒有實例。\n點選左側「版本」標籤安裝一個 dsh 版本。</string>
         <string name="dsh_instances_title">DeepSeek Harness</string>
+        <!-- fix12：實例清單（manifest）讀／寫失敗時的橫幅與拒寫回饋。四條一組 ——
+             橫幅（load/write）+ 橫幅上的重試 + 重試又失敗。前兩條是「這一屏的事」，
+             後兩條是「使用者按了重試之後」，所以順序不能按字母排。 -->
+        <string name="dsh_manifest_load_failed">實例清單讀取失敗，本次工作階段的變更不會儲存</string>
+        <string name="dsh_manifest_write_failed">實例清單寫入失敗，重新啟動後可能遺失本次變更</string>
+        <string name="dsh_manifest_retry">重試</string>
+        <string name="dsh_manifest_retry_failed">仍然讀不到，請重新啟動 App</string>
         <string name="dsh_key_first_run_title">填寫 API Key</string>
         <string name="dsh_key_first_run_message">dsh 需要一個 DeepSeek API Key 才能對話。請點左下角的設定圖示，在「模型」裡填入。Key 由 dsh 自己儲存和管理，啟動器不再經手。</string>
         <string name="dsh_logs_auto_scroll">自動捲動</string>
@@ -97,6 +116,8 @@
         <string name="dsh_port_invalid">連接埠需在 0–65535 之間</string>
         <string name="dsh_reason_exited_early">dsh 行程在就緒前退出（退出碼 %1$d）</string>
         <string name="dsh_reason_missing_entry">缺少 dsh 進入點檔案，安裝不完整，請重新安裝。</string>
+        <!-- fix12 / R2b-A1-1：一時讀不出來 ≠ 安裝損壞，所以不說「重新安裝」。 -->
+        <string name="dsh_reason_disk_unreadable">暫時讀不到 dsh 套件檔案，請稍後重試；若反覆出現，請查看日誌。</string>
         <string name="dsh_reason_not_installed">該實例尚未安裝 dsh，請先安裝或重新安裝。</string>
         <string name="dsh_reason_start_timeout">%1$d 秒內未就緒，請查看日誌（網路/連接埠問題）。</string>
         <string name="dsh_reason_user_stop">使用者停止</string>
@@ -114,6 +135,9 @@
         <string name="dsh_reinstall_pick_version">還沒有成功安裝過任何版本，請到「版本」頁選擇一個版本。</string>
         <string name="dsh_runtime_exited">dsh 行程已退出（退出碼 %1$d）</string>
         <string name="dsh_saved">已儲存</string>
+        <!-- fix12：拒寫期改名／改連接埠的回饋。dsh_saved 只說「成了」，而 saveAsync() 回傳 false
+             時記憶體改了、磁碟上沒有，必須明說「沒儲存」以及原因（清單不可寫）。 -->
+        <string name="dsh_change_not_saved">未儲存：實例清單目前無法寫入</string>
         <string name="dsh_settings_model">模型</string>
         <string name="dsh_settings_name_hint">實例名稱</string>
         <string name="dsh_settings_port_hint">連接埠（留空＝自動分配）</string>
@@ -137,6 +161,10 @@
         <string name="dsh_stage_reinstalling">安裝驗證未通過，正在重新安裝 %1$s（自動重試一次）</string>
         <string name="dsh_start_failed">實例啟動失敗</string>
         <string name="dsh_start_not_ready">執行環境或實例尚未就緒</string>
+        <!-- fix12 / C-08：啟動目標由宿主下發（DSH_LAUNCH_TARGET），實例自己宣告要的版本與
+             實際會跑的版本不一致時**降級啟動並說明**，不再靜默換一個版本跑。
+             %1$s = 實例宣告的版本，%2$s = 實際會執行的版本（兩個都是版本號字串）。 -->
+        <string name="dsh_start_degraded">實例需要 %1$s，實際會執行 %2$s</string>
         <string name="dsh_state_broken">損壞</string>
         <string name="dsh_state_deleting">刪除中…</string>
         <string name="dsh_state_failed">失敗：%1$s</string>
@@ -241,7 +269,6 @@
     <string name="dsh_background_no_image">沒有可取樣色的自訂背景</string>
     <string name="dsh_version_after_install">含相依套件約 500 MB（估計）</string>
     <string name="dsh_version_bundled">執行環境已內建，無需下載</string>
-    <string name="dsh_installed_broken">安裝失敗</string>
     <string name="dsh_setup_brand">DeepSeek Harness</string>
     <string name="dsh_setup_title">正在準備執行環境</string>
     <string name="dsh_setup_title_failed">執行環境準備失敗</string>

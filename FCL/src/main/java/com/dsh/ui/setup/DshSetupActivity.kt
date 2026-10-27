@@ -459,18 +459,38 @@ class DshSetupActivity : FCLActivity() {
      */
     private fun refreshStepStates() {
         scope.launch {
-            val (prootOk, scriptsOk, rootfsOk) = withContext(Dispatchers.IO) {
-                Triple(
-                    DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR).isFile &&
-                        DshPaths.resolveProotLoader(FCLPath.NATIVE_LIB_DIR).isFile,
-                    File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile,
-                    DshPaths.rootfsLooksUsable()
+            // 第 0 行直接用 [DshBootstrap] 的判据（C-16）：原来这里自己写了一份
+            // `isFile && isFile`，比 isReady() 少了 `canExecute()` —— 二进制在但没执行位时，
+            // 清单写"已就绪"而同页标题写"准备失败"。现在两边是同一个定义。
+            //
+            // ★ failed 与 ok 必须分开判（E6-5）：ok = "可用"，failed = "**已经有东西但**不可用"。
+            //   首启三样都还没解压，ok 全假但 failed 也必须全假 —— 否则新装的 App 第一眼看到的
+            //   是三行红色"失败"配一句"正在准备运行环境"。
+            //
+            // ★ 这里不能照 PLAN 字面用 `dir.isDirectory`：`DshPaths.loadPaths()`（onCreate 第一行）
+            //   已经把 ROOTFS_DIR / SCRIPTS_DIR **mkdirs 出来**了，首启时两个目录都存在且为空。
+            //   所以"存在"要收紧成"**目录里已经有条目**"（[hasAnyEntry]）：空目录 = 还没来过，
+            //   非空却缺关键文件/布局 = 上次解压没走完，那才是失败。
+            val facts = withContext(Dispatchers.IO) {
+                val prootBin = DshPaths.resolveProotBin(FCLPath.NATIVE_LIB_DIR)
+                val prootLoader = DshPaths.resolveProotLoader(FCLPath.NATIVE_LIB_DIR)
+                val prootOk = DshBootstrap.prootBinReady() && DshBootstrap.prootLoaderReady()
+                val startScript = File(DshPaths.SCRIPTS_DIR, "start-dsh.sh")
+                val rootfsOk = DshPaths.rootfsLooksUsable()
+                StepFacts(
+                    prootOk = prootOk,
+                    prootFailed = (prootBin.exists() || prootLoader.exists()) && !prootOk,
+                    scriptsOk = startScript.isFile,
+                    // 短路有意为之：ok 为真时不去 list 目录（磁盘 stat 已够贵了）
+                    scriptsFailed = !startScript.isFile && hasAnyEntry(DshPaths.SCRIPTS_DIR),
+                    rootfsOk = rootfsOk,
+                    rootfsFailed = !rootfsOk && hasAnyEntry(DshPaths.ROOTFS_DIR)
                 )
             }
 
-            applyStep(0, prootOk)
-            applyStep(1, scriptsOk)
-            applyStep(2, rootfsOk)
+            applyStep(0, facts.prootOk, facts.prootFailed)
+            applyStep(1, facts.scriptsOk, facts.scriptsFailed)
+            applyStep(2, facts.rootfsOk, facts.rootfsFailed)
             // 自检行由 afterPrepareReady 负责置位；未开始前显示"等待中"。
             // ★ BL-074 守卫："进行中/已就绪/失败"是不可被静默覆写的既有呈现 —— 失败被
             //   覆写回"等待中"就是 R12-B4-3 清单与卡片矛盾的直接成因。判据读行上记录的状态
@@ -483,12 +503,63 @@ class DshSetupActivity : FCLActivity() {
         }
     }
 
-    private fun applyStep(index: Int, ok: Boolean) {
+    /**
+     * 三行的磁盘事实（[refreshStepStates] 在 IO 线程取一次，回主线程逐行落）。
+     */
+    private data class StepFacts(
+        val prootOk: Boolean,
+        val prootFailed: Boolean,
+        val scriptsOk: Boolean,
+        val scriptsFailed: Boolean,
+        val rootfsOk: Boolean,
+        val rootfsFailed: Boolean
+    )
+
+    /**
+     * 目录里是否已经有内容（用于区分"尚未解压"与"解压解坏了"）。
+     *
+     * 只看**有没有条目**，不看是什么：目录本身由 `DshPaths.loadPaths()` 在 onCreate 就 mkdirs 了，
+     * 空目录是首启的正常中间态。"解了一半"一定已经在盘上留下文件（scripts 的 .sh、rootfs 的 bin/ 等），
+     * 那才构成失败证据。
+     *
+     * 不用 `listFiles()?.isNotEmpty()`：会把整个目录名表读进内存（rootfs 三万多个条目）。
+     * `list()` 在无条目 / 不是目录 / 不可读时返回 null 或空数组，三者都按"没有内容"处理 ——
+     * 读不出目录内容的设备宁可显示"等待中"，也不误报失败。
+     */
+    private fun hasAnyEntry(dirPath: String): Boolean =
+        File(dirPath).list()?.isNotEmpty() == true
+
+    private fun applyStep(index: Int, ok: Boolean, failed: Boolean = false) {
         val b = stepBindings[index] ?: return
-        setStepIcon(b, if (ok) R.drawable.ic_baseline_done_24 else R.drawable.ic_baseline_download_24)
+        // ★ 解压进行中一律不做"失败"判定：本轮正在写这两个目录，中途本来就会出现
+        //   "目录非空但关键文件还没拷到"的合法中间态（RuntimeUtils.install 先 deleteDirectory
+        //   清空，再按 Assets.list() 的顺序逐个拷 —— 那个顺序没有保证，start-dsh.sh 完全可能
+        //   最后才落地）。若不挡，脚本解压那一两秒会闪一行红。
+        //   真正的失败发生在"解压停了、盘上仍是残缺目录"——那时 prepareRunning 已被
+        //   showFailure/Done 置回 false，下一帧刷新自然会判出来。
+        //   同时查 isBusy（进程级事实）：本页可能是**解压跑到一半才被打开**的，那时
+        //   prepareRunning 还是 false（beginPrepare 的忙态分支只在拿到活帧时才置真）。
+        val rowFailed = failed && !prepareRunning && !DshBootstrap.isBusy()
+        // 图标与文案同一份结论：失败必须是警示图标，否则"失败"二字配一个下载箭头，
+        // 用户会以为还在排队。★ 顺序与 setupStepStateRes 一致：「已就绪」压过「失败」——
+        // 磁盘事实已可用时，残留的 failed 事实（同一帧里两次 stat 之间的 TOCTOU）不该画红。
+        val stateRes = setupStepStateRes(
+            rowOk = ok,
+            isRootfsRow = index == 2,
+            preparing = prepareRunning,
+            rowFailed = rowFailed
+        )
+        setStepIcon(
+            b,
+            when {
+                ok -> R.drawable.ic_baseline_done_24
+                stateRes == R.string.dsh_setup_state_failed -> R.drawable.ic_baseline_warning_24
+                else -> R.drawable.ic_baseline_download_24
+            }
+        )
         // BL-074 判定走纯函数（单测见 W3DaTest）：解压进行中、rootfs 行未就绪 → "进行中"，
         // 让数分钟的解压期间清单与进度卡一致（R12-B4-3）；其余保持"等待中"。
-        setStepState(b, setupStepStateRes(rowOk = ok, isRootfsRow = index == 2, preparing = prepareRunning))
+        setStepState(b, stateRes)
     }
 
     /**
@@ -800,16 +871,52 @@ class DshSetupActivity : FCLActivity() {
 }
 
 /**
- * BL-074（纯函数，便于单测，见 W3DaTest）：rootfs 行（清单第 3 行）未就绪时该显示的状态文案。
+ * BL-074（纯函数，便于单测，见 W3DaTest）：清单行（proot / scripts / rootfs）的状态文案。
  *
  * 解压的数分钟里磁盘事实一直是"未就绪"，若无此垫层，rootfs 行整段都显示"等待中"，
  * 与进度卡的活跃进度自相矛盾（R12-B4-3）。preparing = 本轮解压进行中。
  *
+ * fix12 加了第 4 支 `rowFailed`（C-16：proot 二进制存在但没有执行位时，行上写"已就绪"
+ * 而同页标题写"准备失败"）。
+ *
+ * 分支顺序（**这就是实际语义的优先级**，与 W3DaTest 已钉住的既有契约一致）：
+ * ```
+ * rowOk            -> 已就绪
+ * isRootfsRow && preparing -> 进行中
+ * rowFailed        -> 失败
+ * else             -> 等待中
+ * ```
+ * `rowFailed` 只对**未就绪**的行生效（已就绪压倒一切，见下），且不得抢在 rootfs 行的
+ * "进行中"前面（解压中 rootfs 目录本来就不完整，那不是失败）。
+ *
+ * ★ `rowFailed` **必须带默认值**：W3DaTest 有 5 处 3 参调用，不给默认值整类编译失败
+ *   （E5 §3.2）。默认 false 时输出与加参数前**逐字等价**（新增分支只在其为 true 时可达）。
+ *
+ * ★ `rowFailed` 的语义是"**该行工件已存在但不可用**"，不是 `!rowOk`（E6-5）：首启三行
+ *   本来就全假（尚未解压），按 `!rowOk` 实现会把"正在准备"画成三行红色。
+ *
+ * ★ 为什么 `rowOk` 仍排在 `preparing` 前面：W3DaTest 的 `readyBeatsPreparing`
+ *   钉住的是"解压完成帧已落盘、收尾还没跑"这个窗口 —— 磁盘事实已就绪时不该再显示"进行中"。
+ *   同理 `preparing` 必须带 `isRootfsRow` 守卫（`nonRootfsRowsNeverShowRunning`：
+ *   进行中只垫 rootfs 行，别扩大 BL-074 的范围）。这两条是既有行为契约，不因新增第 4 支而改写。
+ *   （IMPL-PLAN §2.12 里那条四行优先级表若照字面实现，这两条既有断言必红 ——
+ *   以 W3DaTest 的 5 处调用为准，见 `docs/reports/round25/impl/W4-bootstrap.md`。）
+ *
+ * @param rowOk     该行工件已可用
+ * @param isRootfsRow 是否 rootfs 行（"进行中"只垫这一行）
+ * @param preparing 本轮解压进行中
+ * @param rowFailed 该行工件已存在但不可用（缺失 ≠ 失败，见上）
  * @return 行状态资源 id；已就绪时返回"已就绪"
  */
-fun setupStepStateRes(rowOk: Boolean, isRootfsRow: Boolean, preparing: Boolean): Int = when {
+fun setupStepStateRes(
+    rowOk: Boolean,
+    isRootfsRow: Boolean,
+    preparing: Boolean,
+    rowFailed: Boolean = false
+): Int = when {
     rowOk -> R.string.dsh_setup_state_ready
     isRootfsRow && preparing -> R.string.dsh_setup_state_running
+    rowFailed -> R.string.dsh_setup_state_failed
     else -> R.string.dsh_setup_state_waiting
 }
 

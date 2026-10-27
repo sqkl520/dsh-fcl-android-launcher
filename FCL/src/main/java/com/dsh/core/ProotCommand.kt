@@ -87,7 +87,14 @@ object ProotCommand {
         // ★ 走 proot 之前先把宿主 DNS 同步进 guest（Android 没有 /etc/resolv.conf，
         //   不写的话 guest 内 getaddrinfo 必失败 → npm/curl 全部 EAI_AGAIN）。
         //   放在这里是因为所有 proot 调用（安装 / 启动 / 自检）都先过 preflight。
-        DshDns.sync(context, rootfsDir)
+        //
+        // ★ fix12（C-10）：返回值仍**有意丢弃**（DNS 失败不许拦 proot —— fail-closed 会让
+        //   "离线启动已装实例"倒退，K-04），但要留一条诊断。级别用 [DshLogBus.appendProgress]
+        //   且文案避 error/failed 字样：rootfs 只读时这会**每次安装**出现一行，若被判成 ERROR，
+        //   日志页"只看错误"就会被一条非致命信息刷满（E3 C-10 的明确约束）。
+        if (!DshDns.sync(context, rootfsDir)) {
+            DshLogBus.appendProgress("[preflight] dns sync skipped (rootfs not writable?)")
+        }
         if (!DshPaths.rootfsLooksUsable(File(rootfsDir))) {
             return Preflight(false, ctx.getString(R.string.dsh_preflight_rootfs_incomplete))
         }
@@ -167,11 +174,14 @@ object ProotCommand {
     /**
      * 只允许注入已知键：防止调用方（或被篡改的调用点）塞入 `LD_PRELOAD`/`LD_LIBRARY_PATH` 之类
      * 会改变 rootfs 内动态链接行为的变量。
+     *
+     * ★ fix12：`DSH_LAUNCH_TARGET` —— 宿主算出的启动目标（`instance` / `preinstalled`），
+     *   由 [DshRuntime] 放进 argvEnv、`start-dsh.sh` 按它决定 `DSH_SRC`（C-08 的下发半边）。
      */
     fun isAllowedEnvKey(key: String): Boolean = when (key) {
         "PATH", "HOME", "TMPDIR", "LANG", "TERM", "USER", "SHELL",
-        "INSTANCE_DIR", "DSH_VERSION", "PORT", "HOST", "PROFILE", "DSH_HOME", "CRED_FILE",
-        "NODE_MAJOR", "NPM_CONFIG_CACHE", "NODE_OPTIONS", "CI", "READY_TIMEOUT",
+        "INSTANCE_DIR", "DSH_VERSION", "DSH_LAUNCH_TARGET", "PORT", "HOST", "PROFILE", "DSH_HOME",
+        "CRED_FILE", "NODE_MAJOR", "NPM_CONFIG_CACHE", "NODE_OPTIONS", "CI", "READY_TIMEOUT",
         "PROOT_TMP_DIR", "PROOT_LOADER", "PROOT_NO_SECCOMP" -> true
         else -> key.startsWith("DEEPSEEK_")
     }

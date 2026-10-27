@@ -196,8 +196,17 @@ class DshDownloadUI(
                 //   信息不丢；"开始了"三处变一处（VM 的 installingVersions 置位 + 对话框）。
                 askOpenInstances(dispatch.instance?.name ?: item.version)
             } else {
-                // 没有真的发起安装（该版本已装好 / 已有安装在跑）：只提示，不弹窗
-                toast(context.getString(R.string.dsh_install_skipped, item.version))
+                // 没有真的发起安装：**两种事实两句文案**（fix12 / C-03）。
+                // 原来一律用 dsh_install_skipped（"已安装，可直接启动"），对"已有安装在跑"是说谎 ——
+                // 那种情况下用户去实例页只会看到一行"安装中"，而不是一个能启动的实例。
+                // 这两条文案都**不带占位符**（IMPL-PLAN §2.14），版本号已在行上，不必再进句子。
+                val hintRes = when (dispatch.reason) {
+                    DshDownloadViewModel.DispatchReason.ALREADY_INSTALLED ->
+                        R.string.dsh_install_already_installed
+                    // STARTED 走上面的 if 分支，到不了这里；其余（IN_FLIGHT）都是"等着就好"
+                    else -> R.string.dsh_install_in_flight
+                }
+                toast(context.getString(hintRes))
             }
         }
     }
