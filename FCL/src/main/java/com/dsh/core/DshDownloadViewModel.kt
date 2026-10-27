@@ -59,6 +59,35 @@ class RefreshSeqGuard {
 }
 
 /**
+ * 给定当前"安装中"集合与一条进度事件，返回新的集合。
+ *
+ * 这是 [DshDownloadViewModel.onProgress] 的**状态迁移内核**（纯函数，JVM 直测）。
+ * 与 `versionRowStates` 同理：抽出来是因为"哪些事件会清标记"是本模块最容易被改错的地方
+ * （E6-9 的 `Failed(version=null)` 就曾让按钮永久卡在"安装中"）。
+ *
+ * 规则（**与 R26 之前的 `init` 内 `when` 逐条一致**）：
+ * - [DshInstaller.Progress.Done] ⇒ 移除该版本；
+ * - [DshInstaller.Progress.Failed] / [DshInstaller.Progress.Cancelled] ⇒ `version != null` 时移除该版本，
+ *   **null 时什么都不清**（同步安装两个版本时，A 的 `null` 不能顺带把 B 的标记清掉）；
+ * - 其它（[DshInstaller.Progress.Stage] / [DshInstaller.Progress.Log] / 未来新增的事件）⇒ 原样返回。
+ *
+ * ★ 这里**不**碰 `rebuild()`：重建发生在 [DshDownloadViewModel.onProgress]，且在事件分支**之外**
+ *   —— `Log` / `Stage` 事件同样会触发重建（这是 R26 之前就有的行为，不是本函数能改的）。
+ */
+fun reconcileInstalling(current: Set<String>, event: DshInstaller.Progress): Set<String> = when (event) {
+    is DshInstaller.Progress.Done -> current - event.version
+    // ★ 只移除**本次失败的那个版本**：原来清空整个集合，会让其它仍在跑的
+    //   安装也"解除安装中"，按钮重新可点 → 用户连点 → 并发 npm + 堆实例
+    is DshInstaller.Progress.Failed -> event.version?.let { v -> current - v } ?: current
+    // ★ 取消也是终态：**必须**和 Done/Failed 一样解除"安装中"标记。
+    //   这条事件是本次新加的（[DshInstaller.cancel] 原来什么都不发）—— 少了它，
+    //   用户取消后按钮永远显示"安装中"、而且再也点不动，只能重启 App 才恢复。
+    is DshInstaller.Progress.Cancelled -> event.version?.let { v -> current - v } ?: current
+    // ★ 含 Log/Stage：这些事件不清任何标记，但**仍然**要让调用方走 rebuild()（行为与 R26 前一致）
+    else -> current
+}
+
+/**
  * 下载页的粘合层：拉 registry 版本列表 → 结合已安装版本 → 输出可渲染的列表项。
  *
  * ## 本次加固（对应审查发现的问题）
@@ -116,23 +145,34 @@ class DshDownloadViewModel(
         scope.launch {
             installer.progress
                 .drop(1) // 跳过订阅瞬间的当前值，避免刚进页面就触发无意义刷新
-                .collect { p ->
-                    when (p) {
-                        is DshInstaller.Progress.Done -> _installingVersions.value -= p.version
-                        // ★ 只移除**本次失败的那个版本**：原来清空整个集合，会让其它仍在跑的
-                        // 安装也"解除安装中"，按钮重新可点 → 用户连点 → 并发 npm + 堆实例
-                        is DshInstaller.Progress.Failed -> p.version?.let { v -> _installingVersions.value -= v }
-                        // ★ 取消也是终态：**必须**和 Done/Failed 一样解除"安装中"标记。
-                        //   这条事件是本次新加的（[DshInstaller.cancel] 原来什么都不发）—— 少了它，
-                        //   用户取消后按钮永远显示"安装中"、而且再也点不动，只能重启 App 才恢复。
-                        is DshInstaller.Progress.Cancelled -> p.version?.let { v -> _installingVersions.value -= v }
-                        else -> {}
-                    }
-                    rebuild()
-                }
+                .collect { p -> onProgress(p) }
         }
         // 实例列表变化（安装完成/删除）→ 重建角标
         scope.launch { DshInstances.instances.collect { rebuild() } }
+    }
+
+    /**
+     * 处理一条安装进度事件（**从 init 的 collect 体抽出，供 JVM 单测直接调用**）。
+     *
+     * ★ R26 / E6 §2.3：抽出来的理由是"接线本身要可测"。只把 `when` 抽成纯函数的话，
+     *   生产路径忘了调用它、或调用时传错了集合，单测仍然全绿（438 条里零条碰 `_installingVersions`）。
+     *   现在测试可以直接 `vm.onProgress(Progress.Done(v))` 并断言 `installingVersions.value`。
+     *
+     * 本函数**不启动任何协程、不读 dispatcher**：构造 VM 时 `scope` 传一个不跑的假作用域即可，
+     * 所以它能在没有 `Dispatchers.Main` 的 JVM 单测里直接调用（E6 陷阱 3）。
+     *
+     * ★ 参数是可空的：`installer.progress` 的类型是 `StateFlow<Progress?>`（初始值 `null`）。
+     *   `drop(1)` 丢掉的是**订阅瞬间**那个初始 `null`，但类型上后续仍可能是 `null`；原码的
+     *   `else -> {}` 对 `null` 同样只走 `rebuild()`。这里保持**逐字等价**：null 不清集合、仍重建。
+     *
+     * @param p 一条进度事件；状态迁移交给纯函数 [reconcileInstalling]。
+     */
+    internal fun onProgress(p: DshInstaller.Progress?) {
+        if (p != null) {
+            _installingVersions.value = reconcileInstalling(_installingVersions.value, p)
+        }
+        // ★ rebuild() 仍在 when 之外（原行为）：Log 事件也会触发重建（性能问题，登记为遗留，不在本轮改）
+        rebuild()
     }
 
     /**

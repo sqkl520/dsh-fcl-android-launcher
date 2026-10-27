@@ -1392,7 +1392,27 @@ class DshInstaller(
         fun readVersionFromPackageJson(file: File): String? {
             if (!file.isFile) return null
             return runCatching {
-                val pkg = JsonUtils.fromNonNullJson(file.readText(), PackageJson::class.java)
+                val text = file.readText()
+                // ★ R26 / E1 §4.1（一致性修复）：`version` 必须是 **JSON 字符串原语** 才算数。
+                //
+                // 为什么不能只靠 Gson 反射：Gson 默认宽松，`{"version": 123}` 会把数字
+                // "转成" 字符串 "123" 塞进 `PackageJson.version` —— 于是本函数返回 "123"，
+                // 而 `DshInstances.installFactsVersionOf`（用 `stringOrNull`，要求 isJsonPrimitive
+                // && isString）返回 null。两套判据对同一份磁盘内容给出**相反**结论：
+                // isInstallComplete=true（判"装好了"）而 planRepair=NOT_INSTALLED（判"没装"）
+                // ⇒ 卡片说未安装、启动口说可以起 —— 正是 fix12 要消灭的 S1 症状原地复活。
+                //
+                // `R26ConsistencyTest.bothJudgesAgreeOnEveryPackageJsonShape` 在修复前**实测红**在这条上。
+                // 真实 npm 包不会写数字版本，但手工编辑 / 坏工具链 / 旧格式迁移都可能留下它，
+                // 而"两套判据对边缘输入是否同结论"是跨实现不变量，不能靠"上游不会这么写"来豁免。
+                val versionIsString = runCatching {
+                    val root = com.google.gson.JsonParser.parseString(text)
+                    val raw = if (root.isJsonObject) root.asJsonObject.get("version") else null
+                    raw != null && raw.isJsonPrimitive && raw.asJsonPrimitive.isString
+                }.getOrDefault(false)
+                if (!versionIsString) return@runCatching null
+
+                val pkg = JsonUtils.fromNonNullJson(text, PackageJson::class.java)
                 pkg.version?.takeIf { it.isNotBlank() }
             }.getOrNull()
         }
