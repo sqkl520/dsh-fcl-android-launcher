@@ -75,6 +75,9 @@ class DshResourceFormatTest {
         "dsh_runtime_exited" to arrayOf<Any>(143),
         "dsh_reason_exited_early" to arrayOf<Any>(1),
         "dsh_reason_start_timeout" to arrayOf<Any>(180L),
+        // fix12 / C-08（round25）：降级启动提示。%1$s = 实例声明的版本，%2$s = 实际会运行的版本，
+        // 两个都是版本号字符串（不是数字 —— 版本号里有 '-' 和 '.'，永远按 String 传）
+        "dsh_start_degraded" to arrayOf<Any>("0.2.1", "0.1.6"),
 
         // DshInstancesActivity
         "dsh_delete_message" to arrayOf<Any>("dsh 0.1.5"),
@@ -227,6 +230,45 @@ class DshResourceFormatTest {
             "旧版标题与 unknown 标题不能是同一句（BL-206）",
             en["dsh_webview_compat_title"] != en["dsh_webview_compat_unknown_title"]
         )
+    }
+
+    /**
+     * **fix12 / E6-4、E6-8**：版本行与实例卡片的状态词，三语必须齐全且非空。
+     *
+     * 为什么单独钉这一组：这四条**都没有占位符**，[everyDshStringWithPlaceholdersIsDeclared]
+     * 完全覆盖不到它们 —— 改漏一个语系今天不会被任何测试发现。而这四条恰好是"同一个事实
+     * 在两个页面用两个词"的那一对（版本行 `dsh_installed_broken` = 安装失败 / 卡片
+     * `dsh_state_broken` = 损坏），漏一条的后果是"简体用户在一页看到中文、另一页看到英文"，
+     * 正是 E6-8 说的"改值几乎必然只改到一块"。
+     *
+     * 注意断言的是 `dsh_installed_broken` 与 `dsh_state_broken` **各自存在**，不是断言它们相等 ——
+     * E6 §3.0 已裁定两者是**措辞差异**（版本行说"这个版本的安装没成功"，卡片说实例"损坏"），
+     * 都正确，只是不许把"损坏"搬到版本行上。
+     */
+    @Test
+    fun versionBadgeAndInstanceStateCopyExistInAllThreeLocales() {
+        val keys = listOf(
+            "dsh_installed",
+            "dsh_installed_broken",
+            "dsh_state_broken",
+            "dsh_state_installing",
+        )
+        THREE_LOCALES.forEach { rel ->
+            val file = resolve(rel)
+                ?: throw AssertionError("找不到 $rel（三语校验必须真的读到三份文件，不能跳过）")
+            val strings = parseStrings(file)
+            keys.forEach { key ->
+                val body = strings[key]
+                    ?: throw AssertionError("@string/$key 在 $rel 中缺失（三语文案必须齐全）")
+                assertTrue("@string/$key 在 $rel 中是空的", body.isNotBlank())
+            }
+            // E6-4：版本行角标只给 BROKEN 用；这里钉住"取消 ≠ 安装失败"不被写成同一句 ——
+            // 与"已安装"同值就说明有人把两个分支合并了，版本行会同时说"已装"和"装失败"。
+            assertTrue(
+                "$rel 的 dsh_installed_broken 与 dsh_installed 同值（版本行会自相矛盾）",
+                strings["dsh_installed_broken"] != strings["dsh_installed"]
+            )
+        }
     }
 
     // --- 工具 ---------------------------------------------------------------

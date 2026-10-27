@@ -22,6 +22,130 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 /**
+ * ★ fix12（C-07 / C-08）：启动时刻**真正会跑哪一份 dsh 包** —— [resolveLaunchTarget] 的结果。
+ *
+ * 为什么是启动时刻的推导值、而不是持久化的状态：它回答的是"这一次 fork 会跑哪份包、和用户
+ * 要的版本是否一致"，随磁盘（rootfs 重解压 / 实例目录被删）随时变化。写进清单会过期，
+ * 且回滚 APK 时不可恢复（同 E1 §5 对 `DEGRADED` 枚举的否决理由）。
+ *
+ * 四个分支与脚本侧 `start-dsh.sh` 的 `DSH_SRC` 一一对应，宿主通过 `DSH_LAUNCH_TARGET`
+ * 把结论**下发**给脚本（见 [DshRuntime.startLocked] 的 argvEnv）—— 两边不再各判一套。
+ */
+sealed interface LaunchTarget {
+    /** 跑实例自己的包（`<instance>/node_modules/@deepseek-ai/dsh`） */
+    data class Instance(val version: String?) : LaunchTarget
+
+    /** 跑 rootfs 预装的包（实例目录里没有自己的包，且预装与请求版本相符/未指定版本） */
+    data class Preinstalled(val version: String?) : LaunchTarget
+
+    /**
+     * 会跑预装，但预装版本 ≠ 实例请求的版本（`expected` = 用户要的，`actual` = 实际会跑的）。
+     * 这是 C-07 的真实可达路径：旧实现会在用户点启动后**静默**跑起预装 0.1.6。
+     */
+    data class Degraded(
+        val expected: String?,
+        val actual: String?,
+        val preinstalled: Boolean
+    ) : LaunchTarget
+
+    /**
+     * 没有可跑的包。`hasPackageJson` 区分两种现场，只用于文案：
+     * - `true`：实例里有 `package.json` 但缺 `lib/bin.js`（半棵树）⇒ 让用户**重装**；
+     * - `false`：实例和预装都没有包 ⇒ 让用户先**安装**。
+     * 两条文案在 [DshRuntime.startLocked] 里分别对应 `dsh_reason_missing_entry` / `dsh_reason_not_installed`。
+     */
+    data class MissingEntry(val hasPackageJson: Boolean) : LaunchTarget
+
+    /**
+     * 磁盘**读不出来**（`package.json` 或 `lib/bin.js` 的 stat 能成功，但读内容抛异常：
+     * EIO / 权限 / SELinux 一时挡住）。
+     *
+     * ★ R2b-A1-1（fix12 收尾）：这一态必须与 [MissingEntry] 分开，因为 `planRepair` 对同一个
+     *   输入走的是 `keepAsIs`（**保留原状态、不改写 dshVersion**），如果启动口把它当"半棵树 ⇒
+     *   请重装"，就出现"卡片写着就绪、点启动却让人重下 500MB"——把一个**可恢复的读故障**
+     *   变成了破坏性建议。所以这里单独给文案（[R.string.dsh_reason_disk_unreadable]），
+     *   只让用户稍后重试 / 查日志。
+     *
+     * `preinstalled = true` 表示预装那份也读不出来（通常是 rootfs 正在被替换），文案里可区分。
+     */
+    data class Unreadable(val preinstalled: Boolean) : LaunchTarget
+}
+
+/**
+ * ★ fix12（C-08）：[LaunchTarget] 的判定内核（纯函数，JVM 可测）。
+ *
+ * 判定顺序与 `DshInstances.planRepair` 的修复判据**严格同口径**（同一台实例在卡片与启动口
+ * 给出同一结论）：
+ * 1. 实例自己的 `package.json` 在 ⇒ 只看实例这棵树：`lib/bin.js` 在 = [LaunchTarget.Instance]，
+ *    不在 = [LaunchTarget.MissingEntry] —— **不回退预装**（半棵树时跑预装，就是"卡片说未安装、
+ *    点启动却跑起来"的那个谎；与 `effectiveDshDir` 的回退判据刻意不同）。
+ * 2. 实例没有自己的包、预装的 `package.json` + `lib/bin.js` 都在 ⇒ 比对版本：请求的版本
+ *    （非空、非 `"latest"`）与预装不符 = [LaunchTarget.Degraded]，否则 [LaunchTarget.Preinstalled]。
+ * 3. 其余 = [LaunchTarget.MissingEntry]。
+ *
+ * @param readVersion 读一份 `package.json` 的 `version`。做成**必填参数**而不是直接调
+ *   `DshInstaller.readVersionFromPackageJson`：生产调用点传它即可，JVM 单测则能注入假实现
+ *   （`DshInstaller` 本身要 Context，测试里构造不出来）。该 lambda **不应抛异常**
+ *   （`DshInstaller.readVersionFromPackageJson` 内部已 runCatching，读不到返回 null）。
+ */
+fun resolveLaunchTarget(
+    instanceDir: File,
+    rootfsDir: File,
+    dshVersion: String?,
+    readVersion: (File) -> String?,
+    /** 读 package.json 的那一刻是否**抛了异常**（区别于"文件不存在/内容坏"）。默认恒 false，便于旧测试。 */
+    readFailed: (File) -> Boolean = { false }
+): LaunchTarget {
+    // 实例自己那份包的相对路径：与 [DshPaths.ownDshDir] 共用同一个常量（fix12 / C6），
+    // 不再各自抄字面量。不收 instanceId 而收目录，是为了让本函数不依赖 DshPaths 的静态状态、
+    // 能直接用假目录单测。
+    val own = File(instanceDir, DshPaths.INSTANCE_DSH_REL)
+    val ownPkg = File(own, "package.json")
+    if (ownPkg.isFile) {
+        if (File(own, "lib/bin.js").isFile) {
+            val ownVersion = readVersion(ownPkg)
+            // ★ V1 §5-8（fix12 收尾）：有 bin.js 但 package.json **读不出版本**（坏 JSON / 缺 version）
+            //   不能当"完整包"放行 —— planRepair 的 complete = version != null && hasBinJs 在这里
+            //   为 false，判 NOT_INSTALLED；若这里仍返回 Instance(null)，就会出现"卡片说未安装、
+            //   点启动却 fork 出去"，脚本读不出 DSH_VER 但照样跑 bin.js（dsh 自己可能崩在内部）。
+            //   两个判据必须逐序等价，所以这里落 MissingEntry(true)（"像装了但树不可信"）。
+            //
+            // ★ R2b-A1-1：但"读不出来"与"内容坏"要分开 —— 前者 planRepair 走 keepAsIs
+            //   （保留原状态），这里就不能建议重装（那是把一个可恢复的读故障变成破坏性动作）。
+            if (ownVersion == null) {
+                return if (readFailed(ownPkg)) LaunchTarget.Unreadable(preinstalled = false)
+                else LaunchTarget.MissingEntry(hasPackageJson = true)
+            }
+            return LaunchTarget.Instance(ownVersion)
+        }
+        // 半棵树（有 package.json、缺入口）：判定"没装完"，且**绝不**拿预装兜底。
+        return LaunchTarget.MissingEntry(hasPackageJson = true)
+    }
+
+    val pre = File(rootfsDir, DshPaths.PREINSTALLED_DSH_REL)
+    val prePkg = File(pre, "package.json")
+    if (prePkg.isFile && File(pre, "lib/bin.js").isFile) {
+        val actual = readVersion(prePkg)
+        // ★ R2b-A1-2（fix12 收尾）：直接复用 [versionMatches]，不再自己写一遍 takeIf。
+        //   原来 `dshVersion = ""`（脏值）在这里被 isNotBlank 判成"没有请求 ⇒ 放行预装"，
+        //   而 planRepair 的 versionMatches 判"不匹配 ⇒ NOT_INSTALLED" —— 卡片说未安装、
+        //   点启动却跑起来。两套判据共用同一个函数才谈得上"逐序等价"。
+        if (actual == null && readFailed(prePkg)) {
+            return LaunchTarget.Unreadable(preinstalled = true)
+        }
+        if (!versionMatches(dshVersion, actual)) {
+            return LaunchTarget.Degraded(
+                expected = dshVersion,
+                actual = actual,
+                preinstalled = true
+            )
+        }
+        return LaunchTarget.Preinstalled(actual)
+    }
+    return LaunchTarget.MissingEntry(hasPackageJson = false)
+}
+
+/**
  * dsh 运行时管理器：在 proot 里启动/停止 `dsh web` 长驻进程，并捕获它打印的
  * `http://127.0.0.1:<port>/?token=XXXX`，供 WebView 加载。
  *
@@ -536,19 +660,57 @@ object DshRuntime {
         }
 
         // 真正校验\"装好了\"：状态字段可能是过期的，以磁盘为准。
-        // ★ 第十一轮：用 effectiveDsh* —— 命中 rootfs 预装版本时实例目录没有 node_modules，
-        // 真正的包在 rootfs 的 /opt/dsh-preinstalled 下（阶段 D-1 的跳过下载优化）。
-        val pkg = DshPaths.effectiveDshPackageJson(instance.id)
-        val binJs = DshPaths.effectiveDshBinJs(instance.id)
-        if (!pkg.isFile) {
-            val reason = context.getString(R.string.dsh_reason_not_installed)
-            if (noSeccomp) failRetry(instance, reason)
-            return StartOutcome.NotReady(reason)
-        }
-        if (!binJs.isFile) {
-            val reason = context.getString(R.string.dsh_reason_missing_entry)
-            if (noSeccomp) failRetry(instance, reason)
-            return StartOutcome.NotReady(reason)
+        // ★ fix12（C-08）：判据从"两次 isFile"换成 [resolveLaunchTarget] 的**单一纯函数** ——
+        //   旧实现只看 `package.json` + `lib/bin.js` 在不在于 effectiveDshDir（会回退预装），
+        //   于是"实例里没有自己的包、预装有"时静默跑起预装，用户要的版本与实际跑的版本可以
+        //   完全不同而宿主零察觉。新判据与卡片（planRepair）同口径，且把结论下发脚本。
+        val launchTarget = resolveLaunchTarget(
+            DshPaths.instanceDir(instance.id),
+            File(DshPaths.ROOTFS_DIR),
+            instance.dshVersion,
+            { f -> DshInstaller.readVersionFromPackageJson(f) },
+            // ★ R2b-A1-1：把"读一键抛异常"这条**独立事实**也传进去，与 planRepair 的 readError 同源。
+            //   只靠 readVersion 返回 null 分不清"文件不存在/坏 JSON"（该建议重装）与
+            //   "这次读不出来"（该让用户稍后重试）—— 两者混为一谈会把可恢复故障变成重下 500MB。
+            { f -> f.isFile && runCatching { f.readText() }.isFailure }
+        )
+        // 目标类型同时决定两件事：能不能启动、以及 fork 时下发给脚本的 DSH_LAUNCH_TARGET。
+        val targetKind = when (launchTarget) {
+            is LaunchTarget.Instance -> "instance"
+            is LaunchTarget.Preinstalled -> "preinstalled"
+            // 会跑预装、但预装版本不是用户要的那个：**拒绝启动并说清两个版本**。
+            // 旧行为是放行后由脚本静默 fallback（C-07），用户看到的只是"起来了"。
+            is LaunchTarget.Degraded -> {
+                val reason = context.getString(
+                    R.string.dsh_start_degraded,
+                    launchTarget.expected ?: "?",
+                    launchTarget.actual ?: "?"
+                )
+                if (noSeccomp) failRetry(instance, reason)
+                return StartOutcome.NotReady(reason)
+            }
+            // 没有可跑的包。两条文案的区分保留（现场不同、用户该做的事也不同）：
+            // 有 package.json = 装了一半（重装），连 package.json 都没有 = 没装（先装）。
+            is LaunchTarget.MissingEntry -> {
+                val reason = context.getString(
+                    if (launchTarget.hasPackageJson) R.string.dsh_reason_missing_entry
+                    else R.string.dsh_reason_not_installed
+                )
+                if (noSeccomp) failRetry(instance, reason)
+                return StartOutcome.NotReady(reason)
+            }
+            // ★ R2b-A1-1：磁盘一时读不出来。**不能**套用"请重装"——那把一个可恢复的读故障
+            //   （EIO / SELinux / 文件正被替换）变成让用户重下 500MB。文案只说"稍后重试"。
+            is LaunchTarget.Unreadable -> {
+                val reason = context.getString(R.string.dsh_reason_disk_unreadable)
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[runtime] cannot read package.json (preinstalled=${launchTarget.preinstalled}); " +
+                        "refusing to start without touching instance state"
+                )
+                if (noSeccomp) failRetry(instance, reason)
+                return StartOutcome.NotReady(reason)
+            }
         }
 
         // 同一实例已经在跑：直接复用
@@ -559,6 +721,20 @@ object DshRuntime {
             DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已在运行，复用现有进程")
             return StartOutcome.Started
         }
+        // 实例级：把"这次到底跑哪份包"钉在日志里。启动后从 `ps` 看不出走了哪支，只有这行能与
+        // 脚本的 `[start-dsh] dsh src/ver` 两行对上 —— C-07 之所以长期隐形，就是因为没有这行。
+        val targetVersion = when (launchTarget) {
+            is LaunchTarget.Instance -> launchTarget.version
+            is LaunchTarget.Preinstalled -> launchTarget.version
+            // Degraded / MissingEntry / Unreadable 都已在上面的 when 里 return，这里是编译器要求的穷举补位。
+            is LaunchTarget.Degraded -> null
+            is LaunchTarget.MissingEntry -> null
+            is LaunchTarget.Unreadable -> null
+        }
+        DshLogBus.appendFor(
+            instance.id,
+            "[runtime] launch target=$targetKind version=${targetVersion ?: "?"}"
+        )
         // K02 / BL-007：停掉别的实例并等它退出、以及清掉上一轮孤儿/残留 node 这些**阻塞步骤**，
         // 已经在 [start] 里（对象监视器之外）做完了，这里不再做 —— 既不等旧进程、也不在持锁时 sleep。
         // 走到这里时按单实例策略应当已无别的实例在跑；仍残留的极端情况（stopAndWait 超时）下面的
@@ -619,7 +795,11 @@ object DshRuntime {
             "NPM_CONFIG_CACHE" to "${ProotCommand.GUEST_ROOT}/npm-cache",
             // 脚本侧的就绪等待比启动器看门狗略短，保证脚本先给出 FAILED 的明确原因
             "READY_TIMEOUT" to (STARTUP_TIMEOUT_MS / 1000 - 15).toString(),
-            "NODE_OPTIONS" to "--max-old-space-size=${nodeHeapMb(context)}"
+            "NODE_OPTIONS" to "--max-old-space-size=${nodeHeapMb(context)}",
+            // ★ fix12（C-08）：把宿主算出的启动目标下发给脚本，脚本按它选 DSH_SRC ——
+            //   彻底消除"宿主看 package.json、脚本看 lib/bin.js"的判据错位（E1 §4.2 第 3 行）。
+            //   这里只可能是 instance / preinstalled：Degraded 与 MissingEntry 已在上面拒绝启动。
+            "DSH_LAUNCH_TARGET" to targetKind
         )
         // 这里只放"启动参数"，不放任何凭据：Key 与模型都由 dsh 自己的设置决定。
         val secretEnv = HashMap<String, String>()
@@ -948,7 +1128,15 @@ object DshRuntime {
         //   （onStartCommand 里读状态发现无运行实例就立即 stopSelf，不会留僵尸通知）。
         val appCtx = context.applicationContext
         android.os.Handler(android.os.Looper.getMainLooper()).post {
+            // ★ fix12（E3-N-5）：失败不许静默。旧实现整段 runCatching 无 onFailure ——
+            //   FGS 没起来时界面是"运行中"、通知栏空着，系统随时杀进程，日志里查无实据。
+            //   与 [DshLauncher.startInstance] 同功能的调用点有这条日志，这里补齐。
             runCatching { DshRuntimeService.start(appCtx) }
+                .onFailure { e ->
+                    DshLogBus.append(
+                        "[runtime] FGS start failed after adoption: ${e.message}; instance is not protected"
+                    )
+                }
         }
         return true
     }
@@ -2059,6 +2247,30 @@ fun canSendQuitSignal(pid: Long, cmdline: String, instanceId: String): Boolean =
     pid > 0 && instanceId.isNotBlank() && cmdline.contains("proot") && cmdline.contains(instanceId)
 
 /**
+ * ★ fix12（E3-N-11）：`killBlocking` 发 SIGTERM/SIGKILL 前的身份复核判据（纯函数，便于单测）。
+ *
+ * 与 [canSendQuitSignal] **同方向**：不确定就不发。旧实现把 `cmd == null`（读不到）当作**通过**，
+ * 于是 `/proc/<pid>/cmdline` 读不到（SELinux、pid 刚被回收、进程刚退出）时会**盲发** TERM→KILL —
+ * 那个 pid 若已被内核复用给别的 App 的进程，杀的就是别人。两个函数方向相反本身就是缺陷：
+ * 一个说"读不到就别发"，一个说"读不到就发"。
+ *
+ * @param cmdline null = 读不到（不是空串：空串是"读到了但为空"，同样不算通过）
+ * @param expectNode true = 目标是 rootfs 内的 node（按 pid 收 node 用），false = 目标是 proot。
+ *   两条判据都要求在 cmdline 里找到**专属特征**：node 含 dsh 包路径/node22 路径，proot 含 `proot`。
+ */
+fun shouldSignal(pid: Long, cmdline: String?, expectNode: Boolean): Boolean {
+    if (pid <= 0) return false
+    // 读不到 = 身份不明 = 不发（E3-N-11 的核心；与 canSendQuitSignal 的"取严"同口径）
+    if (cmdline.isNullOrBlank()) return false
+    return if (expectNode) {
+        cmdline.contains("@deepseek-ai/dsh") ||
+            cmdline.contains("node22/bin/node") || cmdline.contains("/node ")
+    } else {
+        cmdline.contains("proot")
+    }
+}
+
+/**
  * R16/fix4（BL-136）：本行解析出的 [incoming] 是否属于"会覆盖已带 token url"的坏更新。
  *
  * 判据（纯函数，供 [DshRuntime.onProcessLine] 的"已 Running 刷新"分支用）：
@@ -2443,18 +2655,20 @@ object ProcessUtil {
         // 我们手里只有一个上次记下的 pid；如果那个进程早就退出了、pid 又被别的进程用掉，
         // 直接发 SIGTERM/SIGKILL 就会误杀无辜。cmdline 能读到就必须确认它是 proot，否则放手。
         // [expectNode] = true 时改为确认"它是我们 rootfs 内的 node"（B10 按 pid 终止 node 用）。
+        //
+        // ★ fix12（E3-N-11）：判据收进顶层纯函数 [shouldSignal]，且 `cmd == null` **不再放行**
+        //   —— 旧实现把"读不到"当通过，等于把不确定当确定，会盲发 TERM→KILL（pid 复用即误杀）。
         val cmd = cmdline(pid)
-        val identityOk = if (expectNode) {
-            cmd == null || cmd.contains("@deepseek-ai/dsh") ||
-                cmd.contains("node22/bin/node") || cmd.contains("/node ")
-        } else {
-            cmd == null || cmd.contains("proot")
-        }
-        if (!identityOk) {
+        if (!shouldSignal(pid, cmd, expectNode)) {
             // 实例级（有归属时）：这条"没杀成"的线索属于发起终止的那个实例 —— 它的实例页上
             // 只有"停止"却看不到下文，就会以为停干净了（而 pid 其实还在，下次启动可能端口冲突）。
-            logFor(logInstanceId, "[runtime] pid=$pid 已不属于 dsh（cmdline 不匹配），跳过清理")
-            removePidFileByPid(pid)
+            logFor(
+                logInstanceId,
+                "[runtime] pid=$pid 无法确认归属（cmdline=${if (cmd == null) "unreadable" else "mismatch"}），拒绝发信号"
+            )
+            // ★ 不再 removePidFileByPid(pid)：拿不到身份就不该丢掉唯一的把手。
+            //   pid 文件是"下次还能按它再试一次"的唯一线索；删了，若那个 pid 真是我们的进程
+            //   （只是这一瞬间 /proc 读不到），就再也找不回来了。
             return
         }
         runCatching { android.os.Process.sendSignal(pid.toInt(), 15) } // SIGTERM

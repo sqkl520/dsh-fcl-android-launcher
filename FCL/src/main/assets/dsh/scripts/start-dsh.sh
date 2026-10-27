@@ -12,6 +12,9 @@
 # 关键环境变量（都可选，有默认值）:
 #   INSTANCE_DIR       实例根目录；若其下有 node_modules 则优先使用（多版本隔离）
 #   DSH_PREINSTALL_DIR dsh 预装目录（rootfs 内），默认 /opt/dsh-preinstalled
+#   DSH_LAUNCH_TARGET  宿主下发的启动目标（fix12）：instance | preinstalled。
+#                      非空时**按它执行**（与宿主 [resolveLaunchTarget] 同结论，不再自行回退）；
+#                      缺失/空 = 旧宿主或自检路径，退回下面的三级解析。
 #   PORT               监听端口，默认 3080；传 0 表示由系统分配
 #   HOST               绑定地址，默认 127.0.0.1（给本机 WebView 用，别绑 0.0.0.0）
 #   PROFILE            dsh profile，默认 web
@@ -20,9 +23,13 @@
 #                      （宿主侧 DshRuntime/ProcessUtil 按它精确终止 node，见下面"停止语义"）
 #
 # ## dsh 入口解析顺序（方案 B 对齐）
+#   0) fix12 起：宿主若下发 `DSH_LAUNCH_TARGET`（instance / preinstalled），**只按它执行**，
+#      不再自行回退 —— 宿主 [resolveLaunchTarget] 与脚本必须给出同一个结论（E3-N-8）。
+#      目标指向的 `lib/bin.js` 不存在时直接失败（打 ERROR 行），不回退另一侧。
 #   1) 实例自己的 node_modules      → 支持"每实例装不同版本"（自定义性）
 #   2) rootfs 内预装的 DSH_PREINSTALL_DIR → 首次可用、离线可用（稳定性优先）
 #   3) 用 node 在 INSTANCE_DIR 里 require.resolve（兼容旧布局）
+#   1)~3) 仅在 DSH_LAUNCH_TARGET 缺失/未知时生效（旧宿主、自检路径）。
 #   解析结果会打印 `[start-dsh] dsh src=...`，便于排查。
 #
 # ## 设计要点
@@ -88,18 +95,50 @@ export NARB_DISABLE_NATIVE_CACHE
 DSH_REL="node_modules/@deepseek-ai/dsh/lib/bin.js"
 BIN_JS=""
 DSH_SRC=""
-if [ -f "$INSTANCE_DIR/$DSH_REL" ]; then
-  BIN_JS="$INSTANCE_DIR/$DSH_REL"
-  DSH_SRC="instance"
-elif [ -f "$DSH_PREINSTALL_DIR/$DSH_REL" ]; then
-  BIN_JS="$DSH_PREINSTALL_DIR/$DSH_REL"
-  DSH_SRC="preinstalled"
-else
-  # 兼容旧布局：用 node 自己解析（需要可用的 node）
-  RESOLVED="$(cd "$INSTANCE_DIR" 2>/dev/null && node -e "process.stdout.write(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)"
-  if [ -n "$RESOLVED" ] && [ -f "$RESOLVED" ]; then
-    BIN_JS="$RESOLVED"
-    DSH_SRC="resolved"
+# --- 宿主下发优先（fix12 / E3-N-8）----------------------------------------
+# 宿主 [resolveLaunchTarget] 已经按**同一套判据**（实例 package.json+bin.js 优先、预装兜底）
+# 决定了这次该跑哪份包，并通过 argvEnv 下发。脚本若再自己回退一次，就会出现
+# "宿主判 NotInstalled 拒绝启动 / 或者宿主判 Instance 而脚本跑 Preinstalled"的错位。
+# 所以：下发值有效时**只认它**，目标缺 lib/bin.js 直接失败，不静默回退。
+# 变量缺失/为空/未知值 ⇒ 完全退回下面的三级解析（旧宿主 + 自检路径 + 手工调试）。
+if [ -n "${DSH_LAUNCH_TARGET:-}" ]; then
+  case "$DSH_LAUNCH_TARGET" in
+    instance)
+      BIN_JS="$INSTANCE_DIR/$DSH_REL"
+      DSH_SRC="instance"
+      ;;
+    preinstalled)
+      BIN_JS="$DSH_PREINSTALL_DIR/$DSH_REL"
+      DSH_SRC="preinstalled"
+      ;;
+    *)
+      echo "[start-dsh] WARN unknown-launch-target=$DSH_LAUNCH_TARGET, falling back to auto detection"
+      ;;
+  esac
+  if [ -n "$DSH_SRC" ] && [ ! -f "$BIN_JS" ]; then
+    # 宿主说"跑这一份"，磁盘上却没有入口：**不回退**。宿主的 NotReady 文案与脚本结论必须一致，
+    # 否则用户看到"未安装"、日志却说"已用预装启动"，下一次排查从第一步就错。
+    echo "[start-dsh] ERROR launch target=$DSH_LAUNCH_TARGET but lib/bin.js missing"
+    echo "[start-dsh] FAILED reason=package-missing"
+    echo "[start-dsh]   target: $BIN_JS" >&2
+    exit 1
+  fi
+fi
+
+if [ -z "$BIN_JS" ]; then
+  if [ -f "$INSTANCE_DIR/$DSH_REL" ]; then
+    BIN_JS="$INSTANCE_DIR/$DSH_REL"
+    DSH_SRC="instance"
+  elif [ -f "$DSH_PREINSTALL_DIR/$DSH_REL" ]; then
+    BIN_JS="$DSH_PREINSTALL_DIR/$DSH_REL"
+    DSH_SRC="preinstalled"
+  else
+    # 兼容旧布局：用 node 自己解析（需要可用的 node）
+    RESOLVED="$(cd "$INSTANCE_DIR" 2>/dev/null && node -e "process.stdout.write(require.resolve('@deepseek-ai/dsh/lib/bin.js'))" 2>/dev/null || true)"
+    if [ -n "$RESOLVED" ] && [ -f "$RESOLVED" ]; then
+      BIN_JS="$RESOLVED"
+      DSH_SRC="resolved"
+    fi
   fi
 fi
 
@@ -118,6 +157,19 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 DSH_VER="$(node -e "try{process.stdout.write(require('$BIN_JS/../../package.json').version)}catch(e){}" 2>/dev/null || true)"
+
+# --- 降级可见性（fix12 / C-07）---------------------------------------------
+# 只在"实际跑的是预装版、而实例明确要的是**另一个**版本"时打一行机器可读的 DEGRADED。
+# 目的：日志要能回答"为什么装的 0.2.1、跑起来却是 0.1.6"，而不是让这条降级只存在于宿主的
+# 推导里。DSH_VERSION 缺失（旧宿主/自检）/等于 latest /与预装版本相符 ⇒ 不打扰。
+# 预装版本按本脚本既有手法从 package.json 读（node 此处已确认可用），失败只是空串、不致命。
+DSH_VERSION="${DSH_VERSION:-}"
+if [ "$DSH_SRC" = "preinstalled" ] && [ -n "$DSH_VERSION" ] && [ "$DSH_VERSION" != "latest" ]; then
+  PRE_VER="$(node -e "try{process.stdout.write(require('$DSH_PREINSTALL_DIR/node_modules/@deepseek-ai/dsh/package.json').version)}catch(e){}" 2>/dev/null || true)"
+  if [ -n "$PRE_VER" ] && [ "$PRE_VER" != "$DSH_VERSION" ]; then
+    echo "[start-dsh] DEGRADED reason=preinstalled-fallback expected=$DSH_VERSION actual=$PRE_VER"
+  fi
+fi
 
 # --- 端口就绪探测（用 node 的 net 模块，不依赖 bash 的 /dev/tcp，也不需要 curl/nc）--------
 port_open() {

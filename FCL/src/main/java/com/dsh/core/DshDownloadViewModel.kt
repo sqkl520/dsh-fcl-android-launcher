@@ -264,27 +264,52 @@ class DshDownloadViewModel(
     /** 结合已安装版本重建列表项 */
     private fun rebuild() {
         if (allEntries.isEmpty()) return
-        val installed = DshInstances.instances.value.mapNotNull { it.dshVersion }.toSet()
+        // ★ fix12（D-2 判据统一）：三态**只从 [versionRowStates] 派生**，不再各自算一套。
+        //   原来这里是把每个实例的 `dshVersion` 直接收成集合 —— 只要实例写过版本号就算"已安装"，
+        //   于是 BROKEN（装失败）和 NOT_INSTALLED（取消后 dshVersion 仍保留）都会显示"已安装"，
+        //   与实例卡片说反话。现在 installed/broken/installing 出自同一份真相，页面重建后也不漂。
+        val states = versionRowStates(DshInstances.instances.value, _installingVersions.value)
+        val installed = states.filterValues { it == VersionRowState.INSTALLED }.keys
+        val broken = states.filterValues { it == VersionRowState.BROKEN }.keys
+        // ★ C-2：安装中也要进 item —— adapter 侧的集合只覆盖"本页在途"，页面重建后它是空的，
+        //   而实例仍是 INSTALLING（[versionRowStates] 已经把这两种来源并起来了，这里只是搬运）。
+        val installing = states.filterValues { it == VersionRowState.INSTALLING }.keys
         // rootfs 里预装的版本：命中它时安装不会下载任何东西（脚本直接 DONE source=preinstalled）
         val preinstalled = DshInstaller.readVersionFromPackageJson(
             File(File(DshPaths.ROOTFS_DIR, DshPaths.PREINSTALLED_DSH_REL), "package.json")
         )
         val items = allEntries
             .filter { showPrerelease || !it.isPrerelease }
-            .map { DshVersionListItem.from(it, installed, preinstalled) }
+            .map { DshVersionListItem.from(it, installed, preinstalled, broken, installing) }
         _uiState.value = UiState.Loaded(items, showPrerelease, lastWarning)
     }
 
     /**
      * 安装派发结果。
-     * [started] = false 表示**没有**发起安装（该版本已装好，直接复用），
-     * 界面据此选择文案，避免「明明没开始安装却说安装已开始」（R10-16）。
+     * [started] = false 表示**没有**发起安装，界面据此选择文案，避免「明明没开始安装却说安装已开始」（R10-16）。
+     *
+     * fix12（C-03）：只靠 [started] 一个布尔分不清"已装好，直接复用"与"已有安装在跑，本次被忽略"——
+     * 两句事实不同、可操作性也不同（前者去启动，后者等一等）。[reason] 把它们分开，
+     * 也顺带取代了原先两处误用的 `dsh_install_skipped`（它的文案只说"已安装"，对在途情况是说谎）。
      */
-    data class InstallDispatch(val instance: DshInstance?, val started: Boolean)
+    enum class DispatchReason {
+        /** 本次真的发起了安装 */
+        STARTED,
+        /** 该版本已装好（有 READY 实例），无需重装，直接复用 */
+        ALREADY_INSTALLED,
+        /** 该版本已有安装在跑（版本级或实例级单飞闸门拒绝），本次什么都没做 */
+        IN_FLIGHT
+    }
+
+    data class InstallDispatch(
+        val instance: DshInstance?,
+        val started: Boolean,
+        val reason: DispatchReason = DispatchReason.STARTED
+    )
 
     /**
      * 安装某版本：优先复用已有实例/空壳，避免反复点击在列表里积累一堆空实例；否则新建一个。
-     * @return 派发结果（实例 + 是否真的发起了安装）
+     * @return 派发结果（实例 + 是否真的发起了安装 + 原因）
      */
     fun installVersion(item: DshVersionListItem, instanceName: String? = null): InstallDispatch {
         // ★ 同一版本已在安装：直接拒绝。
@@ -296,7 +321,7 @@ class DshDownloadViewModel(
             //   把行塞进某个实例，等于猜 —— 猜错就会让 A 的日志里出现"某次无关请求被忽略"。
             DshLogBus.append("[download] ${item.version} 正在安装中，忽略重复请求")
             val running = DshInstances.instances.value.firstOrNull { it.dshVersion == item.version }
-            return InstallDispatch(running, started = false)
+            return InstallDispatch(running, started = false, reason = DispatchReason.IN_FLIGHT)
         }
         val existing = chooseInstanceToInstall(DshInstances.instances.value, item.version)
         // 已 READY 装过该版本：无需重装，直接复用，避免每次点击都重新下载整棵依赖树
@@ -304,13 +329,22 @@ class DshDownloadViewModel(
             // 实例级：这里 `existing` 是明确解析出来的实例 —— "你点安装但跳过了，因为它已经装好了"
             // 是那个实例的状态结论，用户点开它的日志页应该能看到这次点击为什么没产生安装。
             DshLogBus.appendFor(existing.id, "[download] ${existing.name} 已安装 dsh ${item.version}，跳过重复安装")
-            return InstallDispatch(existing, started = false)
+            return InstallDispatch(existing, started = false, reason = DispatchReason.ALREADY_INSTALLED)
         }
         val inst = existing ?: DshInstances.create(instanceName ?: "dsh ${item.version}")
+        // ★ E6-9：置位在 install() **之前**（这一瞬只有这里知道"正在装"，见 E5 §2.2 B7：
+        //   install() 内部才写 state=INSTALLING），但因此"被闸门拒绝"时必须自己回滚 ——
+        //   拒绝路径不产生任何 Progress 事件，否则这一行会永久卡在"安装中"且没有按钮
+        //   （只能靠别人的终态顺带清掉，而 Failed(version=null) 那支根本清不到）。
         _installingVersions.value = _installingVersions.value + item.version
         // installer.install 返回 false = 该实例已有安装在跑（单飞拒绝），同样不算「本次发起」
         val started = installer.install(inst, item.version)
-        return InstallDispatch(inst, started)
+        if (!started) _installingVersions.value = _installingVersions.value - item.version
+        return InstallDispatch(
+            inst,
+            started,
+            reason = if (started) DispatchReason.STARTED else DispatchReason.IN_FLIGHT
+        )
     }
 
     companion object {

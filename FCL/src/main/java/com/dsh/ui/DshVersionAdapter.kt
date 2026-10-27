@@ -19,6 +19,10 @@ import com.tungsten.fcllibrary.component.theme.ThemeEngine
  * - [DiffUtil] 替代全量重绘（列表有 20+ 项，每次刷新都重建会很跳）。
  * - 正在安装的版本按钮变成"安装中…"并禁用：原来连点会创建多个实例、并发跑多个 npm。
  * - 行内动作改为**图标按钮**（布局侧），这里只负责状态与取色。
+ *
+ * ## fix12（D-2）
+ * 四态渲染：安装中 / 已安装（隐藏按钮）/ **装过但失败**（角标 + 「重试」按钮同时可见）/
+ * 未安装。判据统一由 [com.dsh.core.versionRowStates] 派生（VM 侧），本类只按 item 字段画。
  */
 class DshVersionAdapter(
     private val onInstall: (DshVersionListItem) -> Unit
@@ -118,7 +122,13 @@ class DshVersionAdapter(
         }
         b.size.text = sizeLine
 
-        val installing = installingVersions.contains(item.version)
+        // ★ C-2：两个来源取并集。
+        //   - [installingVersions]（本页在途集合）是**快速通路**：`installVersion` 一置位就能立刻画，
+        //     不必等 instances 流把 `state=INSTALLING` 推回来（那有几帧延迟，连点会闪）；
+        //   - `item.installing` 覆盖**本页集合已空**的场景：页面被 ViewPager 回收重建后，
+        //     VM 与 adapter 都是新建的、集合为空，而实例仍是 INSTALLING —— 那时只有 item 侧有值。
+        //     少了这一半，"重建后显示已安装/未安装"就会回来，正是 D-2 要根治的漂移。
+        val installing = item.installing || installingVersions.contains(item.version)
         // ★ 每次绑定都先清掉旧监听：RecyclerView 复用 ViewHolder 时，若不清理，
         //   点到的可能是**上一个 item 的版本**（错位安装）
         b.btnInstall.setOnClickListener(null)
@@ -144,12 +154,33 @@ class DshVersionAdapter(
                 b.btnInstall.visibility = View.GONE
                 b.btnInstall.isEnabled = false
             }
+            // ★ fix12（D-2）：装过但没成功 —— 角标说"安装失败"，按钮仍给出路（重试）。
+            //   **必须排在 item.installed 之后**：同版本"一台 READY + 一台 BROKEN"时 installed 为真、
+            //   broken 也为假（判据见 versionRowStates），所以正常不会同时命中；即使将来判据放宽，
+            //   这里的顺序也钉住裁决 installed > broken。
+            //   文案与取色沿用"过渡态/失败态"的弱化提示色 autoHintTint（不抢主色，但比已安装的
+            //   getColor2() 更轻）—— 失败是**需要用户动手**的状态，不是值得强调的成就色。
+            item.broken -> {
+                b.installedBadge.visibility = View.VISIBLE
+                b.installedBadge.text = ctx.getString(R.string.dsh_installed_broken)
+                holder.badgeColor = { it.autoHintTint }
+                // 与卡片同源（E6 §2.3-④）：卡片的 BROKEN 按钮是「重试」，这里落到同一个
+                // installVersion → chooseInstanceToInstall 第 2 条（同版本任意 state 复用），
+                // 所以无障碍朗读也必须是「重试」，否则同一动作在两个页面读出两个词。
+                b.btnInstall.visibility = View.VISIBLE
+                b.btnInstall.isEnabled = true
+                b.btnInstall.contentDescription = ctx.getString(R.string.dsh_action_retry)
+                b.btnInstall.setOnClickListener { onInstall(item) }
+            }
             else -> {
                 b.installedBadge.visibility = View.GONE
                 // 角标隐藏时不取色；仍给一个安全默认，避免行被复用时残留上一行的取色规则
                 holder.badgeColor = { it.autoHintTint }
                 b.btnInstall.visibility = View.VISIBLE
                 b.btnInstall.isEnabled = true
+                // ★ View 复用：broken 分支把它改成了「重试」，不显式改回来，这个"未安装"的行
+                //   会继续被读成"重试"（布局里的初值只在首次 inflate 生效）。
+                b.btnInstall.contentDescription = ctx.getString(R.string.dsh_action_install)
                 b.btnInstall.setOnClickListener { onInstall(item) }
             }
         }

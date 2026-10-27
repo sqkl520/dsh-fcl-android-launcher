@@ -103,9 +103,15 @@ class DshInstancesPersistenceTest {
             DshInstances.loadFrom(f)
 
             assertTrue("空文件应被当作空清单", DshInstances.instances.value.isEmpty())
-            // 不得被判损坏：原文件不该被改名走，也不该产生 .corrupt 备份
-            assertTrue("空文件不应被重命名为损坏备份", f.exists())
+            // fix12 / C-05：0 字节**仍然**按空清单继续（不是损坏），但必须先留一份取证备份 ——
+            // 0 字节最可能的成因是"上一次非原子写被中断"，此时清单里原来的名字/端口/版本都已丢失，
+            // 不留备份就再也没有任何线索。判据在 loadFrom 里是 readText 成功后的 text.isEmpty()，
+            // **不是** File.length()==0（同名目录的 length() 也是 0，那会把真读失败误判成空文件）。
+            assertTrue("0 字节应被改名成 .empty- 备份（而不是留在原地）", !f.exists())
             assertEquals("空文件不应产生 .corrupt 备份", 0, corruptBackups(dir).size)
+            val emptyBackups = dir.listFiles { file -> file.name.startsWith("instances.json.empty-") }
+            assertEquals("应恰好产生一份 .empty- 备份", 1, emptyBackups?.size ?: 0)
+            assertEquals("备份必须是 0 字节的原始内容", 0L, emptyBackups!!.first().length())
         } finally {
             dir.deleteRecursively()
         }

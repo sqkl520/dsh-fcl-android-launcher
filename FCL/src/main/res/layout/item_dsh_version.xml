@@ -96,6 +96,10 @@
           状态角标：文字颜色是**随主题变的状态色**，由适配器按主题取值（安装中→autoHintTint 弱化提示色，
           已安装→getColor2() 状态色）并注册主题刷新，所以这里不写死颜色 ——
           原先的 #4CAF50 是 Material 绿，不属于 FCL 任何色板，暗色模式下也不会跟着变。
+          ★ fix12 / E6-1：end 约束改为 `toStartOf="@id/btn_install"`（原为 toEndOf="parent"）。
+          修复前角标与按钮的 end/top/bottom 完全相同、"未安装/已安装"两态又恰好互斥隐藏，所以没暴露；
+          而 BROKEN 态要求**角标与安装按钮同时可见**（角标说"安装失败"、按钮给出"重试"出路），
+          不改这一行两个 View 会叠画在卡片右缘同一位置。按钮仍固定在最右。
         -->
         <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/installed_badge"
@@ -106,7 +110,7 @@
             android:textSize="13sp"
             android:visibility="gone"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/btn_install"
             app:layout_constraintTop_toTopOf="parent" />
 
     </com.tungsten.fcllibrary.component.view.FCLConstraintLayout>

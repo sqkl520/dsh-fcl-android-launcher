@@ -47,7 +47,19 @@ object DshDns {
         //   后者是"这行日志是排障时唯一的线索（见下面那句），绝不能一起被吞掉"。
         //   所以下面用「先在 try 里算出结果，再在 try 外打日志」的写法，
         //   而不是把 append 塞进 runCatching 的块里。
-        val resolved = runCatching { resolveServers(context, rootfsDir) }.getOrNull()
+        //
+        // ★ fix12（C-09）：失败分支过去是 `?: return false`，**零日志** —— 于是 "npm 全程
+        //   EAI_AGAIN" 的现场里查不到任何一行说明 resolv.conf 没写成。频率不必担心（每次
+        //   proot 调用一次，不是每秒），离线场景走的是 FALLBACK 分支、根本进不到这里。
+        val resolved = runCatching { resolveServers(context, rootfsDir) }
+            .onFailure { e ->
+                // 带 rootfs 绝对路径 + 异常首行：只给"失败了"没法定位是权限、目录缺失还是 SELinux。
+                val firstLine = e.message?.lineSequence()?.firstOrNull() ?: e.javaClass.simpleName
+                DshLogBus.append(
+                    "[dns] sync failed: $firstLine; rootfs=${File(rootfsDir).absolutePath}"
+                )
+            }
+            .getOrNull()
             ?: return false
 
         // 真机上 npm install 报 EAI_AGAIN（域名解析失败）时，日志里最想知道的就是

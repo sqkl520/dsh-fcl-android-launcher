@@ -120,8 +120,25 @@ object DshPaths {
      */
     fun instanceWorkspace(instanceId: String): File = File(instanceDir(instanceId), "workspace")
 
-    /** 实例内 dsh 包的相对路径 */
-    private const val INSTANCE_DSH_REL = "node_modules/@deepseek-ai/dsh"
+    /**
+     * 实例内 dsh 包的相对路径。
+     *
+     * ★ 从 `private` 提到 `internal`（fix12 / C6 判据）：[com.dsh.core.resolveLaunchTarget] 是纯函数，
+     *   故意不收 instanceId 而收目录（不依赖 DshPaths 的静态状态、能用假目录单测），它需要这个
+     *   常量拼自己的树。此前那里抄了一份字面量 —— 常量散落正是本轮 S1 要消灭的东西。
+     */
+    internal const val INSTANCE_DSH_REL = "node_modules/@deepseek-ai/dsh"
+
+    /**
+     * 实例**自己**的 dsh 包目录（绝不回退预装）。payload 同 [INSTANCE_DSH_REL]。
+     *
+     * ★ 为什么需要它（而不是一律用 [effectiveDshDir]）：`effectiveDshDir` 是"启动时到底跑哪份包"
+     *   的解析器，它会在实例没有包时**回退到预装**；但"这个实例装好了没"必须只看它**自己**的树 ——
+     *   否则"请求 0.2.1、自己的树是半棵、预装是 0.1.6"的实例会被判成有包可跑，卡片说就绪、
+     *   启动却按另一份版本跑。修 fix12 的判据统一（Round 25 §2.1）时，判官要分别拿
+     *   "自己的树"和"预装"两份事实，所以这里只给"自己的那份"。
+     */
+    fun ownDshDir(instanceId: String): File = File(instanceDir(instanceId), INSTANCE_DSH_REL)
 
     /**
      * rootfs 内**预装** dsh 包的相对路径。
@@ -144,6 +161,13 @@ object DshPaths {
      * 3. 两处都没有时返回实例内的预期路径（错误信息/日志据此定位）
      *
      * 抽成「接受目录参数」的纯函数便于单测（见 `DshCoreLogicTest`）。
+     *
+     * ★ fix12（Round 25 §2.1）：注意本函数**按 `package.json`** 判目录，而 `start-dsh.sh` 的入口
+     *   解析**按 `lib/bin.js`** 判目录 —— 一份"有 package.json、没有 lib/bin.js"的半棵树在本函数
+     *   眼里是"有"，在脚本眼里是"没有"（于是回退预装）。这条错位就是"卡片说就绪、启动跑起来
+     *   却是另一份包"的来源。fix12 起**启动路径不再用它**，改用 `resolveLaunchTarget`
+     *   （由 W3 波次实现，判定与 `DshInstances.planRepair` 严格同口径）；本函数保留给"安装预算 /
+     *   旧调用点"等只想要"有没有包"的场合。
      */
     fun effectiveDshDir(instanceDir: File, rootfsDir: File): File {
         val inInstance = File(instanceDir, INSTANCE_DSH_REL)
@@ -156,11 +180,27 @@ object DshPaths {
     fun effectiveDshDir(instanceId: String): File =
         effectiveDshDir(instanceDir(instanceId), File(if (isLoaded) ROOTFS_DIR else ""))
 
-    /** 该实例实际生效的 dsh `package.json`（实例内优先，其次 rootfs 预装） */
+    /**
+     * 该实例实际生效的 dsh `package.json`（实例内优先，其次 rootfs 预装）。
+     *
+     * ★ fix12（V1 §5-5）：**零调用点** —— 启动判据已改由 [com.dsh.core.resolveLaunchTarget]
+     *   （它按 `lib/bin.js` 判、且与 `planRepair` 同口径），这个包装连同
+     *   [effectiveDshBinJs] 一起成了 S1 想要消灭的那种"第四套口径"。保留定义（不删）是因为
+     *   它是 [effectiveDshDir] 的语义说明；标 `@Deprecated` 是为了让**下一个人**在 IDE 里
+     *   一眼看到"别再用它写新判据"，而不是再分裂出第五套。
+     */
+    @Deprecated(
+        "fix12: 判据请用 resolveLaunchTarget / planRepair；本函数会回退预装，用它判'装好了没'会复活预装冒充",
+        ReplaceWith("DshPaths.ownDshDir(instanceId)")
+    )
     fun effectiveDshPackageJson(instanceId: String): File =
         File(effectiveDshDir(instanceId), "package.json")
 
-    /** 该实例实际生效的 dsh 入口 `lib/bin.js`（实例内优先，其次 rootfs 预装） */
+    /** 该实例实际生效的 dsh 入口 `lib/bin.js`（实例内优先，其次 rootfs 预装）。见 [effectiveDshPackageJson] 的说明。 */
+    @Deprecated(
+        "fix12: 判据请用 resolveLaunchTarget / planRepair；本函数会回退预装",
+        ReplaceWith("DshPaths.ownDshDir(instanceId)")
+    )
     fun effectiveDshBinJs(instanceId: String): File =
         File(effectiveDshDir(instanceId), "lib/bin.js")
 

@@ -783,7 +783,7 @@ class DshInstaller(
         // 每次安装只算一次（[checkInstallSpace] 只调它一次），所以不做缓存 ——
         // 缓存反而要处理"装完之后实例里已经有包了"的失效问题，是白添的状态。
         val own = readVersionFromPackageJson(
-            File(DshPaths.instanceDir(instance.id), "node_modules/@deepseek-ai/dsh/package.json")
+            File(DshPaths.ownDshDir(instance.id), "package.json")
         )
         // 请求的是 `latest`（界面上叫"最新版"）时干脆不读预装版本：预装算不算命中要等脚本
         // 自己比，这里给不出来就不猜 —— 猜错会把要下载的安装当成"不用下载"，预算就少了一大截。

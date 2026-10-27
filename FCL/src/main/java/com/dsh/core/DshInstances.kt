@@ -15,8 +15,128 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * 一份 dsh 树的磁盘事实（只读快照）。
+ *
+ * ★ fix12（Round 25 §2.2）：把"装好了没"从五套互相矛盾的口径收成一个纯函数的输入。
+ *   [readError] 必须是"读 package.json 时抛异常"（EIO / 权限 / 同名目录），
+ *   **不是**"文件不存在"（后者是 [hasPackageJson] == false）；两者混同会让"磁盘一时读不了"
+ *   被当成"没装"，进而把状态改错、把目标版本擦掉。
+ */
+data class InstallFacts(
+    // package.json 里的 version；解析不出 = null
+    val version: String?,
+    val hasPackageJson: Boolean,
+    val hasBinJs: Boolean,
+    // 读 package.json 时抛异常（EIO/权限）——区别于"文件不存在"
+    val readError: Boolean = false
+) {
+    /** 与 DshInstaller.isInstallComplete(dir, null) 完全等价 */
+    val complete: Boolean get() = version != null && hasBinJs
+}
+
+/** repair 对单个实例的裁决（纯数据，日志/写盘由调用方做） */
+data class RepairPlan(
+    // 写入 dshVersion 的值；null = 保持原值（不覆盖）
+    val version: String?,
+    val state: DshInstance.State,
+    // true = 本次不动它（磁盘读失败，事实不明；宁可保留旧结论也不猜）
+    val keepAsIs: Boolean = false,
+    // 日志用，英文
+    val reason: String = ""
+)
+
+/**
+ * requested = null / 空白 / "latest" / 与 actual 相等 ⇒ 视为匹配（与 isInstallComplete 的 null 语义一致）。
+ *
+ * "latest" 之所以算匹配：它是界面上的"最新版"这个 tag，不是精确版本号；预装的是什么就是什么。
+ * null 之所以算匹配：旧清单/新建实例没有目标版本，预装完整时它本来就"能跑"（收编孤儿目录的口径）。
+ *
+ * ★ R2b-A1-2（fix12 收尾）：**空白串也算匹配**。原来只有 null 算，于是
+ *   `dshVersion = ""`（手工编辑 / 回滚留下的脏值）在这一侧判"不匹配 ⇒ NOT_INSTALLED"，
+ *   而 `resolveLaunchTarget` 的 `takeIf { isNotBlank() }` 判"没有具体请求 ⇒ 放行预装" ——
+ *   同一台实例，卡片说未安装、点启动却能跑。两套判据必须逐序等价，
+ *   所以这里把"空/纯空白"与 null 归成同一档（语义上都是"没有目标版本"）。
+ */
+fun versionMatches(requested: String?, actual: String?): Boolean =
+    requested == null || requested.isBlank() || requested == "latest" ||
+        (actual != null && requested == actual)
+
+/**
+ * repair 的判定内核（顶层纯函数，JVM 可测）。
+ *
+ * 判定表（顺序即优先级，**不得调换**）：
+ * 0. 任一侧磁盘读取抛异常 ⇒ 不动它（事实不明时改状态 = 把可恢复的读故障变成永久误判）；
+ * 1. 自己的树完整 ⇒ READY，版本取磁盘真实值（BROKEN 也随之自愈 —— 条件 sticky 的逃生门）；
+ * 2. 自己有 package.json 但没有 lib/bin.js ⇒ **不回退预装**，按不完整处理（与 effectiveDshDir
+ *    的"看到 package.json 就认为是它"同口径；否则卡片说就绪、启动却跑另一份包）；
+ * 3. 自己没有 package.json、预装完整且版本相符（含目标版本为 null/latest）⇒ READY + 预装版本；
+ * 4. 其余 ⇒ 保留 BROKEN（保住失败原因），否则 NOT_INSTALLED。
+ *
+ * BROKEN 保留时 `version = null`，即**不覆盖** dshVersion —— 否则"重试"的目标版本会被磁盘上的
+ * 半棵树/预装版本带跑（修 E1-6 的重试目标漂移）。
+ */
+fun planRepair(inst: DshInstance, own: InstallFacts, pre: InstallFacts): RepairPlan {
+    // ★ R3a-A1-1 / A1-2（fix12 收尾）：读失败**只在自己那份树**上才值得"什么都不动"。
+    //   原来 `own.readError || pre.readError` 一起短路，代价有两条：
+    //   ① 自己的树完整、但预装那份读不出来 ⇒ 一个好实例被留在旧状态（NOT_INSTALLED/损坏），
+    //      用户看到「安装」按钮，最自然的动作是重装 500MB 把好树覆盖掉；
+    //      而 `pre` 是**循环外只读一次**的共享输入 ⇒ 一次读失败让全部实例本轮都不被校准。
+    //   ② 上次安装被杀留下的持久化 INSTALLING 会被永久跳过清理（keepAsIs 早于兜底），
+    //      卡片画成「安装中」且不可点，连「重装/删除」都藏在详情页 —— 没有"再校准一次"的出口。
+    //   正确的边界：自己树的事实足够裁决时（own 完整 / own 有 package.json 但缺入口），
+    //   根本不需要 pre；只有"要靠预装兜底"的那一支才受 pre 读失败影响。
+    if (own.readError) {
+        return RepairPlan(version = null, state = inst.state, keepAsIs = true, reason = "own tree read failed")
+    }
+    if (own.complete) {
+        return RepairPlan(version = own.version, state = DshInstance.State.READY, reason = "own tree complete")
+    }
+    if (own.hasPackageJson) {
+        // 半棵树（缺 bin.js）：结论不依赖 pre，所以 pre 读失败也不该改写它。
+        return RepairPlan(
+            version = null,
+            state = if (inst.state == DshInstance.State.BROKEN) DshInstance.State.BROKEN
+            else DshInstance.State.NOT_INSTALLED,
+            reason = "own tree incomplete (missing lib/bin.js)"
+        )
+    }
+    // 到这里只剩"自己没有包、要靠预装兜底"——这一支才真正需要 pre 的事实。
+    if (pre.readError) {
+        return RepairPlan(version = null, state = inst.state, keepAsIs = true, reason = "preinstalled tree read failed")
+    }
+    if (pre.complete && versionMatches(inst.dshVersion, pre.version)) {
+        return RepairPlan(version = pre.version, state = DshInstance.State.READY, reason = "preinstalled")
+    }
+    return RepairPlan(
+        version = null,
+        state = if (inst.state == DshInstance.State.BROKEN) DshInstance.State.BROKEN
+        else DshInstance.State.NOT_INSTALLED,
+        reason = "not installed"
+    )
+}
+
+/**
+ * 目录 fsync（落点 2，best-effort）：rename 之后把父目录的目录项刷到盘上，
+ * 否则断电时可能"rename 丢了 = 旧文件还在、新文件不见了"。
+ *
+ * ★ 只能用 `O_RDONLY`：`OsConstants.O_DIRECTORY` 在本项目用的 android.jar 里不存在（E2 实测），
+ *   而 `O_RDONLY` 是 0，在 Linux 上以只读打开目录再 fsync 是合法做法。
+ * ★ JVM 单测下 `android.system.Os` 是 `Stub!`，所以调用方必须经 [DshInstances.dirFsync] 注入，
+ *   且**任何失败都只记日志**（E5-04：把"写成功但目录 fsync 失败"报成写失败会触发无谓的重试）。
+ */
+private fun platformFsyncDir(dir: File) {
+    val fd = android.system.Os.open(dir.absolutePath, android.system.OsConstants.O_RDONLY, 0)
+    try {
+        android.system.Os.fsync(fd)
+    } finally {
+        android.system.Os.close(fd)
+    }
+}
 
 /**
  * dsh 实例的仓库单例，仿 [com.tungsten.fcl.setting.Profiles]：
@@ -70,6 +190,10 @@ object DshInstances {
     /** [delete] 轮询 [DshRuntime.activeInstanceId] 的间隔（停止收尾在秒级，100ms 足够跟手且不费） */
     private const val DELETE_WAIT_POLL_MS = 100L
 
+    // 清单备份的后缀前缀（`.corrupt-` / `.empty-` / `.dropped-`），见 [listCorruptBackups]。
+    // private const 不能用于 List，用 val（只读引用，不随实例状态变化）。
+    private val BACKUP_PREFIXES = listOf(".corrupt-", ".empty-", ".dropped-")
+
     private val _instances = MutableStateFlow<List<DshInstance>>(emptyList())
     val instances: StateFlow<List<DshInstance>> = _instances.asStateFlow()
 
@@ -78,7 +202,52 @@ object DshInstances {
 
     /** 正在删除中的实例 id（UI 显示"删除中"并禁用交互） */
     private val _deleting = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * **墓碑**：删除已经摘了清单、但目录 `deleteRecursively()` 没删干净（文件被占用/权限）的实例 id。
+     *
+     * ★ R3b-B3-6（fix12）：没有它的话，下次冷启的 [adoptOrphanInstanceDirs] 会把这个残留目录
+     *   原样收养回来（它只按"目录存在且不在清单里"判），用户看到"删掉的实例又回来了"（空壳）。
+     *
+     * 只在**进程内**有效（内存 Set）：重启后墓碑消失、残留目录会被再收编一次 —— 这是刻意的取舍，
+     * 因为持久化墓碑要往清单里加字段（Gson 双向兼容代价，见 E1 §5 对新增持久字段的论证），
+     * 而"删不干净"本身是极少数情况（文件系统层面失败）。真机上若反复出现，说明该目录的
+     * 删除需要用户介入（adb / 重装 App），届时再考虑持久化。
+     */
+    private val tombstonedInstanceIds = MutableStateFlow<Set<String>>(emptySet())
     val deleting: StateFlow<Set<String>> = _deleting.asStateFlow()
+
+    /**
+     * 清单**读取**失败（拒写中）。UI 横幅读它。
+     *
+     * ★ 为什么读失败要拒写（Round 25 §2.3 / E2-C-04）：读失败时内存里的事实是"空的"
+     *   （init 路径）或"上一次的"（重试路径），此时任何一次 [saveAsync] 都会把内存当成真相
+     *   写回磁盘 —— 原清单里那些没被读进来的实例就**永久消失**了（E2-F10 已实测复现）。
+     *   写成功**永不清**这个位：否则就是"读到的还是空清单、但因为写成功了所以认为好了"的自证清白。
+     *   清位只有两条：重试读取成功且本次会话无未保存改动；进程重启。
+     */
+    private val _manifestLoadFailed = MutableStateFlow(false)
+    val manifestLoadFailed: StateFlow<Boolean> = _manifestLoadFailed.asStateFlow()
+
+    /** 最近一次写盘失败（下次写成功自动清）。UI 横幅读它。 */
+    private val _manifestWriteFailed = MutableStateFlow(false)
+    val manifestWriteFailed: StateFlow<Boolean> = _manifestWriteFailed.asStateFlow()
+
+    /**
+     * 读失败期间发生的内存改动次数（[create]/[update]/[updateConfig]/[markState]/[delete]/[select]）。
+     *
+     * ★ 为什么需要它：拒写期间用户仍能新建/改名/删除（界面层不禁用），这些改动只活在内存里。
+     *   若"重试读取"直接整份替换 `_instances`，这些改动会被**无声冲掉**；
+     *   所以重试只在计数为 0 时才允许覆盖内存（E2-N-5）。
+     */
+    private var mutationsWhileLoadFailed = 0
+
+    /**
+     * 目录 fsync 的注入点（测试用）。null = 走平台实现 [platformFsyncDir]。
+     * ★ 必须留这个 seam：`android.system.Os` 在 JVM 单测里是 `Stub!`，否则"rename 后刷目录"
+     *   这段只能靠"跑了不崩"来假装测过（E2 实测）。
+     */
+    internal var dirFsync: ((File) -> Unit)? = null
 
     private var initialized = false
 
@@ -91,6 +260,12 @@ object DshInstances {
         load()
         // 状态校准放到 IO，别阻塞启动
         DshAppScope.scope.launch { repair() }
+        // ★ 读失败时给一次"重试读取"的机会（Round 25 §2.3 规则 6）：启动瞬间的 EIO 常常是
+        //   系统还在忙（开机解锁 / 存储挂载收尾），过一次 IO 队列往往就好了。只试一次，
+        //   失败就保持横幅，由用户点「重试」或重启。
+        if (_manifestLoadFailed.value) {
+            DshAppScope.scope.launch { retryManifestLoad() }
+        }
     }
 
     /** 测试/重置用 */
@@ -99,6 +274,17 @@ object DshInstances {
         initialized = false
         _instances.value = emptyList()
         _selectedId.value = null
+        _manifestLoadFailed.value = false
+        _manifestWriteFailed.value = false
+        mutationsWhileLoadFailed = 0
+        // 墓碑也要清：否则上一条用例留下的 id 会让下一条的收养扫描静默跳过同名目录，
+        // 症状是"测试单独跑绿、整批跑红"这种最难查的一类。
+        tombstonedInstanceIds.value = emptySet()
+    }
+
+    /** 读失败期间每改一次内存调一次（调用方先确认 [manifestLoadFailed] 为真） */
+    private fun countMutationWhileLoadFailed() {
+        if (_manifestLoadFailed.value) mutationsWhileLoadFailed++
     }
 
     val selected: DshInstance?
@@ -109,6 +295,7 @@ object DshInstances {
     fun select(id: String) {
         if (_instances.value.any { it.id == id }) {
             _selectedId.value = id
+            countMutationWhileLoadFailed()
             saveAsync()
         }
     }
@@ -135,6 +322,7 @@ object DshInstances {
         )
         _instances.update { it + inst }
         if (_selectedId.value == null) _selectedId.value = id
+        countMutationWhileLoadFailed()
         saveAsync()
         return inst
     }
@@ -176,6 +364,7 @@ object DshInstances {
     fun update(instance: DshInstance) {
         val next = instance.copy(updatedAt = System.currentTimeMillis())
         _instances.update { list -> list.map { if (it.id == next.id) next else it } }
+        countMutationWhileLoadFailed()
         saveAsync()
     }
 
@@ -198,6 +387,7 @@ object DshInstances {
                 )
             }
         }
+        countMutationWhileLoadFailed()
         saveAsync()
     }
 
@@ -219,14 +409,20 @@ object DshInstances {
                 ) else it
             }
         }
+        countMutationWhileLoadFailed()
         saveAsync()
     }
 
     /**
      * 依据磁盘真实内容校准所有实例状态（IO 线程调用）。
-     * - 磁盘上有 package.json 且能解析出版本 → READY（并把版本号纠正为真实值）
-     * - 否则 → NOT_INSTALLED；但 **BROKEN 保持 BROKEN**（保住失败原因，重启后仍可见）
-     * - 只清掉 INSTALLING 这种"卡死"的瞬态
+     *
+     * fix12（Round 25 §2.2）：判定内核改为顶层纯函数 [planRepair]，这里只负责"取事实 + 落裁决"：
+     * - 自己的树完整（有 version 且有 `lib/bin.js`）→ READY，版本纠正为磁盘真实值；
+     *   此时 **BROKEN 会自愈**（BROKEN 是"条件 sticky"：只在树不完整时保留）。
+     * - 自己的树不完整（包括"有 package.json、缺 lib/bin.js"的半棵树）→ NOT_INSTALLED（BROKEN 保留）。
+     * - 自己没有树、预装完整且版本相符（目标为 null / latest 也算）→ READY + 预装版本。
+     * - 任一侧读盘抛异常 → 这个实例原样不动（事实不明时改结论 = 把可恢复的故障变成永久误判）。
+     * - 只清掉 INSTALLING 这种"卡死"的瞬态（它落到 NOT_INSTALLED/READY 的兜底里）。
      */
     fun repair() {
         // 0) 顺带清掉历史遗留的凭据文件（见该函数的注释）。
@@ -236,57 +432,92 @@ object DshInstances {
         // ★ 先在 `_instances.update {}` 之外算好"磁盘事实"：update 的 lambda 在并发修改时会
         // 被重试，把文件 IO 放在里面（旧实现）会有两个坏处：① 同样的 readText 被重复执行；
         // ② 在原子更新的重试循环里持有 IO 时间。现在只把结果带进去做纯内存替换。
-        val planned = HashMap<String, Pair<String?, DshInstance.State>>()
-        // 预装 dsh 的版本（只读一次，供下面判断"能不能把预装当成这个实例的 dsh"）
-        val preinstalledVersion = DshInstaller.readVersionFromPackageJson(
-            File(File(DshPaths.ROOTFS_DIR, DshPaths.PREINSTALLED_DSH_REL), "package.json")
-        )
+        val planned = HashMap<String, RepairPlan>()
+        // 预装 dsh 的事实：**循环外只读一次**（它是所有实例共享的底座，每个实例各读一遍纯属浪费 IO）。
+        // 判定顺序与 `effectiveDshDir` 的解析顺序同口径 —— 见 [planRepair] 序 2/序 3。
+        val pre = readInstallFacts(File(DshPaths.ROOTFS_DIR, DshPaths.PREINSTALLED_DSH_REL))
         _instances.value.forEach { inst ->
             // ★ 判定"这个实例装好了没"必须区分两件事：
             //   ① 实例**自己**的 node_modules（真实安装结果）
             //   ② rootfs 里的**预装** dsh（共享底座）
-            //   原来直接用 effectiveDshPackageJson（会回退到预装），于是"请求 0.2.1、安装失败"
-            //   的实例会因为预装有 0.1.6 而被判成 READY —— 卡片出现"标题 0.2.1 / 副标题 0.1.6 /
-            //   就绪 / 239 B"这种自相矛盾的状态。
-            val ownVersion = DshInstaller.readVersionFromPackageJson(
-                File(File(DshPaths.instanceDir(inst.id), "node_modules/@deepseek-ai/dsh"), "package.json")
-            )
-            // 只有当实例没有自己的包、且**预装版本恰好就是它请求的版本**时，预装才算它的 dsh
-            val effectiveVersion = ownVersion
-                ?: preinstalledVersion?.takeIf { inst.dshVersion != null && it == inst.dshVersion }
-            val state = when {
-                effectiveVersion != null -> DshInstance.State.READY
-                // 没装好：把"安装中"这种卡死状态降级。
-                // 注意：**BROKEN 要保持 BROKEN**——否则 App 一重启，失败原因虽然还在 lastError 里，
-                // 但状态变成 NOT_INSTALLED 之后界面就不再展示它了（等于诊断信息凭空消失）。
-                inst.state == DshInstance.State.BROKEN -> DshInstance.State.BROKEN
-                else -> DshInstance.State.NOT_INSTALLED
+            // 旧实现用 effectiveDshPackageJson（会回退到预装）判"有没有包"，于是"请求 0.2.1、
+            // 安装失败"的实例会因为预装有 0.1.6 而被判成 READY —— 卡片出现"标题 0.2.1 /
+            // 副标题 0.1.6 / 就绪"这种自相矛盾的状态。现在两份事实分别取、由 [planRepair] 裁决。
+            //
+            // ★ 必须用 [DshPaths.ownDshDir] 而不是 effectiveDsh*：后者"看到 package.json 就认为
+            //   是它"，而这正是本轮要收口的错位（宿主按 package.json 判、脚本按 lib/bin.js 判）。
+            val own = readInstallFacts(DshPaths.ownDshDir(inst.id))
+            val plan = planRepair(inst, own, pre)
+            if (plan.keepAsIs) {
+                // 事实不明：状态原样留着，但必须留痕 —— 否则"这次启动为什么没校准"无从解释。
+                DshLogBus.append("[instances] ${inst.id}: ${plan.reason}; state left unchanged")
+                return@forEach
             }
-            planned[inst.id] = effectiveVersion to state
+            planned[inst.id] = plan
         }
 
         var changed = false
         _instances.update { list ->
             list.map { inst ->
-                val p = planned[inst.id] ?: return@map inst // 期间新建出来的实例：不动它
-                val (effectiveVersion, state) = p
-                if (inst.state == state && (effectiveVersion == null || inst.dshVersion == effectiveVersion)) {
+                val plan = planned[inst.id] ?: return@map inst // 期间新建的 / keepAsIs 的：不动它
+                if (inst.state == plan.state && (plan.version == null || inst.dshVersion == plan.version)) {
                     inst
                 } else {
                     changed = true
                     inst.copy(
-                        state = state,
-                        // 装好了 → 用磁盘真实版本；没装好 → 保留"目标版本"（安装开始时写入），
-                        // 这样卡片能显示"本来要装什么"，也才能被"同版本重试"复用
-                        dshVersion = effectiveVersion ?: inst.dshVersion,
-                        lastError = if (state == DshInstance.State.READY) null else inst.lastError,
+                        state = plan.state,
+                        // 树完整/命中预装 → 用磁盘真实版本；否则 plan.version == null ⇒ 保留
+                        // "目标版本"（安装开始时写入），这样卡片能显示"本来要装什么"，
+                        // 也才能被"同版本重试"复用（修 E1-6 的重试目标漂移）。
+                        dshVersion = plan.version ?: inst.dshVersion,
+                        lastError = if (plan.state == DshInstance.State.READY) null else inst.lastError,
                         updatedAt = System.currentTimeMillis()
                     )
                 }
             }
         }
-        if (changed) saveAsync()
+        if (changed) {
+            // ★ R3b-B4（fix12 收尾）：repair 也是**改内存**的路径，必须计入"读失败窗口内的改动"，
+            //   否则重试读成功时会把它整份覆盖（`_instances.value = parsed.instances`），
+            //   用户看到的"已按磁盘校准"会在一秒后变回磁盘上的旧结论。
+            countMutationWhileLoadFailed()
+            saveAsync()
+        }
     }
+
+    /**
+     * 读一份 dsh 树的三件事实（[InstallFacts]）：version / 有无 `package.json` / 有无 `lib/bin.js`。
+     *
+     * ★ 只认 `package.json` 是**文件**（[File.isFile]）：同名目录不算（`readText` 会 EISDIR，
+     *   但那就该走 readError 而不是"有 package.json"）。
+     * ★ "读 package.json 抛异常" 与 "文件不存在" 必须分开：前者是 EIO/权限（事实不明，不能动状态），
+     *   后者是"确实没有"（可判 NOT_INSTALLED）。这是 [planRepair] 序 0 的输入。
+     */
+    private fun readInstallFacts(dir: File): InstallFacts {
+        val pkg = File(dir, "package.json")
+        val hasPkg = pkg.isFile
+        val hasBin = File(dir, "lib/bin.js").isFile
+        if (!hasPkg) return InstallFacts(version = null, hasPackageJson = false, hasBinJs = hasBin)
+        val reading = runCatching { pkg.readText() }
+        val text = reading.getOrNull()
+            ?: return InstallFacts(version = null, hasPackageJson = true, hasBinJs = hasBin, readError = true)
+        // 解析失败（坏 JSON）不算"读失败"：文件读到了，只是内容认不出 ⇒ 按"没有版本"处理，
+        // 与 DshInstaller.readVersionFromPackageJson 的 runCatching 口径一致。
+        val version = installFactsVersionOf(text)
+        return InstallFacts(version = version, hasPackageJson = true, hasBinJs = hasBin)
+    }
+
+    /**
+     * 从 package.json 文本取 `version`：解析不了 / 不是对象 / 缺失 / 非字符串 / 空串 ⇒ null。
+     *
+     * 语义与 `DshInstaller.readVersionFromPackageJson` 的 `pkg.version?.takeIf { it.isNotBlank() }` 一致；
+     * 分开实现是为了让"读文件"与"解析文本"两步各自可判（前者失败才是 readError）。
+     */
+    private fun installFactsVersionOf(text: String): String? = runCatching {
+        val root = JsonParser.parseString(text)
+        if (!root.isJsonObject) return@runCatching null
+        root.asJsonObject.stringOrNull("version")?.takeIf { it.isNotBlank() }
+    }.getOrNull()
 
     /**
      * 清掉**历史版本**留下的凭据文件：旧的 `credentials.env`（明文！）与 `credentials.enc`
@@ -320,14 +551,39 @@ object DshInstances {
 
     /**
      * 删除实例：从清单移除并异步删除磁盘目录（约 300MB，不能放主线程）。
-     * @param onFinished 目录删完后回调（主线程/IO 线程不定，调用方自行切线程）
+     *
+     * ★ fix12（Round 25 §2.6）：**写盘成功才删目录**。旧实现是"先摘内存、异步写盘、无条件删目录"，
+     *   那次写盘一旦失败（磁盘满 / rename 失败 / 读失败期间被拒写），磁盘上的清单**没变**而目录
+     *   已经删掉 ⇒ 下次冷启该实例"原样复活"、点进去是一个空目录（E2-N-1 / N-8 实测复现）。
+     *   现在把"写清单"提到删目录之前、并且同步等它出结果；写不进去就把内存**回滚**（实例回到
+     *   列表）并让调用方知道删除没发生。
+     *
+     * @param onFinished 目录删完后回调（主线程/IO 线程不定，调用方自行切线程）。
+     *                   写盘失败/拒绝时以 `false` 回调（且什么都没删）。
+     * @return false = 拒绝（清单读取失败中），**什么都没做**（内存没摘、目录没删）。
+     *         true = 已受理（真正的成败走 [onFinished]）。
      */
-    fun delete(id: String, onFinished: ((Boolean) -> Unit)? = null) {
+    fun delete(id: String, onFinished: ((Boolean) -> Unit)? = null): Boolean {
+        if (_manifestLoadFailed.value) {
+            // 拒写期间删目录是最坏的一种"看起来成功"：目录没了、清单没变 ⇒ 重启就复活。
+            // 所以这里**一步都不做**（连内存都不摘），让调用方去提示"当前不可删除"。
+            DshLogBus.append(
+                "[instances] delete $id refused: manifest load failed (its record cannot be rewritten safely)"
+            )
+            onFinished?.invoke(false)
+            return false
+        }
         val inst = byId(id)
+        // 记住原位置：写盘失败回滚时按原位放回去，别把用户熟悉的排序打乱。
+        val removedIndex = _instances.value.indexOfFirst { it.id == id }
+        val wasSelected = _selectedId.value == id
         _instances.update { list -> list.filterNot { it.id == id } }
-        if (_selectedId.value == id) _selectedId.value = _instances.value.firstOrNull()?.id
+        if (wasSelected) _selectedId.value = _instances.value.firstOrNull()?.id
         _deleting.update { it + id }
-        saveAsync()
+        // 只有"确实改了内存"才计改动（读失败期间的删除会被上面的闸门直接拒掉，走不到这里）。
+        countMutationWhileLoadFailed()
+        // ★ 这里**不再** saveAsync()（老代码在摘内存后立刻异步写一次）：那次写的失败没人接，
+        //   而真正的顺序要求是"清单落盘成功之后才允许删目录"——见协程里的同步写。
         DshAppScope.scope.launch {
             // 先停掉可能还在跑的进程（不然删目录会留下活着的 node）。
             // ★ 必须等进程真正退出再删：stop() 是异步的（TERM→5s→KILL），
@@ -426,7 +682,73 @@ object DshInstances {
                     "[instances] stop timed out for ${inst?.name ?: id}, deleting directory anyway"
                 )
             }
+            // ★ fix12（E2-N-8）：**先让清单落盘，成功之后才允许删目录**。
+            //   顺序不能反：目录一旦删掉就无法回滚（300MB 的用户 home/workspace 也在里面），
+            //   而清单写失败是**可回滚**的（把内存里的实例放回去即可）。
+            //   写盘必须同步等结果（writeMutex 内 writeNow），不能用 saveAsync 那种 fire-and-forget
+            //   —— 旧实现正是"异步写 + 无条件删"，写失败时实例在下次冷启原样复活、点进去是空目录。
+            val manifestWritten = writeMutex.withLock {
+                runCatching { writeNow() }.fold(
+                    onSuccess = {
+                        _manifestWriteFailed.value = false
+                        true
+                    },
+                    onFailure = { e ->
+                        _manifestWriteFailed.value = true
+                        // 全局日志：与 saveAsync 的失败同一口径（影响所有实例的索引，不是某个实例的运行问题）。
+                        DshLogBus.append("[instances] failed to write instances.json before delete: ${e.message}")
+                        false
+                    }
+                )
+            }
+            if (!manifestWritten) {
+                // 回滚内存：实例回到列表（按原位），否则界面会显示"已删除"而磁盘上它还在。
+                //
+                // ★ R3b-B3-5（fix12 收尾）：回滚必须**幂等**。等待写盘的这段时间里
+                //   `retryManifestLoad()` 可能已经把磁盘真相整份替换进来（`_instances.value =
+                //   parsed.instances`），而磁盘上这条记录**还在**（本次写盘正是失败的）——
+                //   无脑插回就会得到"同一 id 两份"，`_instances` 是 List 不是 Set，
+                //   `byId`/`firstOrNull` 只取第一份，`updateConfig` 的 map 却会同时改两份。
+                //   所以插回前先查：已经在列表里（说明重读已经把它放回来了）就不重复插。
+                _instances.update { list ->
+                    if (list.any { it.id == id }) list
+                    else {
+                        val back = mutableListOf<DshInstance>()
+                        var inserted = false
+                        val at = removedIndex.coerceIn(0, list.size)
+                        list.forEachIndexed { i, it ->
+                            if (!inserted && i == at) {
+                                inst?.let { back += it }
+                                inserted = true
+                            }
+                            back += it
+                        }
+                        if (!inserted && inst != null) back += inst
+                        back
+                    }
+                }
+                if (wasSelected) _selectedId.value = id
+                _deleting.update { it - id }
+                // 任务区不留终态行：这次删除**没有发生**（连目录都没动），留一条 DONE/FAILED
+                // 反而像是在说"删除执行过了"，与实例仍在列表里的事实冲突；`_deleting` 移除后
+                // 投影里那条"删除中"自然消失。
+                onFinished?.invoke(false)
+                return@launch
+            }
             val ok = runCatching { DshPaths.instanceDir(id).deleteRecursively() }.getOrDefault(false)
+            // ★ R3b-B3-6（fix12 收尾）：目录删不干净时留下墓碑。
+            //   实例记录已经从清单里摘掉，但残留目录会让下次冷启的 adoptOrphanInstanceDirs
+            //   **原样收养回来**（它只按"目录存在且不在清单里"判）——用户看到"删掉的实例又回来了"，
+            //   而且是个空壳（state=NOT_INSTALLED）。这里记下 id，收养时跳过。
+            //   只影响按目录扫描的收养路径：如果用户之后真的新建了一个同名 id（几乎不可能，
+            //   id 带时间戳+序号+随机后缀），也不会被这条挡住（`create` 走的是 newId，不经过收养）。
+            if (!ok) {
+                tombstonedInstanceIds.update { it + id }
+                DshLogBus.append(
+                    "[instances] delete $id dir left files behind; marked as tombstoned so the " +
+                        "orphan adoption will not resurrect it"
+                )
+            }
             // ★ 保持全局：同上，删除结果是"实例管理"这件事的结论，不是该实例运行期间的输出。
             //   实例页此刻正在被关掉，写实例流没有接收方（实例日志文件也不在实例目录里，
             //   见下方删除块 —— 旧注释"日志文件也已被删"的表述一并更正）。
@@ -484,6 +806,7 @@ object DshInstances {
             )
             onFinished?.invoke(ok)
         }
+        return true
     }
 
     /** 异步统计某实例占用体积（列表里显示，IO 线程） */
@@ -683,26 +1006,81 @@ object DshInstances {
      * wipe / explicit empty array) then scans the instances directory and adopts directories that
      * are not in the manifest as NOT_INSTALLED instances ([adoptOrphanInstanceDirs]) — otherwise
      * those directories would stay invisible and occupy disk forever.
+     *
+     * fix12（Round 25 §2.4）：顺序**必须是** 读 → 空判 → 解析，且每条"读到东西"的出口都要先留证：
+     * - 读失败 ⇒ 置 [manifestLoadFailed]（此后 [saveAsync]/[delete] 一律拒写/拒绝），**不动内存**；
+     * - 0 字节（[String.isEmpty]，**不是** `f.length() == 0L`）⇒ 备份 `.empty-<ts>` 再按空清单继续；
+     *   ⚠️ 判据必须建立在"读成功之后"：`length()` 对同名目录 / stat 失败也返回 0，用它会把一次
+     *   真读失败误判成"0 字节清单"，从而绕过上面的拒写、把原清单覆盖掉（E2 C-05 的要害）；
+     * - 非 0 空白 ⇒ 与旧语义一致（不备份，防 K12 回归）；
+     * - Corrupt ⇒ 备份 `.corrupt-<ts>`；**改名与复制都失败时拒写**（不覆盖原文，E2-N-4）；
+     * - Parsed 但有元素被丢 ⇒ 追加 `.dropped-<ts>` 原始文本备份（下一次落盘就会把坏条目永久抹掉）；
+     * - 每个"成功"出口统一清 [manifestLoadFailed] 与改动计数（清位只有这里与重启两条）。
      */
     fun loadFrom(f: File) {
         if (!f.exists()) {
             // 缺失文件 = 空清单（K12）。恢复扫描照走：目录存在但清单缺失时，残留实例目录同样会"永久隐形"。
             _instances.value = emptyList()
             _selectedId.value = null
+            markManifestLoadSucceeded()
             adoptOrphanInstanceDirs()
             return
         }
         // BL-098: readText 必须包 runCatching —— 读失败（EIO 等）此前直穿 init() 一路抛进
         // FCLApp.onCreate，启动即崩。读不到内容不是"清单损坏"（文件可能好端端的，只是这次读不了），
         // 所以既不清空列表也不做 .corrupt 备份，只记一条全局英文警告。
+        // ★ fix12：这一次失败要变成**拒绝写盘**的状态位 —— 否则后续任意一次 create/markState
+        //   都会把"内存里的空表"写成磁盘事实，原清单里的实例永久消失（E2-F10 实测）。
         val text = runCatching { f.readText() }.getOrElse { e ->
             DshLogBus.append("[instances] failed to read instances.json: ${e.message}")
+            _manifestLoadFailed.value = true
+            return
+        }
+        if (text.isEmpty()) {
+            // 真 0 字节（全新安装 / 首次写被打断）：先留证再按空清单继续。
+            // 备份必须**在**后面的收编（adopt → saveAsync）之前完成 —— 那次写盘会覆盖原文，
+            // 覆盖之后就没有"原来的名字/端口/版本"可挽回了（E2 C-05 §4.3）。
+            // 顺序：renameTo（原子、不留副本）→ 失败则 copyTo（父目录只读时 rename 会失败，
+            // 但目标可写时 copy 仍可能成功）。都失败 ⇒ 不能覆盖原文，直接拒写。
+            val backup = backupFileFor(f, "empty")
+            val backedUp = runCatching { f.renameTo(backup) }.getOrDefault(false) ||
+                runCatching {
+                    if (f.isFile) {
+                        f.copyTo(backup, overwrite = true)
+                        // copyTo 成功但原文件还在 ⇒ 删掉原名，否则后面的写盘要 rename 覆盖它
+                        // （Android/Linux 上可以，但保留"原文已移走"的语义更清楚）。删不掉不算失败：
+                        // 备份已到手，写盘时 rename 会覆盖。
+                        runCatching { f.delete() }
+                        true
+                    } else {
+                        false
+                    }
+                }.getOrDefault(false)
+            if (!backedUp) {
+                // 一个字节都没动过：留着原文总比覆盖掉好（用户/开发者还能 adb pull 出来）。
+                DshLogBus.append(
+                    "[instances] instances.json is 0 bytes; could not back it up, left in place at " +
+                        f.absolutePath + " (refusing to overwrite)"
+                )
+                _manifestLoadFailed.value = true
+                return
+            }
+            DshLogBus.append("[instances] instances.json is 0 bytes; backed up to ${backup.absolutePath}")
+            _instances.value = emptyList()
+            _selectedId.value = null
+            // ★ 清位必须在 adopt 之前：adopt 内部会 saveAsync，而它此刻看到的内存就是"空清单 +
+            //   收编项"——这正是这次读成功得出的结论，写它是对的。顺序反了（先 adopt 再清位）
+            //   会让那次写被"上一次"的拒写位拦住，收编结果落不到盘上。
+            markManifestLoadSucceeded()
+            adoptOrphanInstanceDirs()
             return
         }
         if (text.isBlank()) {
             // Empty / whitespace-only = empty manifest. Nothing to parse, nothing to back up.
+            // ★ 非 0 空白**不备份**：它不是"被截断的写"，而是内容本身无意义（K12 语义不变）。
             _instances.value = emptyList()
             _selectedId.value = null
+            markManifestLoadSucceeded()
             adoptOrphanInstanceDirs()
             return
         }
@@ -711,41 +1089,135 @@ object DshInstances {
                 // 整体损坏（不是合法 JSON / 根不是对象 / instances 不是数组）才走这里：
                 // 另存一份便于人工找回，并把清单重置为空。
                 // 单个元素的坏字段不会到达这里 —— parseManifest 已逐元素容错（BL-098）。
-                // ★ 保持全局：清单（instances.json）是**所有实例**的索引，不是任何一个实例的日志。
+                // ★ 保持全局：清单（instances.json）是**所有**实例的索引，不是任何一个实例的日志。
                 //   而且此刻 _instances 已被清空，"这条属于哪个实例"根本无从判断（也不该猜）。
                 // BL-101a：日志必须带**完整路径**（旧实现只写 "kept a backup" 连文件名都没有，
                 // 无 adb 的用户根本无从把它抄出来）；[listCorruptBackups] 是恢复 UI 的代码侧入口。
-                val backup = File(f.parentFile, "${f.name}.corrupt-${System.currentTimeMillis()}")
-                val backedUp = runCatching { f.renameTo(backup) }.getOrDefault(false)
-                if (backedUp) {
+                // ★ fix12（E2-N-4）：改名失败要**再试一次复制**；两者都失败 ⇒ 拒写。
+                //   旧实现"left in place"之后同一调用栈里就会 adopt → saveAsync 把坏文件覆盖掉，
+                //   那句"留证"实际上一秒都留不住。
+                val backup = backupFileFor(f, "corrupt")
+                val moved = runCatching { f.renameTo(backup) }.getOrDefault(false)
+                val copied = moved || runCatching {
+                    if (f.isFile) {
+                        f.copyTo(backup, overwrite = true)
+                        runCatching { f.delete() }
+                        true
+                    } else {
+                        false
+                    }
+                }.getOrDefault(false)
+                if (!copied) {
                     DshLogBus.append(
                         "[instances] failed to parse instances.json (${parsed.reason}); " +
-                            "kept a backup at ${backup.absolutePath}"
+                            "could not move or copy it to a backup, left in place at ${f.absolutePath} " +
+                            "(refusing to overwrite)"
                     )
-                } else {
-                    // 改名失败（少见）：原文件留在原地（后续写盘会覆盖它），但要留痕，别静默。
-                    DshLogBus.append(
-                        "[instances] failed to parse instances.json (${parsed.reason}); " +
-                            "could not move it to a backup, left in place at ${f.absolutePath}"
-                    )
+                    _manifestLoadFailed.value = true
+                    return
                 }
+                DshLogBus.append(
+                    "[instances] failed to parse instances.json (${parsed.reason}); " +
+                        "kept a backup at ${backup.absolutePath}"
+                )
                 _instances.value = emptyList()
                 _selectedId.value = null
+                markManifestLoadSucceeded()
                 adoptOrphanInstanceDirs()
             }
 
             is ParsedManifest.Parsed -> {
-                _instances.value = parsed.instances
-                if (parsed.instances.isEmpty()) {
-                    // 显式空数组：同款恢复扫描（清单说"没有实例"、磁盘上却有目录 = 同一种隐形）。
-                    _selectedId.value = null
-                    adoptOrphanInstanceDirs()
+                // ★ fix12（E2-N-3）：元素级丢弃（K-07）时，磁盘上那份"坏条目还在"的原文必须留一份 ——
+                //   否则用户下一次任意操作（改名 / 装完 / 删除）就会用"已丢元素"的内存整份覆盖磁盘，
+                //   坏条目永久消失且无备份可查。备份失败只记日志，**不**因此拒写（内容本身是能用的）。
+                if (parsed.dropped > 0) {
+                    backupDroppedManifest(f, parsed.dropped)
+                }
+                val replaced = mutationsWhileLoadFailed == 0
+                if (replaced) {
+                    // 只有"本次会话在读失败期间没有改动"时才允许整份替换内存 —— 否则会把用户
+                    // 在拒写窗口里新建/改名/删除的实例**无声冲掉**（它们本来就没落盘，冲掉即丢）。
+                    _instances.value = parsed.instances
                 } else {
-                    // 选中项校正语义与旧实现一致：清单里的 selectedId 有效则用它，否则回落第一个
-                    _selectedId.value = parsed.selectedId ?: parsed.instances.firstOrNull()?.id
+                    DshLogBus.append(
+                        "[instances] manifest is readable again, but this session has " +
+                            "$mutationsWhileLoadFailed unsaved change(s); keeping the in-memory list"
+                    )
+                }
+                // E2-N-2：**无论清单空不空**都跑一次收编。旧实现只在"清单为空"时跑，于是
+                // "读失败窗口里 create 出来、但没落盘"的实例目录既不在清单、也不会被收编 ——
+                // 永久占盘且永不显示（E2-N-2 实测）。
+                // ★ 清位在 adopt **之前**：adopt 内部会 saveAsync，而它看到的内存（磁盘解析结果 +
+                //   收编项）正是这次读成功得出的结论，写它是对的；顺序反了会被上一次的拒写位拦住。
+                // ★ 只有"内存已被磁盘真相替换"时才清位（§2.3 清位规则 A：读成功**且**无改动）。
+                //   保留内存的分支不清位 —— 否则随后的任意一次 saveAsync 会拿这份"混着未保存改动"
+                //   的内存去覆盖刚刚读通的清单，等于把 §2.4 的整句"保留内存现状"变成空话。
+                if (replaced) markManifestLoadSucceeded()
+                adoptOrphanInstanceDirs()
+                if (replaced) {
+                    // 选中项校正语义与旧实现一致：清单里的 selectedId 有效则用它，否则回落第一个。
+                    // （收编可能往列表尾部追加了实例，所以这一步放在 adopt 之后取值。）
+                    // ★ 内存被保护（replaced == false）时**不动** selectedId：那是用户在失败窗口里
+                    //   自己选的，覆盖它同样是"无声冲掉一次改动"。
+                    val current = _instances.value
+                    _selectedId.value = parsed.selectedId?.takeIf { sid -> current.any { it.id == sid } }
+                        ?: current.firstOrNull()?.id
                 }
             }
         }
+    }
+
+    /** 所有"读成功"出口的统一收尾：清拒写位 + 清改动计数（E2 §3.3 清位规则 A）。 */
+    private fun markManifestLoadSucceeded() {
+        _manifestLoadFailed.value = false
+        mutationsWhileLoadFailed = 0
+    }
+
+    /**
+     * Parsed 但 [ParsedManifest.Parsed.dropped] > 0：把**原始文本**另存一份 `.dropped-<ts>`。
+     *
+     * 为什么要副本而不是"重写一份干净的"：目标是"别丢证据"，不是"帮用户修文件"。原文里那条
+     * 坏条目的字段恰恰是排障要看的（是 port 类型错了还是 state 拼错了），重写会把它们洗掉。
+     * 失败只记日志：清单本身可用，不该因为备份失败就让整个启动路径变成拒写（与 `.empty-` /
+     * `.corrupt-` 不同 —— 那两处的原文**紧接着就要被覆盖**，这里不会）。
+     */
+    /**
+     * 备份文件名：`<manifest>.<kind>-<毫秒>`，**并保证不与已有文件重名**。
+     *
+     * ★ R3b-B2（fix12 收尾）：原来直接用 `System.currentTimeMillis()` 拼名，而三处备份全都
+     *   `copyTo(..., overwrite = true)`（`renameTo` 在 Windows 上已存在即失败、在 Linux 上是
+     *   原子覆盖）—— 同一毫秒内跑两次 `loadFrom`（`loadFrom` 没有串行化，`init()` 与
+     *   `retryManifestLoad()` 可以撞上）就会**静默覆盖掉前一份证据**，日志里还写着两条
+     *   "kept a backup at <同一路径>"，看起来像留了两份。
+     *   这条分支存在的唯一目的就是留证，所以名字必须唯一：撞了就在后面追加 `-2`、`-3`…
+     *   （最多试 100 次，仍撞则退回原名字——此时宁可覆盖，也不要让备份动作本身失败。）
+     */
+    private fun backupFileFor(manifest: File, kind: String): File {
+        val parent = manifest.parentFile ?: return File(manifest.absolutePath + ".$kind")
+        val stamp = System.currentTimeMillis()
+        val first = File(parent, "${manifest.name}.$kind-$stamp")
+        if (!first.exists()) return first
+        for (n in 2..100) {
+            val candidate = File(parent, "${manifest.name}.$kind-$stamp-$n")
+            if (!candidate.exists()) return candidate
+        }
+        return first
+    }
+
+    private fun backupDroppedManifest(f: File, dropped: Int) {
+        val backup = backupFileFor(f, "dropped")
+                runCatching { f.copyTo(backup, overwrite = true) }
+                    .onSuccess {
+                        // ⚠️ 只复制、**不删原名**：这份清单是"能用但少了几个元素"的，它必须留在
+                        // 原位继续当当前清单（下一次写盘会把它换成干净版本，那是预期行为）。
+                        DshLogBus.append(
+                            "[instances] manifest had $dropped dropped entr(y/ies); " +
+                                "kept the original text at ${backup.absolutePath}"
+                        )
+                    }
+                    .onFailure { e ->
+                        DshLogBus.append("[instances] failed to back up the original manifest text: ${e.message}")
+                    }
     }
 
     /**
@@ -766,13 +1238,15 @@ object DshInstances {
      */
     private fun adoptOrphanInstanceDirs() {
         if (!DshPaths.isLoaded) return // 路径系统未就绪（如 JVM 单测）：没有可扫的目录
-        val recovered = rebuildMissingInstances(
-            File(DshPaths.INSTANCES_DIR),
-            _instances.value.mapTo(HashSet()) { it.id }
-        )
+        // ★ R3b-B3-6：跳过墓碑 —— 那些是"删除已生效但目录没删干净"的残留，收养它等于复活。
+        val known = _instances.value.mapTo(HashSet()) { it.id }
+        known += tombstonedInstanceIds.value
+        val recovered = rebuildMissingInstances(File(DshPaths.INSTANCES_DIR), known)
         if (recovered.isEmpty()) return
         _instances.update { it + recovered }
         if (_selectedId.value == null) _selectedId.value = recovered.first().id
+        // ★ 这行 saveAsync 只在"读成功"的出口被执行（loadFrom 的每个出口都先清拒写位再调本函数），
+        //   所以它不会被自己刚恢复出来的"拒写"拦住 —— 顺序见 loadFrom 各出口的注释。
         saveAsync()
         // R-LOG（英文）：恢复了几条 + 完整名单，用户/排障者可据此辨认这些实例的来历。
         DshLogBus.append(
@@ -801,39 +1275,134 @@ object DshInstances {
     }
 
     /**
-     * BL-101a：instances.json 的损坏备份清单（`instances.json.corrupt-<毫秒>`，与 manifest 同目录）。
+     * BL-101a：instances.json 的备份清单（`instances.json.<kind>-<毫秒>`，与 manifest 同目录）。
      * **public，供未来"从备份恢复"的 UI 使用**（本轮只做代码侧就绪，UI 入口登记为后续任务）；
      * 无备份 / 路径系统未就绪时返回空表。
-     * 排序：按文件名倒序 —— 后缀是毫秒时间戳（等宽十进制），字典序即时间序，最新在前。
+     *
+     * fix12（Round 25 §2.4）：前缀集合扩为 `.corrupt-` / `.empty-` / `.dropped-` —— 三种证据都来自
+     * 同一条"先留证再继续"的策略，只列 `.corrupt-` 等于把另外两种藏起来（无 adb 的用户根本抄不到）。
+     * 排序改为按**后缀时间戳数值**倒序：三种前缀的字典序互不相交（`c` < `d` < `e`），
+     * 整名排序会让"所有 .corrupt 永远排在所有 .empty 之前"，混排后"最新在前"就不再成立（E2-N-7）。
      */
     fun listCorruptBackups(): List<File> =
         if (DshPaths.isLoaded) listCorruptBackups(manifestFile()) else emptyList()
 
     /**
      * [listCorruptBackups] 的可测种子：给定 manifest 文件，列出**同一父目录**下的全部
-     * `${manifest.name}.corrupt-*` **文件**（不是目录），最新在前；无父目录 / 无备份返回空表。
+     * `${manifest.name}.{corrupt|empty|dropped}-*` **文件**（不是目录），最新在前；
+     * 无父目录 / 无备份返回空表。
+     *
+     * 时间戳解析不出来（手工改过名）的条目排在最后，且彼此之间保持文件名倒序（稳定、可预期）。
      */
     fun listCorruptBackups(manifest: File): List<File> {
         val dir = manifest.parentFile ?: return emptyList()
-        val prefix = "${manifest.name}.corrupt-"
-        return dir.listFiles { f -> f.isFile && f.name.startsWith(prefix) }
-            ?.sortedByDescending { it.name }
+        val prefixes = BACKUP_PREFIXES.map { "${manifest.name}$it" }
+        return dir.listFiles { f -> f.isFile && prefixes.any { f.name.startsWith(it) } }
+            ?.sortedWith(
+                compareByDescending<File> { backupTimestampOf(it.name) ?: Long.MIN_VALUE }
+                    .thenByDescending { it.name }
+            )
             ?: emptyList()
     }
 
+    /** 备份后缀的时间戳（`.corrupt-<ms>` / `.empty-<ms>` / `.dropped-<ms>`）；认不出返回 null */
+    /**
+     * 从备份文件名里取出毫秒时间戳，供"最新在前"排序。
+     *
+     * ★ R3b-B2：备份名现在可能带唯一化后缀（`….corrupt-1700000000000-2`），
+     *   原来 `substringAfterLast('-')` 会把那个 `2` 当成时间戳（于是那份备份永远排在最后）。
+     *   改为取第一个形如 `<kind>-<数字段>` 的值。`\d{4,}` 的下界要够低以容测试里的小时间戳，
+     *   又要够高以排除唯一化后缀（那个序号最多 3 位，因为 `backupFileFor` 只试到 100）。
+     */
+    private fun backupTimestampOf(name: String): Long? =
+        Regex("""(?:corrupt|empty|dropped)-([0-9]{4,})""").find(name)
+            ?.groupValues?.get(1)?.toLongOrNull()
+
     /**
      * 异步 + 串行 + 原子写盘。UI 线程只更新内存状态，不做磁盘 IO。
+     *
+     * fix12（Round 25 §2.3 规则 2）：读失败期间**同步拒绝**。
+     * - 入口就判一次：调用方立刻知道"这次没写"，可以做 UI 提示（[Boolean] 返回值就是为这个）；
+     * - 协程里 `withLock` **之前再判一次**：置位之前已经排队的任务（例如启动瞬间连发的几次
+     *   saveAsync）在拿到锁时会被拦下 —— 只判入口会漏掉它们。
+     * - 写成功永不清 [manifestLoadFailed]（否则就是"读到的还是空表、但写成功了所以认为好了"
+     *   的自证清白）；写失败/成功只动 [manifestWriteFailed]。
+     *
+     * @return false = 同步拒绝（清单读取失败中，什么都没写）；true = 已排队
      */
-    fun saveAsync() {
+    fun saveAsync(): Boolean {
+        if (_manifestLoadFailed.value) {
+            DshLogBus.append("[instances] save refused: manifest load failed (not overwriting a manifest we could not read)")
+            return false
+        }
         DshAppScope.scope.launch {
+            // 拿到锁**之前**再判一次：入口那次判不到的，是"置位前已经排队"的任务 ——
+            // 它们在队列里等锁的时候位被置上了，等它们真正开跑时这里就会拦下。
+            if (_manifestLoadFailed.value) {
+                DshLogBus.append("[instances] save dropped: manifest load failed before write")
+                return@launch
+            }
             writeMutex.withLock {
-                runCatching { writeNow() }.onFailure {
-                    // ★ 保持全局：写清单失败影响**所有**实例（下次启动整份清单可能读不出来），
-                    //   不是某个实例的运行问题 —— 归到任一实例都会让别处看不到这个 App 级故障。
-                    DshLogBus.append("[instances] failed to write instances.json: ${it.message}")
+                if (_manifestLoadFailed.value) {
+                    // 排队等锁期间又被置位（读到一半失败了）：这次写同样不能落盘。
+                    DshLogBus.append("[instances] save dropped: manifest load failed before write")
+                    return@withLock
                 }
+                runCatching { writeNow() }.fold(
+                    onSuccess = { _manifestWriteFailed.value = false },
+                    onFailure = {
+                        _manifestWriteFailed.value = true
+                        // ★ 保持全局：写清单失败影响**所有**实例（下次启动整份清单可能读不出来），
+                        //   不是某个实例的运行问题 —— 归到任一实例都会让别处看不到这个 App 级故障。
+                        DshLogBus.append("[instances] failed to write instances.json: ${it.message}")
+                    }
+                )
             }
         }
+        return true
+    }
+
+    /**
+     * 手动重试读取（UI 横幅的「重试」按钮）。
+     *
+     * 语义（Round 25 §2.3 规则 4）：读成功 **且** 本次会话没有未保存改动 ⇒ 走 [loadFrom] 的成功路径
+     * （内部清位）+ 补跑一次 [repair]；否则返回 false 并留一条日志。
+     *
+     * ★ 为什么要补跑 repair：`init()` 的 repair 是**一次性**的，如果它在读失败时就跑过了（按空表
+     *   跑，等于空转），重试成功后磁盘上的 INSTALLING 僵尸态 / "清单说 READY 但树已空"就不会再被
+     *   校准，只能等下次冷启（E2 §6）。所以"清位之后必须立刻补跑一次"。
+     * ★ 末段的判定不看 [loadFrom] 的"内存是否被替换"：重试的前提是没有未保存改动，而改动计数在
+     *   这里必然为 0，所以 `loadFrom` 一定会整份替换内存并清位。
+     *
+     * @return true = 已恢复（可写）；false = 仍不可用（读取仍失败 / 存在未保存改动 / 路径未就绪）
+     */
+    fun retryManifestLoad(): Boolean {
+        if (!DshPaths.isLoaded) return false
+        val f = manifestFile()
+        // 先做一次"能不能读"的探测：读不到就保持拒写，别白跑 loadFrom（它也是只读不写，但
+        // 会在日志里再刷一遍失败行，横幅点几次就刷几遍）。
+        val readable = runCatching { f.readText() }.isSuccess
+        if (!readable) {
+            // 探测都失败：位保持（loadFrom 里的置位路径这次没走到，这里自己兜住），不发多余日志。
+            _manifestLoadFailed.value = true
+            return false
+        }
+        if (mutationsWhileLoadFailed > 0) {
+            // ★ 覆盖内存会把这些改动无声冲掉，而它们本来就没落盘 —— 所以这里**不吞掉**这个位，
+            //   而是明确保留拒写：让用户看见横幅（"本次会话的改动不会保存"）比假装恢复更诚实。
+            //   （顺带纠正 §2.3 规则 4 的括号措辞：这是"保留拒写 + 日志"，不是"重新置位"。）
+            DshLogBus.append(
+                "[instances] manifest is readable, but this session has " +
+                    "$mutationsWhileLoadFailed unsaved change(s); keeping the in-memory list " +
+                    "and write protection"
+            )
+            return false
+        }
+        loadFrom(f)
+        if (_manifestLoadFailed.value) return false
+        // 读成功了：补跑一次状态校准（理由见 KDoc）。
+        repair()
+        return true
     }
 
     /** 同步写（测试用；生产路径请用 [saveAsync]） */
@@ -855,12 +1424,26 @@ object DshInstances {
      */
     fun writeManifest(f: File, json: String) {
         val tmp = File(f.parentFile, "${f.name}.tmp")
-        tmp.writeText(json)
+        // ★ fix12（C-06 落点 1）：必须用 FileOutputStream + fd.sync() 而不是 writeText ——
+        //   writeText 只 close 不 fsync，掉电时"rename 成功但内容还是空的/旧的"就是这种漏法。
+        FileOutputStream(tmp).use { out ->
+            out.write(json.toByteArray(Charsets.UTF_8))
+            out.fd.sync()
+        }
         if (!tmp.renameTo(f)) {
             throw IOException(
                 "atomic rename failed: ${tmp.name} -> ${f.name}; kept ${tmp.name} for recovery " +
                     "(refusing to overwrite ${f.name} non-atomically)"
             )
+        }
+        // ★ fix12（C-06 落点 2）：rename 之后把父目录的目录项刷一遍 —— 否则断电时"rename 丢了 =
+        //   旧文件还在、新文件不见了"。这一步 **best-effort**：数据此刻已经完整地落在目标路径上，
+        //   把目录 fsync 失败当写失败会触发无谓的重试/报错（E5-04），所以只记日志。
+        val fsync: (File) -> Unit = dirFsync ?: ::platformFsyncDir
+        val parent = f.parentFile
+        if (parent != null) {
+            runCatching { fsync(parent) }
+                .onFailure { DshLogBus.append("[instances] dir fsync failed: ${it.message}") }
         }
     }
 }
