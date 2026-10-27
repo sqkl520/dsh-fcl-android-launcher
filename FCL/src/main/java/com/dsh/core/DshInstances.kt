@@ -492,8 +492,13 @@ object DshInstances {
      *   但那就该走 readError 而不是"有 package.json"）。
      * ★ "读 package.json 抛异常" 与 "文件不存在" 必须分开：前者是 EIO/权限（事实不明，不能动状态），
      *   后者是"确实没有"（可判 NOT_INSTALLED）。这是 [planRepair] 序 0 的输入。
+     *
+     * ★ 从 `private` 提到 `internal`（R26 / E6 §5.3-17）：这是 `planRepair` 的**唯一**输入入口，
+     *   而 `R26ConsistencyTest` 要拿它和 `DshInstaller.isInstallComplete` 做跨实现一致性对照。
+     *   若保持私有，测试只能**重抄**一遍解析逻辑（我第一版就是这么写的）—— 那是"镜像实现"型假绿：
+     *   生产侧解析改了，测试的抄本不跟着改，断言仍然绿，等于没测。
      */
-    private fun readInstallFacts(dir: File): InstallFacts {
+    internal fun readInstallFacts(dir: File): InstallFacts {
         val pkg = File(dir, "package.json")
         val hasPkg = pkg.isFile
         val hasBin = File(dir, "lib/bin.js").isFile
@@ -512,8 +517,10 @@ object DshInstances {
      *
      * 语义与 `DshInstaller.readVersionFromPackageJson` 的 `pkg.version?.takeIf { it.isNotBlank() }` 一致；
      * 分开实现是为了让"读文件"与"解析文本"两步各自可判（前者失败才是 readError）。
+     *
+     * ★ 同 [readInstallFacts]：提到 `internal` 供跨实现一致性测试直接用（避免测试重抄逻辑）。
      */
-    private fun installFactsVersionOf(text: String): String? = runCatching {
+    internal fun installFactsVersionOf(text: String): String? = runCatching {
         val root = JsonParser.parseString(text)
         if (!root.isJsonObject) return@runCatching null
         root.asJsonObject.stringOrNull("version")?.takeIf { it.isNotBlank() }
