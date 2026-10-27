@@ -892,7 +892,26 @@ object DshRuntime {
             argvEnv = argvEnv,
             procEnv = secretEnv,
             workDirRootfs = "$instancePathInRootfs/workspace",
-            bindCacheAsTmp = true
+            bindCacheAsTmp = true,
+            // ★ R27 / P0-A：`HOME` 也指向实例 workspace（原来写死 `/root`）。
+            //
+            // 为什么必须与 workDirRootfs 同源：dsh 的目录选择器（`dsh-host-directory-picker-browse`）
+            // 打开对话框时用 `homedir()` 当初始目录，而 `homedir()` 在 POSIX 上就读 `$HOME`。
+            // rootfs 的 `/root` 是**空目录**（只有 `.profile`/`.bashrc`，零子目录），
+            // 而 picker 只列目录 ⇒ 列表恒为空 ⇒ 用户看到"选择工作区目录"是一个空框，
+            // 体感就是"根本加载不出来"（R27 三层根因的第一层）。
+            //
+            // 改到 workspace 之后：对话框一打开就落在用户真正能用的目录（实例工作区），
+            // 而且与 dsh 的工作目录一致，"在这里放文件"与"在这里选目录"是同一个地方。
+            //
+            // **安全边界**（改前已逐项核实，见 docs/reports/round27/SUMMARY.md §三 P0-A）：
+            // - dsh 的配置/凭据/cookie 在 `DSH_HOME`（脚本显式设为 `$INSTANCE_DIR/home`），
+            //   不读 `$HOME/.dsh` ⇒ 配置不会搬家；
+            // - npm 缓存走显式的 `NPM_CONFIG_CACHE`（`<filesDir>/dsh/npm-cache`）
+            //   ⇒ 不会因为 HOME 变了而重新下载依赖；
+            // - `HOME` 仍在 `isAllowedEnvKey` 白名单里（`ProotCommand.kt:182`），
+            //   但它由本函数显式构造、不接受外部输入，不会被注入面利用。
+            homeRootfs = "$instancePathInRootfs/workspace"
         )
 
         _state.value = State.Starting(instance.id, instance.name)

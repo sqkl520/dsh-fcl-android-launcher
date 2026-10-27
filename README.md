@@ -7,7 +7,7 @@
 
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-471%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-475%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 **[⬇️ 下载最新版](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)** ·
@@ -21,9 +21,9 @@
 > 如果喜欢这个项目就 Star 一下喵 ⭐
 >
 > **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
-> 最新验证包是 `0.1.6-SNAPSHOT-fix14`（截至本文最后更新）。本 README 不单独维护版本号 ——
+> 最新验证包是 `0.1.6-SNAPSHOT-fix15`（截至本文最后更新）。本 README 不单独维护版本号 ——
 > 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
-> 装完请到**关于页核对版本号后缀**（如 `-fix14`）确认装对了包；文件名带 `-fixN` 的才是当前验证包。
+> 装完请到**关于页核对版本号后缀**（如 `-fix15`）确认装对了包；文件名带 `-fixN` 的才是当前验证包。
 
 ---
 
@@ -95,7 +95,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 
 ## 📌 当前进度
 
-> 最后更新：2026-10-27（fix14）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
+> 最后更新：2026-10-28（fix15）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
 
 | 模块 | 状态 |
 |---|---|
@@ -108,9 +108,10 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 修复轮次 **fix12**（R25 判据统一：装好了没只认一套口径 + 失败不再被吞掉） | ✅ 已发布（code 118，见 Releases） |
 | 修复轮次 **fix13**（R26 第三件事：测试从「钉实现」升级为「契约 + 管线」） | ✅ 已发布（code 119，见 Releases） |
 | 修复轮次 **fix14**（R26 收尾：跨实现一致性测试去掉镜像实现，加变异验证） | ✅ 已发布（code 120，见 Releases） |
+| 修复轮次 **fix15**（R27：外部浏览器选不了工作区 —— `HOME` 指向实例 workspace） | ✅ 已出包（code 121） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
-**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **471/471** · 脚本自检 25/25
+**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **475/475** · 脚本自检 25/25
 （每轮修复都跑全量；关键修复均钉成断言）
 
 > 版本号唯一真源仍是 `gradle.properties` 的 `dshVersion` / `dshVersionCode`；
@@ -150,7 +151,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 - **贡献指南**：[`CONTRIBUTING.md`](CONTRIBUTING.md) —— 怎么报问题、怎么提 PR、代码风格与测试要求。
 - **构建与测试**：`.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest`（Windows，单测）；
   `sh run-compile.sh` → `sh run-tests.sh`（arm64 Linux / 手机沙箱，编译校验 + 单测）。环境接线见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)。
-- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix14`）、机型、Android 版本、复现步骤；
+- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix15`）、机型、Android 版本、复现步骤；
   想改代码请先开个 Issue 说一声，避免白写。
 
 [![Contributors](https://contrib.rocks/image?repo=sqkl520/dsh-fcl-android-launcher)](https://github.com/sqkl520/dsh-fcl-android-launcher/graphs/contributors)
