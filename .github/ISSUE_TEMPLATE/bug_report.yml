@@ -1,0 +1,144 @@
+name: Bug 报告
+description: 装了/启动/停止/界面出问题时用这个
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        报之前先做两件事：
+        1. 在 [Issues](https://github.com/sqkl520/dsh-fcl-android-launcher/issues?q=is%3Aissue) 里搜一下（含已关闭的），
+           不少问题在 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 说明里已写了根因和绕法。
+        2. **贴日志前删掉 API Key、token 和访问链接** —— dsh 的访问链接里带凭据，公开等于送人。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号（带后缀）
+      description: 应用内「关于」页显示的那串，必须带 -fixN 后缀。README 里写的版本可能过期，以关于页为准。
+      placeholder: 0.1.6-SNAPSHOT-fix12
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: 装的是哪个包
+      description: 正式包与调试包是两个不同的 App，可以并存
+      options:
+        - 正式包（包名 com.dsh.fcl.androidlauncher，无 .debug 后缀）
+        - 调试包（包名带 .debug 后缀，fix5 及更早的验证包也是这种）
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 机型
+      placeholder: 例如 小米 14 / Redmi Note 12T Pro
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Android 版本
+      placeholder: 例如 Android 14（SDK 34）
+    validations:
+      required: true
+
+  - type: input
+    id: webview
+    attributes:
+      label: Android System WebView 版本
+      description: 设置 → 应用 → Android System WebView（部分机型是 Chrome）。界面白屏/模型选不了，八成和它有关。
+      placeholder: 例如 120.0.6099.144
+    validations:
+      required: false
+
+  - type: dropdown
+    id: root
+    attributes:
+      label: 设备是否 root
+      description: 本项目主打未 root 运行；root 环境会改变 proot 的权限判定
+      options:
+        - 未 root
+        - 已 root
+        - 不确定
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 出问题的阶段
+      options:
+        - 安装 APK
+        - 首次启动（准备运行环境 / 解压）
+        - 版本页（拉列表 / 下载 / 安装 dsh）
+        - 启动实例
+        - 停止实例
+        - dsh 界面（白屏 / 门禁提示 / 登录）
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开 App 开始，一步一步写
+      placeholder: |
+        1. 打开 App，停在实例页
+        2. 点「启动」
+        3. 等约 10 秒后……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 有报错文案就原样抄，别改写
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志片段
+      description: 应用内日志页可复制；实例日志与全局日志分开看，贴对应那份。请先删掉 Key / token / 访问链接。
+      render: text
+      placeholder: |
+        [app] launcher=0.1.6-SNAPSHOT-fix12 ...
+        ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他补充
+      description: 截图、录屏、之前试过什么、重装/重启后是否还复现
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 我已搜索过已有 Issue（含已关闭的），没有重复
+          required: true
+        - label: 我贴的日志里没有 API Key、token 或访问链接
+          required: true
+        - label: 我知道这是个人项目，不承诺响应时效
+          required: true
