@@ -1,5 +1,6 @@
 package com.dsh
 
+import com.dsh.core.DshInstances
 import com.dsh.core.DshInstaller
 import com.dsh.core.InstallFacts
 import com.dsh.core.planRepair
@@ -46,22 +47,15 @@ class R26ConsistencyTest {
         }
     }
 
-    /** 用 [planRepair] 的 own 腿算出"装完了没"（等价于 fix12 的判定）。 */
+    /**
+     * 用**生产实现**（`DshInstances.readInstallFacts`）算出 own 腿的事实，再过 `planRepair`。
+     *
+     * ★ R26 / E6 §5.3-17：第一版这里**重抄**了一遍 `readInstallFacts` + `installFactsVersionOf`
+     *   的解析逻辑。那是"镜像实现"型假绿 —— 生产侧解析改了，本测试的抄本不跟着改，
+     *   断言仍然绿，等于什么也没测。现在两个函数已提到 `internal`，这里直接调真的。
+     */
     private fun planRepairSaysComplete(ownDir: File): Boolean {
-        val pkg = File(ownDir, "package.json")
-        val hasPkg = pkg.isFile
-        val hasBin = File(ownDir, "lib/bin.js").isFile
-        val text = if (hasPkg) runCatching { pkg.readText() }.getOrNull() else null
-        val version = text?.let {
-            runCatching {
-                val root = com.google.gson.JsonParser.parseString(it)
-                if (!root.isJsonObject) null
-                else root.asJsonObject.get("version")
-                    ?.takeIf { v -> v.isJsonPrimitive && v.asJsonPrimitive.isString }
-                    ?.asString?.takeIf { v -> v.isNotBlank() }
-            }.getOrNull()
-        }
-        val facts = InstallFacts(version, hasPkg, hasBin, readError = hasPkg && text == null)
+        val facts = DshInstances.readInstallFacts(ownDir)
         val plan = planRepair(DshInstance(id = "x", name = "x"), facts, facts)
         return plan.state == DshInstance.State.READY
     }
