@@ -20,9 +20,9 @@
 > 有任何问题欢迎提 Issues，如果喜欢就点个 Star 吧！
 >
 > **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
-> 最新验证包是 `0.1.6-SNAPSHOT-fix11`（截至本文最后更新）。本 README 不单独维护版本号 ——
+> 最新验证包是 `0.1.6-SNAPSHOT-fix12`（截至本文最后更新）。本 README 不单独维护版本号 ——
 > 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
-> 装完请到**关于页核对版本号后缀**（如 `-fix11`）确认装对了包；文件名带 `-fixN` 的才是当前验证包。
+> 装完请到**关于页核对版本号后缀**（如 `-fix12`）确认装对了包；文件名带 `-fixN` 的才是当前验证包。
 
 ---
 
@@ -94,7 +94,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 
 ## 📌 当前进度
 
-> 最后更新：2026-10-26（fix11）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
+> 最后更新：2026-10-27（fix12）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
 
 | 模块 | 状态 |
 |---|---|
@@ -104,9 +104,10 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 真机端到端：装 → 启 → 停 → 再启 → 对话 | ✅ 已点亮（0.1.6，2026-10-11） |
 | 修复轮次 fix1 ~ fix9 | ✅ 全部已发布（fix5 除外，见下）；状态见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
 | 修复轮次 **fix11**（R24 状态机收口：启动重试与停止可靠性） | ✅ 已发布（code 117，见 Releases） |
+| 修复轮次 **fix12**（R25 判据统一：装好了没只认一套口径 + 失败不再被吞掉） | ✅ 已发布（code 118，见 Releases） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
-**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **394/394** · 脚本自检 18/18
+**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **438/438** · 脚本自检 18/18
 （每轮修复都跑全量；关键修复均钉成断言）
 
 > 版本号唯一真源仍是 `gradle.properties` 的 `dshVersion` / `dshVersionCode`；
