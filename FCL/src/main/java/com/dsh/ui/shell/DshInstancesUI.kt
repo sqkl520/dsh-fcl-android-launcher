@@ -1,13 +1,18 @@
 package com.dsh.ui.shell
 
 import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Typeface
 import android.text.TextUtils
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.mio.ui.adapter.SpacingItemDecoration
@@ -26,6 +31,7 @@ import com.dsh.fcl.androidlauncher.databinding.ActivityDshInstancesBinding
 import com.dsh.fcl.androidlauncher.databinding.ViewDshTaskRowBinding
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
+import com.tungsten.fcllibrary.component.view.FCLTextView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
@@ -310,6 +316,44 @@ private class InstanceListPage(
     private var lastNotifiedState: DshRuntime.State? = null
 
     /**
+     * 清单读/写失败的**常驻横幅**（fix12 / E6-3 · C-04）—— 左一句说明 + 右侧「重试」。
+     *
+     * ## 为什么是代码建、且只给这两个 View 自己挂主题回调
+     * `activity_dsh_instances.xml` 里没有可用的横幅容器，而本轮**不许**改布局 XML
+     * （互斥文件表只给了四个 .kt）。所以在已有根 ConstraintLayout 上代码建一条水平 LinearLayout：
+     * 底色用 `bg_container_white` + `ThemeEngine` 的 ltColor 着色（与 task_area 的
+     * `app:auto_tint` 同一个落点），文字走 autoTint（黑/白）。
+     * 代码建的 FCL 控件拿不到 XML 里的 `app:auto_text_tint`，所以颜色在这里**显式**设一次，
+     * 并靠 FCLTextView 构造时注册的主题回调在换主题时维持（那个回调读的就是 autoTint 字段）。
+     *
+     * ## 为什么不可关闭
+     * 横幅说的是"你接下来的改动不会保存" —— 这是一个**仍然成立的事实**，不是一次性通知。
+     * 可关闭 = 允许用户主动丢掉这层保护（E6 §4.2）。出路只有「重试」，且仅读失败时给：
+     * 写失败时清单**已经读进来了**，重读一遍不会让内存里这份改动落盘（W1 的
+     * retryManifestLoad 在有未保存改动时也会拒绝），摆出来就是一个点了不会好的按钮。
+     *
+     * ## 几何：横幅常驻页面最上面，task_area 跟着它走
+     * 横幅只钉一条边（`top→parent.top`）；task_area 的 top 在"父容器顶 / 横幅底"之间切换
+     * （见 [setBannerAnchored]）。横幅 GONE 时 task_area 立刻回到原位 —— 读成功时页面高度
+     * 与今天逐像素一致，这是显式回归项（E6 §4.4 的"读成功时无横幅、页面高度与今天完全一致"）。
+     * `instance_list` / `empty_hint` 的 `top` 仍挂 task_area.bottom，一行都不用改。
+     */
+    private lateinit var manifestBanner: LinearLayout
+    private lateinit var manifestBannerText: FCLTextView
+    private lateinit var manifestBannerRetry: FCLTextView
+
+    /** 这一帧横幅是否显示（[observeState] 同时用它压掉空态文案） */
+    private var manifestBannerShown = false
+
+    /**
+     * task_area 的 top 现在挂在哪：true = 挂在横幅下面（横幅显示中），false = 挂父容器顶。
+     *
+     * 记这个状态是为了让 [setBannerAnchored] 幂等 —— 位没翻转时不重设 layoutParams
+     * （每次重设都会 requestLayout，横幅订阅与列表订阅各来一帧就是两次无谓的全页测量）。
+     */
+    private var bannerAnchored = false
+
+    /**
      * 亮暗切换时把任务区重绑一遍。
      *
      * ## 为什么需要它
@@ -369,9 +413,125 @@ private class InstanceListPage(
         // 任务区那几行的颜色是按数据现算的（见 [themeRebind]），控件自己的主题回调刷新不了它们
         ThemeEngine.getInstance().registerEvent(binding.taskList, themeRebind)
 
+        buildManifestBanner()
+
         observeState()
         observeTasks()
         maybeAdoptOrphan()
+    }
+
+    /**
+     * 建清单失败横幅（形态与取舍见 [manifestBanner] 的 KDoc）。
+     *
+     * 只在页面建一次；之后 [applyManifestBanner] 只切可见性、文案与一条约束。
+     * 尺寸/间距照任务区那一块（12dp 内边距、8dp 圆角由 bg_container_white 提供），
+     * 这样两条常驻条看起来是同一套设计，而不是「临时拼出来的一条」。
+     */
+    private fun buildManifestBanner() {
+        // 尺寸直接走本类的 dp()（同文件已有一份，不再复制一个局部版）
+        val root = binding.root
+
+        manifestBanner = LinearLayout(context).apply {
+            // ★ 代码建的 View id 是 NO_ID，而 ConstraintLayout 只认有 id 的锚点（NO_ID 会被当成
+            //   "这个锚点不存在"，task_area 的 top 会直接失效）。所以先给 id 再谈约束。
+            id = View.generateViewId()
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_container_white)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            visibility = View.GONE
+            // 白底要按主题染成 ltColor —— 与任务区（FCLConstraintLayout + app:auto_tint）同一落点。
+            // 这里不用 FCLConstraintLayout：它的 autoTint 是构造期从 XML 属性读的，代码建出来的实例
+            // 拿到的是 false，事后改字段也不会补跑一次 tint。自己注册一步，语义更直白。
+            ThemeEngine.getInstance().registerEvent(this) {
+                backgroundTintList =
+                    ColorStateList.valueOf(ThemeEngine.getInstance().getTheme().ltColor)
+            }
+        }
+
+        val textColor = ThemeEngine.getInstance().getTheme().autoTint
+        manifestBannerText = FCLTextView(context).apply {
+            // 与布局里的 app:auto_text_tint 同一档（autoTint 只管"下次主题刷新时算黑还是白"，
+            // 首次显示的颜色必须现在给，FCLTextView 的构造期刷新发生在 setAutoTint 之前）。
+            setAutoTint(true)
+            setTextColor(textColor)
+            textSize = 12f
+            maxLines = 3
+            setText(R.string.dsh_manifest_load_failed)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        // 「重试」用文字而不是图标按钮：它与横幅正文一样需要本地化，而「重试」这两个字本身
+        // 就是最清楚的 affordance（图标还得靠 contentDescription 才读得出来，屏幕上没有字）。
+        // 最小 48dp 高保证够得着（正文只有 12sp）。
+        //
+        // ★ R2c-3（fix12 收尾）：**必须给按钮外观**。原来它是纯文本（与正文同色同字号，只差 bold），
+        //   而这个位置往往是用户唯一的恢复入口（清单读失败 ⇒ 整页空白）。用状态色 + 圆角底，
+        //   一眼能看出"这里可以点"。
+        manifestBannerRetry = FCLTextView(context).apply {
+            setAutoTint(true)
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setText(R.string.dsh_manifest_retry)
+            minHeight = dp(48)
+            gravity = Gravity.CENTER
+            setPadding(dp(12), 0, dp(12), 0)
+            setBackgroundResource(R.drawable.bg_item_rounded)
+            // 圆角底同样要跟着主题走（与横幅本体一个落点）。
+            ThemeEngine.getInstance().registerEvent(this) {
+                val theme = ThemeEngine.getInstance().getTheme()
+                backgroundTintList = ColorStateList.valueOf(theme.ltColor)
+                setTextColor(theme.getColor2())
+            }
+            setOnClickListener { onManifestRetry() }
+        }
+
+        manifestBanner.addView(manifestBannerText)
+        manifestBanner.addView(manifestBannerRetry)
+
+        // 横幅只钉一条约束（top→父容器顶）。**故意不**在这里同时钉 bottom→task_area.top：
+        // 两条边各钉一头就会与下面"task_area.top→横幅.bottom"形成互指，虽然是可解的，
+        // 但读代码的人（以及未来改布局的人）会先怀疑是个环。留一头自由，语义一眼可见：
+        // 横幅永远长在页面最上面，task_area 由 [setBannerAnchored] 决定挂哪。
+        root.addView(
+            manifestBanner,
+            ConstraintLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                startToStart = ConstraintLayout.LayoutParams.PARENT_ID
+                endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+                topToTop = ConstraintLayout.LayoutParams.PARENT_ID
+                // 与任务区留 8dp：两块都是 8dp 圆角的白底，紧贴会糊成一块。
+                // 横幅 GONE 时 ConstraintLayout 会把它的尺寸与 margin 一起折叠成零（GONE 控件的
+                // 默认行为，除非另设 goneMargin），所以读成功时页面高度不受这一项影响。
+                bottomMargin = dp(8)
+            }
+        )
+        // 不做任何"初始对齐"：布局里 task_area 本来就 top→parent，横幅初始 GONE，
+        // [bannerAnchored] 的初值 false 与它一致 —— 读成功时整页与今天完全一样。
+    }
+
+    /**
+     * 决定任务区挂在谁下面：横幅显示时挂横幅，否则挂父容器顶。
+     *
+     * 只切 task_area 这一条约束，`instance_list` / `empty_hint` 的 `top` 都还挂
+     * `task_area.bottom`，一行都不用改 —— 横幅一出现，下面整块自然被推下去。
+     * 幂等（同一状态提前返回）：[applyManifestBanner] 每次位变化都会调它，
+     * 不判的话每帧都要重新 requestLayout。
+     */
+    private fun setBannerAnchored(onTop: Boolean) {
+        if (bannerAnchored == onTop) return
+        bannerAnchored = onTop
+        val params = binding.taskArea.layoutParams as ConstraintLayout.LayoutParams
+        if (onTop) {
+            params.topToTop = ConstraintLayout.LayoutParams.UNSET
+            params.topToBottom = manifestBanner.id
+        } else {
+            params.topToBottom = ConstraintLayout.LayoutParams.UNSET
+            params.topToTop = ConstraintLayout.LayoutParams.PARENT_ID
+        }
+        binding.taskArea.layoutParams = params
     }
 
     /**
@@ -491,6 +651,32 @@ private class InstanceListPage(
         val historyCount: Int
     )
 
+    /**
+     * 横幅「重试」：手动再读一次清单（fix12 / C-04 · E6 §4.2）。
+     *
+     * ★ R2c-4（fix12 收尾）：**写失败也要有出路**。原实现只在读失败时露出按钮，理由是
+     *   "写失败时重读不会把内存里这份改动写下去" —— 那句话把"重**读**"与"重**写**"混为一谈：
+     *   `saveAsync()` 就是现成的写重试（写成功会自己清 `manifestWriteFailed`）。
+     *   不给它按钮，横幅就是"永挂、无按钮、不可关闭"，用户只能重启 App。
+     *
+     * 两条路都同步探测一次、都是几 KB 的小文件，主线程上跑一趟可以接受；
+     * 真失败时 toast 把"重启 App"这条出路说出来 —— 否则用户会对着一成不变的横幅反复点。
+     *
+     * 成功路径不需要在这里改 UI：两个位都是 StateFlow，清位会推一帧，横幅自己消失。
+     */
+    private fun onManifestRetry() {
+        val loadFailed = DshInstances.manifestLoadFailed.value
+        val ok = if (loadFailed) {
+            DshInstances.retryManifestLoad()
+        } else {
+            // 写失败：重新排队一次写盘。saveAsync 返回"是否被接受"（读失败时它仍会拒）。
+            DshInstances.saveAsync()
+        }
+        if (!ok) {
+            Toast.makeText(context, R.string.dsh_manifest_retry_failed, Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun observeState() {
         scope.launch {
             combine(
@@ -512,9 +698,20 @@ private class InstanceListPage(
                     //   （E6 表 #8，IMPL-PLAN 5.3 U2）。
                     val stoppingId = (state as? DshRuntime.State.Stopping)?.instanceId
                     adapter.submit(list, runningId, deleting, stoppingId)
-                    val empty = list.isEmpty()
-                    binding.emptyHint.visibility = if (empty) View.VISIBLE else View.GONE
-                    binding.instanceList.visibility = if (empty) View.GONE else View.VISIBLE
+                    applyEmptyState(list)
+                }
+        }
+        // 清单健康位单独一条订阅（不并进上面那个 combine）：它只在读/写失败翻转时发射，
+        // 并进列表流会让"空表 + 横幅"这一帧的渲染依赖第三方流的到达顺序。
+        scope.launch {
+            combine(
+                DshInstances.manifestLoadFailed,
+                DshInstances.manifestWriteFailed
+            ) { loadFailed, writeFailed -> loadFailed to writeFailed }
+                .collect { (loadFailed, writeFailed) ->
+                    applyManifestBanner(loadFailed, writeFailed)
+                    // 横幅一出现就要重新算空态（空表时实例列表还藏着，见 applyEmptyState）。
+                    applyEmptyState(DshInstances.instances.value)
                 }
         }
         scope.launch {
@@ -525,6 +722,50 @@ private class InstanceListPage(
         scope.launch {
             DshRuntime.state.collect { st -> notifyIfNeeded(st) }
         }
+    }
+
+    /**
+     * 画横幅（fix12 / C-04 · E6-3）。
+     *
+     * 两个位**都要看**：读失败是"这份清单不可信 / 不可写"，写失败是"这次的改动没落盘"——
+     * 两者都会让用户接下来做的事白做，共用一条常驻横幅、按情况换一句话（E6 §4.4 的口径）。
+     * 读失败优先：它同时意味着"写也一定被拒"，先说说不出话的那一层。
+     */
+    private fun applyManifestBanner(loadFailed: Boolean, writeFailed: Boolean) {
+        val shown = loadFailed || writeFailed
+        manifestBannerShown = shown
+        manifestBanner.visibility = if (shown) View.VISIBLE else View.GONE
+        setBannerAnchored(shown)
+        if (!shown) return
+        manifestBannerText.setText(
+            if (loadFailed) R.string.dsh_manifest_load_failed
+            else R.string.dsh_manifest_write_failed
+        )
+        // ★ R2c-4（fix12 收尾）：**两支都给按钮**。读失败走重读，写失败走重新写盘
+        //   （见 [onManifestRetry]）。原来只有读失败有按钮，写失败就是"永挂、无按钮、
+        //   不可关闭"——而那恰恰是最需要重试的一层。
+        manifestBannerRetry.visibility = View.VISIBLE
+    }
+
+    /**
+     * 空态 / 列表的可见性。
+     *
+     * ★ E6-3：**横幅显示时绝不显示空态文案**（`dsh_instances_empty`）。
+     *   读失败时内存本来就是空表（`DshInstances` 的初值是 `emptyList()`，读失败又不动它），
+     *   于是页面会同时说两句反话："还没有实例，去装一个" + "读不到清单"。而去装一个正是
+     *   最危险的动作（会 `create()` → 覆盖磁盘上那份读不出来的清单）。
+     *
+     * `instance_list` 的可见性**不动**（仍是"空就藏"）：空表时它本来就没东西可画，
+     * 拉起来也只是一片白，藏掉不影响横幅。所以只有空态文案多了一个"横幅在就不显示"的条件。
+     *
+     * @param list 这一帧的实例列表。[observeState] 的列表分支传流里的新值；横幅分支只改
+     *   空态判据，传当前值即可 —— 两个分支各自都会调一次，最后落到同一帧的状态上。
+     */
+    private fun applyEmptyState(list: List<DshInstance>) {
+        val empty = list.isEmpty()
+        binding.emptyHint.visibility =
+            if (empty && !manifestBannerShown) View.VISIBLE else View.GONE
+        binding.instanceList.visibility = if (empty) View.GONE else View.VISIBLE
     }
 
     private fun notifyIfNeeded(st: DshRuntime.State) {
@@ -627,8 +868,19 @@ private class InstanceListPage(
                 .show()
             return
         }
-        DshServices.installer(context).install(inst, version)
-        Toast.makeText(context, context.getString(R.string.dsh_install_started, version), Toast.LENGTH_SHORT).show()
+        DshServices.installer(context).install(inst, version).let { started ->
+            // ★ fix12（E3-C-03 / §2.15）：这条路径直接调 installer、不经 VM，拿不到
+            //   DispatchReason —— 只能看返回值。false = 单飞闸门被占（别的入口正在装这台实例），
+            //   此时**没有**任何安装开始。旧实现无条件弹「已开始安装」，是又一处名实两张皮。
+            //   两条文案分开取而不是"同一句带参数"：dsh_install_in_flight 没有占位符，
+            //   传参给它只是靠 String.format 的宽容（无 % 时原样返回），读代码的人会以为它带版本号。
+            val msg = if (started) {
+                context.getString(R.string.dsh_install_started, version)
+            } else {
+                context.getString(R.string.dsh_install_in_flight)
+            }
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun confirmDelete(inst: DshInstance) {
@@ -642,8 +894,16 @@ private class InstanceListPage(
                 // 而 DshInstances.delete() 会把整个实例目录 deleteRecursively() ——
                 // 它自然跟着一起没了。原来那步 DshCredentials.clear() 是启动器自管密钥时代的
                 // 残留，Key 既然不再由启动器持有，留在这只会让人以为它去了别的地方。
-                DshInstances.delete(inst.id)
-                Toast.makeText(context, R.string.dsh_delete_started, Toast.LENGTH_SHORT).show()
+                //
+                // ★ fix12（§2.6 / E6）：delete() 现在返回 Boolean —— false = 清单读取失败中，
+                //   它**什么都没做**（内存没摘、目录没删）。那时候再说「正在删除…」就是骗人，
+                //   所以两条文案按返回值二选一。
+                val accepted = DshInstances.delete(inst.id)
+                Toast.makeText(
+                    context,
+                    if (accepted) R.string.dsh_delete_started else R.string.dsh_delete_refused,
+                    Toast.LENGTH_SHORT
+                ).show()
             }
             .setNegativeButton(context.getString(R.string.dialog_negative), null)
             .create()

@@ -53,6 +53,8 @@
         <string name="dsh_delete_message">Delete "%1$s"? This removes its dsh installation and settings (~300MB) and cannot be undone.</string>
         <string name="dsh_delete_started">Deleting instance…</string>
         <string name="dsh_delete_title">Delete instance</string>
+        <!-- fix12：清单读取失败期间 delete() 直接拒绝（不写盘就不动目录），要把"为什么没删"说出来 -->
+        <string name="dsh_delete_refused">Can\'t delete: the instance list failed to load</string>
         <string name="dsh_disk_usage">Disk usage: %1$s</string>
         <string name="dsh_download_error">Failed to load: %1$s</string>
         <string name="dsh_download_show_prerelease">Show previews</string>
@@ -78,7 +80,17 @@
         <string name="dsh_install_started_message">Installing %1$s in the background. You can watch progress on the instance list.</string>
         <string name="dsh_install_started_title">Installation started</string>
         <string name="dsh_installed">Installed</string>
+        <!-- fix12 / E6-4：版本行"该版本的安装失败"角标。**只允许 state == BROKEN 使用**；
+             用户主动取消 ≠ 安装失败（那是 NOT_INSTALLED，版本行应显示"未安装"）。
+             与实例卡片的 dsh_state_broken（损坏）是措辞差异，不是同一句话 ——
+             版本页每行就是一个版本、角标紧挨安装按钮，语境已把它锚定在"这个版本"上。 -->
+        <string name="dsh_installed_broken">Failed</string>
         <string name="dsh_install_skipped">%1$s is already installed — you can start it now</string>
+        <!-- fix12 / E6-4：详情页动作行按 DispatchReason 分叉。dsh_install_skipped 仍是"安装入口
+             发现目标版本已就绪，于是跳过"（带版本号）；下面两条是不带版本号的**结论**文案，
+             给"你点的这个版本已经装好了"和"这个版本正在装"两种状态用。 -->
+        <string name="dsh_install_already_installed">Already installed — you can start it</string>
+        <string name="dsh_install_in_flight">That version is already installing</string>
         <string name="dsh_instance_gone">This instance no longer exists</string>
         <string name="dsh_instance_subtitle">v%1$s · port %2$s · %3$s</string>
         <!-- 实例详情页：一个实例 = 一个页面，页内再用 tab 切运行/日志/配置。
@@ -92,6 +104,13 @@
         <string name="dsh_instance_detail_empty">This instance no longer exists</string>
         <string name="dsh_instances_empty">No instances yet.\nTap "Versions" on the left to install a dsh version.</string>
         <string name="dsh_instances_title">DeepSeek Harness</string>
+        <!-- fix12：实例清单（manifest）读/写失败时的横幅与拒写反馈。四条一组 ——
+             横幅（load/write）+ 横幅上的重试 + 重试又失败。前两条是"这一屏的事"，
+             后两条是"用户点了重试之后"，所以顺序不能按字母排。 -->
+        <string name="dsh_manifest_load_failed">Couldn\'t read the instance list — changes in this session won\'t be saved</string>
+        <string name="dsh_manifest_write_failed">Couldn\'t write the instance list — changes may be lost after restart</string>
+        <string name="dsh_manifest_retry">Retry</string>
+        <string name="dsh_manifest_retry_failed">Still unreadable — restart the app</string>
         <string name="dsh_key_first_run_title">Add an API key</string>
         <string name="dsh_key_first_run_message">dsh needs a DeepSeek API key before it can chat. Tap the settings icon at the bottom left of the sidebar and enter the key under "Models". The key is stored and managed by dsh itself — the launcher never holds it.</string>
         <string name="dsh_logs_auto_scroll">Auto scroll</string>
@@ -113,6 +132,9 @@
         <string name="dsh_port_invalid">Port must be between 0 and 65535</string>
         <string name="dsh_reason_exited_early">The dsh process exited before becoming ready (code %1$d)</string>
         <string name="dsh_reason_missing_entry">The dsh entry file is missing; the installation looks incomplete. Reinstall it.</string>
+        <!-- fix12 / R2b-A1-1：实例的 package.json 一时读不出来（EIO/权限/SELinux），**不是**安装损坏。
+             文案刻意不提"重装"——那会让用户为一次可恢复的读故障重下 500MB。 -->
+        <string name="dsh_reason_disk_unreadable">Couldn\'t read the dsh package files right now. Try again in a moment; if it keeps happening, check the log.</string>
         <string name="dsh_reason_not_installed">dsh is not installed in this instance. Install or reinstall it first.</string>
         <string name="dsh_reason_start_timeout">dsh did not become ready within %1$d s. Check the logs (network/port).</string>
         <string name="dsh_reason_user_stop">Stopped by user</string>
@@ -130,6 +152,9 @@
         <string name="dsh_reinstall_pick_version">No version has been installed successfully yet; pick one on the Versions tab.</string>
         <string name="dsh_runtime_exited">dsh process exited (code %1$d)</string>
         <string name="dsh_saved">Saved</string>
+        <!-- fix12：拒写期改名/改端口的反馈。dsh_saved 只说"成了"，而 saveAsync() 返回 false
+             时内存里改了、盘上没有，必须明说"没保存"以及原因（清单不可写）。 -->
+        <string name="dsh_change_not_saved">Not saved: the instance list is read-only right now</string>
         <string name="dsh_settings_model">Model</string>
         <string name="dsh_settings_name_hint">Instance name</string>
         <string name="dsh_settings_port_hint">Port (empty = auto)</string>
@@ -153,6 +178,10 @@
         <string name="dsh_stage_reinstalling">Installation check failed; reinstalling %1$s (one retry)</string>
         <string name="dsh_start_failed">Failed to start instance</string>
         <string name="dsh_start_not_ready">Runtime or instance is not ready</string>
+        <!-- fix12 / C-08：启动目标由宿主下发（DSH_LAUNCH_TARGET），实例自己声明要的版本与
+             实际会跑的版本不一致时**降级启动并说明**，不再静默换一个版本跑。
+             %1$s = 实例声明的版本，%2$s = 实际会运行的版本（两个都是版本号字符串）。 -->
+        <string name="dsh_start_degraded">This instance expects %1$s but will run %2$s</string>
         <string name="dsh_state_broken">Broken</string>
         <string name="dsh_state_deleting">Deleting…</string>
         <string name="dsh_state_failed">Failed: %1$s</string>
@@ -263,7 +292,6 @@ Version %1$s</string>
     <string name="dsh_background_no_image">No custom background to sample</string>
     <string name="dsh_version_after_install">with dependencies ≈ 500 MB (estimate)</string>
     <string name="dsh_version_bundled">bundled in runtime, no download needed</string>
-    <string name="dsh_installed_broken">Failed</string>
     <string name="dsh_setup_brand">DeepSeek Harness</string>
     <string name="dsh_setup_title">Preparing runtime</string>
     <string name="dsh_setup_title_failed">Preparation failed</string>

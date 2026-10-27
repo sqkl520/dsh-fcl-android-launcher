@@ -210,6 +210,17 @@ smoke() {
   return 0
 }
 if ! smoke; then
+  # --- 门①（fix12 / C-14，只做门①）----------------------------------------
+  # 冒烟测试本身依赖 rootfs 里的 coreutils `timeout`（见上面 smoke() 的注释）。它缺失时
+  # smoke() 必然失败，但失败原因**不是树坏了** —— 此时 `rm -rf node_modules` 会删掉一棵
+  # 好树、逼用户重下 ~500 MB，第二趟冒烟仍然会失败（缺的还是 timeout），白白多花流量与时间。
+  # 所以：先确认冒烟的环境前提，缺就**不清树**、直接给出可归因的失败。
+  # （门②"树损坏特征"判据本轮明确不做：ERR_MODULE_NOT_FOUND 在非损坏场景也会出现，
+  #   误判会少一次自愈。）
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "[setup] FAILED reason=smoke-env detail=timeout-missing" >&2
+    exit 1
+  fi
   # 第一趟冒烟失败 → 清树重装（自愈）。
   echo "[setup] smoke test failed on pass 1; wiping node_modules and reinstalling once" >&2
   stage "reinstalling" "@deepseek-ai/dsh@$DSH_VERSION"

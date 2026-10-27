@@ -53,6 +53,8 @@
         <string name="dsh_delete_message">删除"%1$s"？会一并移除它的 dsh 安装与配置（约 300MB），且不可恢复。</string>
         <string name="dsh_delete_started">正在删除实例…</string>
         <string name="dsh_delete_title">删除实例</string>
+        <!-- fix12：清单读取失败期间 delete() 直接拒绝（不写盘就不动目录），要把"为什么没删"说出来 -->
+        <string name="dsh_delete_refused">无法删除：实例清单读取失败中</string>
         <string name="dsh_disk_usage">占用空间：%1$s</string>
         <string name="dsh_download_error">加载失败：%1$s</string>
         <string name="dsh_download_show_prerelease">显示预览版</string>
@@ -78,7 +80,17 @@
         <string name="dsh_install_started_message">正在后台安装 %1$s，可在实例列表查看进度。</string>
         <string name="dsh_install_started_title">已开始安装</string>
         <string name="dsh_installed">已安装</string>
+        <!-- fix12 / E6-4：版本行"该版本的安装失败"角标。**只允许 state == BROKEN 使用**；
+             用户主动取消 ≠ 安装失败（那是 NOT_INSTALLED，版本行应显示"未安装"）。
+             与实例卡片的 dsh_state_broken（损坏）是措辞差异，不是同一句话 ——
+             版本页每行就是一个版本、角标紧挨安装按钮，语境已把它锚定在"这个版本"上。 -->
+        <string name="dsh_installed_broken">安装失败</string>
         <string name="dsh_install_skipped">%1$s 已安装，可直接启动</string>
+        <!-- fix12 / E6-4：详情页动作行按 DispatchReason 分叉。dsh_install_skipped 仍是"安装入口
+             发现目标版本已就绪，于是跳过"（带版本号）；下面两条是不带版本号的**结论**文案，
+             给"你点的这个版本已经装好了"和"这个版本正在装"两种状态用。 -->
+        <string name="dsh_install_already_installed">该版本已安装，可直接启动</string>
+        <string name="dsh_install_in_flight">该版本正在安装中</string>
         <string name="dsh_instance_gone">实例已不存在</string>
         <string name="dsh_instance_subtitle">版本 %1$s · 端口 %2$s · %3$s</string>
         <!-- 实例详情页：一个实例 = 一个页面，页内再用 tab 切运行/日志/配置。
@@ -92,6 +104,13 @@
         <string name="dsh_instance_detail_empty">该实例已不存在</string>
         <string name="dsh_instances_empty">还没有实例。\n点击左侧「版本」标签安装一个 dsh 版本。</string>
         <string name="dsh_instances_title">DeepSeek Harness</string>
+        <!-- fix12：实例清单（manifest）读/写失败时的横幅与拒写反馈。四条一组 ——
+             横幅（load/write）+ 横幅上的重试 + 重试又失败。前两条是"这一屏的事"，
+             后两条是"用户点了重试之后"，所以顺序不能按字母排。 -->
+        <string name="dsh_manifest_load_failed">实例清单读取失败，本次会话的改动不会保存</string>
+        <string name="dsh_manifest_write_failed">实例清单写入失败，重启后可能丢失本次改动</string>
+        <string name="dsh_manifest_retry">重试</string>
+        <string name="dsh_manifest_retry_failed">仍然读不到，请重启 App</string>
         <string name="dsh_key_first_run_title">填写 API Key</string>
         <string name="dsh_key_first_run_message">dsh 需要一个 DeepSeek API Key 才能对话。请点左下角的设置图标，在「模型」里填入。Key 由 dsh 自己保存和管理，启动器不再经手。</string>
         <string name="dsh_logs_auto_scroll">自动滚动</string>
@@ -113,6 +132,8 @@
         <string name="dsh_port_invalid">端口需在 0–65535 之间</string>
         <string name="dsh_reason_exited_early">dsh 进程在就绪前退出（退出码 %1$d）</string>
         <string name="dsh_reason_missing_entry">缺少 dsh 入口文件，安装不完整，请重新安装。</string>
+        <!-- fix12 / R2b-A1-1：一时读不出来 ≠ 安装损坏，所以不说"重装"。 -->
+        <string name="dsh_reason_disk_unreadable">暂时读不到 dsh 包文件，请稍后重试；若反复出现，请查看日志。</string>
         <string name="dsh_reason_not_installed">该实例尚未安装 dsh，请先安装或重新安装。</string>
         <string name="dsh_reason_start_timeout">%1$d 秒内未就绪，请查看日志（网络/端口问题）。</string>
         <string name="dsh_reason_user_stop">用户停止</string>
@@ -130,6 +151,9 @@
         <string name="dsh_reinstall_pick_version">还没有成功安装过任何版本，请到「版本」页选择一个版本。</string>
         <string name="dsh_runtime_exited">dsh 进程已退出（退出码 %1$d）</string>
         <string name="dsh_saved">已保存</string>
+        <!-- fix12：拒写期改名/改端口的反馈。dsh_saved 只说"成了"，而 saveAsync() 返回 false
+             时内存里改了、盘上没有，必须明说"没保存"以及原因（清单不可写）。 -->
+        <string name="dsh_change_not_saved">未保存：实例清单当前不可写</string>
         <string name="dsh_settings_model">模型</string>
         <string name="dsh_settings_name_hint">实例名称</string>
         <string name="dsh_settings_port_hint">端口（留空＝自动分配）</string>
@@ -153,6 +177,10 @@
         <string name="dsh_stage_reinstalling">安装校验未通过，正在重新安装 %1$s（自动重试一次）</string>
         <string name="dsh_start_failed">实例启动失败</string>
         <string name="dsh_start_not_ready">运行时或实例尚未就绪</string>
+        <!-- fix12 / C-08：启动目标由宿主下发（DSH_LAUNCH_TARGET），实例自己声明要的版本与
+             实际会跑的版本不一致时**降级启动并说明**，不再静默换一个版本跑。
+             %1$s = 实例声明的版本，%2$s = 实际会运行的版本（两个都是版本号字符串）。 -->
+        <string name="dsh_start_degraded">实例需要 %1$s，实际会运行 %2$s</string>
         <string name="dsh_state_broken">损坏</string>
         <string name="dsh_state_deleting">删除中…</string>
         <string name="dsh_state_failed">失败：%1$s</string>
@@ -259,7 +287,6 @@
     <string name="dsh_background_no_image">没有可取样色的自定义背景</string>
     <string name="dsh_version_after_install">含依赖约 500 MB（估算）</string>
     <string name="dsh_version_bundled">运行时已内置，无需下载</string>
-    <string name="dsh_installed_broken">安装失败</string>
     <string name="dsh_setup_brand">DeepSeek Harness</string>
     <string name="dsh_setup_title">正在准备运行环境</string>
     <string name="dsh_setup_title_failed">运行环境准备失败</string>

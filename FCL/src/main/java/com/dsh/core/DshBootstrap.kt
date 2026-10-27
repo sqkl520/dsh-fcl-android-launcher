@@ -9,6 +9,77 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /**
+ * 底座缺口的**机器可读**分类（`isReady()` 的判定内核输出）。
+ *
+ * 为什么要有它（C-17）：`isReady()` 只回答"能不能用"，把 7 条判据压成一个布尔；
+ * 而 `missingSummary()` 原来是**另一套** if 链 —— 少了 `isLatest` 与 `scriptsOutdated`
+ * 两条判据，顺序也不同。结果是 `isReady()==false` 时报出的原因可能与真正卡住的那条不符。
+ * 现在两边都从 [readinessGaps] 取同一份事实、同一套顺序。
+ */
+enum class ReadinessGap {
+    SCRIPTS_MISSING, ROOTFS_MISSING, PROOT_BIN_MISSING,
+    PROOT_BIN_NOT_EXECUTABLE, PROOT_LOADER_MISSING, OUTDATED, SCRIPTS_STALE
+}
+
+/**
+ * 判定内核：按 `isReady()` 的 `&&` 短路顺序收集**全部**不满足项（空表 = 就绪）。
+ *
+ * 顺序与 [DshBootstrap.isReady] 一一对应：rootfs 版本 → scripts 版本 → scripts 版本
+ * （独立通路）→ `start-dsh.sh` 存在 → proot 二进制（存在 + 可执行）→ proot loader → rootfs 布局。
+ * 返回整张表而不是第一个缺口：横幅只要第一条，但"到底缺几项"是排障时唯一能对上日志的东西。
+ *
+ * 两处刻意的归并：
+ * - `!scriptsCurrent` 与 `scriptsStale` 都是 [ReadinessGap.SCRIPTS_STALE]：它们是同一件事
+ *   （磁盘脚本落后于 APK 内 assets）的两条独立通路（`RuntimeUtils.isLatest` 与
+ *   `scriptsOutdated`）。拆成两个 key 会让同一张横幅里出现两句同义的话。
+ * - `!rootfsCurrent` 归 [ReadinessGap.OUTDATED]：与 `missingSummary` 原来的兜底句同义
+ *   （"底座需要更新"）。
+ *
+ * 为什么入参是布尔而不是 `File`：这些判据里有两处 JVM 里造不出来 ——
+ * `canExecute()` 在 Windows 上恒 true、`RuntimeUtils.isLatest` 要 assets。把"怎么取事实"
+ * 留给调用方（[DshBootstrap] 内部 + 单测），这里只做布尔组合，才能被 D 组用例逐条钉死。
+ */
+fun readinessGaps(
+    rootfsCurrent: Boolean,
+    scriptsCurrent: Boolean,
+    scriptsStale: Boolean,
+    startScriptExists: Boolean,
+    prootBinPresent: Boolean,
+    prootBinExecutable: Boolean,
+    prootLoaderPresent: Boolean,
+    rootfsUsable: Boolean
+): List<ReadinessGap> = buildList<ReadinessGap> {
+    if (!rootfsCurrent) add(ReadinessGap.OUTDATED)
+    if (!scriptsCurrent || scriptsStale) add(ReadinessGap.SCRIPTS_STALE)
+    if (!startScriptExists) add(ReadinessGap.SCRIPTS_MISSING)
+    // "不存在"与"在但不可执行"是两件事：前者是没打包/没解压，后者是打包坏了（W^X/无执行位）。
+    // 用 when 而不是两个独立的 if —— 缺文件时 canExecute() 必然也是 false，
+    // 两条都报会在横幅上堆出"缺 proot + proot 不可执行"这种自相矛盾的两句。
+    when {
+        !prootBinPresent -> add(ReadinessGap.PROOT_BIN_MISSING)
+        !prootBinExecutable -> add(ReadinessGap.PROOT_BIN_NOT_EXECUTABLE)
+    }
+    if (!prootLoaderPresent) add(ReadinessGap.PROOT_LOADER_MISSING)
+    if (!rootfsUsable) add(ReadinessGap.ROOTFS_MISSING)
+}
+
+/**
+ * 缺口 → 文案资源 id。**只映射现有 key**（三语文案都已齐），本函数不新增文案。
+ *
+ * 与 [readinessGaps] 拆开的理由与 `setupStepStateRes` 相同：`getString` 要 Context，
+ * 而资源 id 是纯值，可以在 JVM 单测里直接断言映射关系（不必起 Android 环境）。
+ */
+fun gapMessageRes(gap: ReadinessGap): Int = when (gap) {
+    ReadinessGap.OUTDATED,
+    ReadinessGap.SCRIPTS_STALE -> R.string.dsh_bootstrap_outdated
+    ReadinessGap.SCRIPTS_MISSING -> R.string.dsh_bootstrap_missing_scripts
+    ReadinessGap.ROOTFS_MISSING -> R.string.dsh_bootstrap_missing_rootfs
+    ReadinessGap.PROOT_BIN_MISSING -> R.string.dsh_bootstrap_missing_proot
+    ReadinessGap.PROOT_BIN_NOT_EXECUTABLE -> R.string.dsh_bootstrap_proot_not_executable
+    ReadinessGap.PROOT_LOADER_MISSING -> R.string.dsh_bootstrap_missing_proot_loader
+}
+
+/**
  * dsh 运行时底座的首启解压：把打包在 assets 里的 proot 二进制 + rootfs + 脚本，
  * 首次启动时解压到 App 私有目录（[DshPaths]）。
  *
@@ -148,16 +219,42 @@ object DshBootstrap {
      *   代价：这一步要读 assets 里 3 字节的 version 文件。调用方（准备页 onCreate / 下载页）
      *   本来就在做磁盘 stat，量级相同；读失败一律返回 false（见 [scriptsOutdated]），
      *   宁可多走一次幂等准备，也不误判"已就绪"。
+     *
+     * ★ fix12 / C-17：判定内核抽到 [readinessGaps]（顶层纯函数），这里只剩
+     *   "收集事实 → 判空"。**行为与抽之前完全等价**：7 条判据同序、异常仍一律降级为 false，
+     *   见 [collectGaps]。这样做是因为 [missingSummary] 必须与它同序——两套 if 链迟早会漂移。
      */
-    fun isReady(): Boolean = runCatching {
-        RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") &&
-            RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") &&
-            !scriptsOutdated(null) &&
-            File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile &&
-            prootBinReady() &&
-            prootLoaderReady() &&
-            DshPaths.rootfsLooksUsable()
-    }.getOrDefault(false)
+    fun isReady(): Boolean = runCatching { collectGaps().isEmpty() }.getOrDefault(false)
+
+    /**
+     * 收集一次事实并交给 [readinessGaps]。**唯一的取事实处** —— [isReady] 与 [missingSummary]
+     * 都走这里，C-17 要求的"同序"由此在结构上成立（而不是靠两处注释互相对齐）。
+     *
+     * 每条判据各自兜异常（见 [fact]），理由：`RuntimeUtils.isLatest` 会抛 IOException、
+     * [scriptsOutdated] 会读 assets。整段共用一个 try 的话，任何一条抛异常都会让
+     * [missingSummary] 退化成"没有原因"——比报一句可能不准的原因更差（E3 C-17 的原文结论）。
+     * 逐条兜住则是"这一条当作不满足"，恰好等价于 `&&` 短路到它时返回 false 的旧行为。
+     */
+    private fun collectGaps(): List<ReadinessGap> {
+        // 两次 resolve 也各自兜住：它们读 DshPaths 的 lateinit 字段，路径未初始化时会抛
+        // UninitializedPropertyAccessException。旧实现里这一步在 isReady 的 runCatching 之内、
+        // 在 missingSummary 的 try 之外 —— 也就是说 missingSummary 那时**会**抛。
+        // 现在 missingSummary 不再包 try，所以必须在这里兜住，否则同一场景会变成崩溃。
+        val nativeLibDir = com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR
+        val prootBin = runCatching { DshPaths.resolveProotBin(nativeLibDir) }.getOrNull()
+        return readinessGaps(
+            rootfsCurrent = fact { RuntimeUtils.isLatest(DshPaths.ROOTFS_DIR, "/assets/$ASSET_ROOT/rootfs") },
+            scriptsCurrent = fact { RuntimeUtils.isLatest(DshPaths.SCRIPTS_DIR, "/assets/$ASSET_ROOT/scripts") },
+            scriptsStale = fact { scriptsOutdated(null) },
+            startScriptExists = fact { File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile },
+            // "存在"用同一个 File 对象判；"可用"直接复用 prootBinReady()/prootLoaderReady()——
+            // 它们同时是准备页第 1 行的判据（C-16），不在这里另写一份 `isFile && canExecute()`。
+            prootBinPresent = fact { prootBin?.isFile == true },
+            prootBinExecutable = fact { prootBinReady() },
+            prootLoaderPresent = fact { prootLoaderReady() },
+            rootfsUsable = fact { DshPaths.rootfsLooksUsable() }
+        )
+    }
 
     /**
      * 磁盘上的脚本目录是否落后于 APK 内的脚本（**只读、不触发任何解压**）。BL-214。
@@ -234,29 +331,47 @@ object DshBootstrap {
      * 这里原来只要求 `isFile` —— 若二进制存在但没有执行位，就会出现\"横幅隐藏（以为就绪）
      * 但一启动就报『proot 二进制没有执行权限』\"的假就绪（第九轮修的是同一类问题，
      * 只是当时漏了执行位这一维）。判据必须**不弱于**真正会失败的那个入口。
+     *
+     * ★ fix12 / C-16：`private` → `internal`。准备页第 1 行原来自己写了一份
+     *   `isFile && isFile`（漏了 `canExecute()`），于是会出现同屏"清单已就绪 + 标题准备失败"。
+     *   改可见性而不是复制判据，是为了让这条判据只有一个定义。
      */
-    private fun prootBinReady(): Boolean =
+    internal fun prootBinReady(): Boolean =
         DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
             .let { it.isFile && it.canExecute() }
 
-    private fun prootLoaderReady(): Boolean =
+    /** proot loader 是否在。可见性理由同 [prootBinReady]（C-16）。 */
+    internal fun prootLoaderReady(): Boolean =
         DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR).isFile
 
-    /** 一句话描述当前缺口（界面提示用） */
+    /**
+     * 一句话描述当前缺口（界面提示用）。
+     *
+     * ★ fix12 / C-17：改为与 [isReady] **同一个内核**（[collectGaps]）的第一条。
+     *   原实现是另一套 if 链：缺 `isLatest` / `scriptsOutdated` 两条判据、顺序也不同，
+     *   于是 `isReady()==false` 时可能报出一句与真实缺口无关的兜底话
+     *   （典型：脚本版本落后，却因为 `start-dsh.sh` 在、rootfs 布局完好而落到"底座过期不了"的 else）。
+     *
+     * 仍然不包 `runCatching`：逐条事实已在 [collectGaps] 里各自兜住异常，这里只剩取值与取文案，
+     * 没有可抛点；若整个包起来，反而会把"读 assets 失败"退化成"没有原因"（E3 C-17）。
+     */
     fun missingSummary(): String? {
-        if (isReady()) return null
+        val gaps = collectGaps()
+        val gap = gaps.firstOrNull() ?: return null
         val ctx = DshUiText.contextOrNull() ?: return null
-        val prootBin = DshPaths.resolveProotBin(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
-        val prootLoader = DshPaths.resolveProotLoader(com.tungsten.fclauncher.utils.FCLPath.NATIVE_LIB_DIR)
-        return when {
-            !File(DshPaths.SCRIPTS_DIR, "start-dsh.sh").isFile -> ctx.getString(R.string.dsh_bootstrap_missing_scripts)
-            !File(DshPaths.ROOTFS_DIR).isDirectory || !DshPaths.rootfsLooksUsable() -> ctx.getString(R.string.dsh_bootstrap_missing_rootfs)
-            !prootBin.isFile -> ctx.getString(R.string.dsh_bootstrap_missing_proot)
-            !prootBin.canExecute() -> ctx.getString(R.string.dsh_bootstrap_proot_not_executable)
-            !prootLoader.isFile -> ctx.getString(R.string.dsh_bootstrap_missing_proot_loader)
-            else -> ctx.getString(R.string.dsh_bootstrap_outdated)
-        }
+        return ctx.getString(gapMessageRes(gap))
     }
+
+    /**
+     * 把"取一条事实"包成"失败即不满足"。
+     *
+     * 等价性说明：旧 [isReady] 是 `A && B && …` 包在**一个** `runCatching` 里 ——
+     * 第 k 条抛异常时整体返回 false，恰好等于"第 k 条为假"。逐条兜住后，异常那条为 false，
+     * 其后的判据照常求值；对 [isReady] 的**布尔结果**没有任何影响（第一条假就已经不是就绪），
+     * 对 [missingSummary] 则变成了"能报出这条"，而不是整段降级成 null。
+     */
+    private fun fact(block: () -> Boolean): Boolean =
+        runCatching { block() }.getOrDefault(false)
 
     /**
      * 界面文案用的 Context。

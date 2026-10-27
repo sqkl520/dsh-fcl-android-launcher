@@ -1288,11 +1288,23 @@ class DshWebViewActivity : FCLActivity() {
             finish()
         } else {
             logWeb("[web] external open failed, no browser handler?")
-            runCatching {
+            // ★ fix12（E3-N-12）：兜底复制要**看结果**。改前这段是 `runCatching { setPrimaryClip }`
+            //   后无条件弹 `open_link_failed`，而那句的原文是"已自动复制链接，请手动粘贴进入" ——
+            //   复制本身失败时（剪贴板被占用/ROM 限制），这句话就是让用户去粘贴一个空剪贴板。
+            //   现在按结果分两句：成功仍用原句（责任已交给用户），失败用 `dsh_copy_url_failed`
+            //   （三语齐全的既有 key），并留一条日志 —— 否则"外跳过不去 + 链接也没拿到"这件事
+            //   在日志里完全看不到，事后只能靠猜。
+            val copied = runCatching {
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("dsh url", url))
-            }
-            Toast.makeText(this, R.string.open_link_failed, Toast.LENGTH_LONG).show()
+            }.onFailure {
+                logWeb("[web] fallback copy failed: ${it.message ?: it.javaClass.simpleName}")
+            }.isSuccess
+            Toast.makeText(
+                this,
+                if (copied) R.string.open_link_failed else R.string.dsh_copy_url_failed,
+                Toast.LENGTH_LONG
+            ).show()
             // 无浏览器可跳：不能让用户停在（面板已收的）白页上 —— 显式回壳收尾。
             // REORDER 前移只留在这条兜底路径（此时没有浏览器会被它盖住）。
             startActivity(com.dsh.ui.shell.DshMainActivity.intentForShell(this))

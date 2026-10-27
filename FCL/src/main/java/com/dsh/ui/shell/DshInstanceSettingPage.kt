@@ -203,20 +203,54 @@ class DshInstanceSettingPage(
         //   "这一帧画出来的状态行说的是不是停止中"，与 statusText 同一份输入才不会自相矛盾。
         //   `active` 保持 BL-127 的原判据（activeInstanceId()）不动 —— 那是与点击同源的既有约定。
         val stopping = (runtimeState as? DshRuntime.State.Stopping)?.instanceId == instanceId
-        // 文案 key 必须是无占位符的 dsh_task_stopping：dsh_state_stopping 带 `%1$s`，
-        // 而按钮走 setText(资源 id) 不传参，会画出字面量 `%1$s 停止中…`（E6 §2.2① / R24-E6-1）。
+        // ★ fix12（E6-2 / §2.15）：动作行与**实例卡片同源**。改前这里只分四支
+        //   （stopping / active / INSTALLING / 其余一律「启动」），而卡片是三分的
+        //   （BROKEN→「重试」、NOT_INSTALLED→「安装」、其余→「启动」）—— 同一台实例，
+        //   卡片说「未安装」+「安装」，点进详情却说「未安装」+ 满色「启动」，按下去才弹失败
+        //   （E6 §2.3① 的原话就是"三处对不上"）。C-01 把一批实例从 READY 降成 NOT_INSTALLED 之后
+        //   这条矛盾会按被降级实例数线性放大，所以必须同轮改。
+        //
+        // ★ 三分叉的判据用 [inst] 的持久状态、而不是 [runtimeState]：卡片读的也是它
+        //   （DshInstanceAdapter :392-443），两处同源才不会漂移。
+        //   「在跑」优先于持久状态：一个 READY 的实例被启动后 state 仍是 READY，但按钮必须是「停止」。
+        //
+        // ★ enabled 的口径（E6-6）：只有真正**可执行**的两支（停止 / 启动）可点；
+        //   安装中 / 损坏 / 未安装都是"此刻点了没用"的分支，一律压暗 —— R24 A7 只做了停止中，
+        //   安装中这一支当时漏了（满色可点、点了静默）。三个不可点分支点了给 toast 说明该去哪，
+        //   而不是静默（见 [onAction]）。
+        val state = inst?.state
         val actionText = when {
             stopping -> R.string.dsh_task_stopping
             active -> R.string.dsh_action_stop
             // 安装中：没有可启动的东西（与实例列表页的 busy 语义一致）。按钮切成状态词
-            // 「安装中」，点击静默不做（见 onAction）—— 不出现"写着启动、点不动"的形态。
-            inst?.state == DshInstance.State.INSTALLING -> R.string.dsh_state_installing
+            // 「安装中」，点击给一句说明（见 onAction）—— 不再是"写着启动、点不动/点了没反应"。
+            state == DshInstance.State.INSTALLING -> R.string.dsh_state_installing
+            // 损坏 → 与卡片同一句「重试」：真正的重试入口在卡片上（那里有确认框与停旧进程的
+            // 完整流程），详情页只负责把话术对齐，点了指路而不是另开一条第二语义的重装路径。
+            state == DshInstance.State.BROKEN -> R.string.dsh_action_retry
+            // 未安装 → 与卡片同一句「安装」：卡片的「安装」是切到版本页挑一个版本装上，
+            // 这里照抄同一个落点。
+            state == DshInstance.State.NOT_INSTALLED -> R.string.dsh_action_install
             else -> R.string.dsh_action_start
+        }
+        // 可点性**与文案同一条 when 的分支**，不是另一套判据：两支可执行（停止 / 启动）给 true，
+        // 其余三支（停止中 / 安装中 / 损坏 / 未安装）给 false。写成 `!stopping && state != …`
+        // 的合取式在"进程在跑、但持久状态已被改成 INSTALLING"（重装窗口里的那一帧）会画出
+        // 「停止」却点不动 —— 文案与可点性必须描述同一件事（E6-6 的教训正是这一条）。
+        val actionEnabled = when {
+            stopping -> false
+            active -> true
+            state == DshInstance.State.INSTALLING -> false
+            state == DshInstance.State.BROKEN -> false
+            state == DshInstance.State.NOT_INSTALLED -> false
+            else -> true
         }
         // 「复制访问链接」这一行能不能点：以"此刻手里有没有带 token 的 URL"为准（fix8 / BL-168）。
         // 与 OPEN_WEB 的 editable 一样在提交行清单时求值（值位的文本才是绑定时现取）。
         val copyUrlReady = tokenUrl() != null
-        return listOf(
+        // listOfNotNull 而不是 listOf：下面那条 lastError 行是**可选的**（有原因才出现），
+        // 让"有没有这一行"由值本身（null）表达，调用处就不需要再写一次"什么时候该显示"的判断。
+        return listOfNotNull(
             // 组头用 `dsh_settings_section_*` 这一族（它们就是为分组标题准备的），
             // 而不是拿 tab 文案 `dsh_instance_detail_tab_run` 顶替 —— 后者是 tab 标签，
             // 放在 tab 正下方当小标题是同一句话连说两遍
@@ -225,10 +259,19 @@ class DshInstanceSettingPage(
                 R.string.dsh_instance_status_row, 0,
                 { statusText() }, DshInstanceSettingAdapter.Tag.STATUS, editable = false
             ),
+            // ★ fix12（E6 §2.3②）：状态行下面补一条**只读**的最近失败原因。
+            //   卡片有这一行（DshInstanceAdapter 的 error_text，:357-367），详情页此前**没有任何
+            //   一行**承载 `lastError` —— 用户点开一张写着「损坏」的卡片，进到本该最详细的这一页
+            //   反而只剩状态词与一个按钮，"为什么坏"只能回列表看小字或翻日志。
+            //   用**现成的** Value 行（不新增 Row 子类）：`editable = false` 就是纯展示，
+            //   整行不响应、右侧没有箭头。有原因才插这一行（[lastErrorRow] 返回 null 时滤掉），
+            //   否则 READY 实例会多出一条空行。
+            lastErrorRow(),
             DshInstanceSettingAdapter.Row.Action(
                 actionText, 0, actionText, DshInstanceSettingAdapter.Tag.START_STOP,
                 // ★ A7：停止中不可点（按钮本身也压暗，见适配器 Row.Action 的绑定点）。
-                enabled = !stopping
+                // ★ fix12（E6-6）：安装中 / 损坏 / 未安装同样不可点 —— 口径见 runRows 顶部的注释。
+                enabled = actionEnabled
             ),
             // 打开界面：**运行中或启动/停止中可点**。用 `editable` 表达可点性 —— 值行布局只有
             // 这一个可点提示（右侧图标），不可点时整行不响应、图标也不显示，语义正好。
@@ -274,6 +317,52 @@ class DshInstanceSettingPage(
                 R.string.dsh_action_verify_runtime, R.string.dsh_settings_desc_verify,
                 R.string.dsh_action_verify_runtime, DshInstanceSettingAdapter.Tag.VERIFY
             ),
+        )
+    }
+
+    /**
+     * 「运行」段状态行下面那条**只读**的失败原因（fix12 / E6 §2.3②）。
+     *
+     * ## 为什么需要它
+     * 卡片的 `error_text`（`DshInstanceAdapter`，:357-367）会显示 `lastError`，而详情页
+     * `runRows()` 的整张表此前**没有任何一行**承载它：用户点开一张写着「损坏」的卡片，进到
+     * 本该最详细的这一页只剩状态词 + 一个按钮，"为什么坏"只能回列表看一行小字，或翻日志页。
+     * D-1 把 BROKEN 定为 sticky 之后这个缺口更明显 —— 坏因会长期存在而详情页长期不显示。
+     *
+     * ## 为什么复用 Value 行、不加新 Row 子类
+     * `Row.Value(…, editable = false)` 的绑定路径已经是"纯展示行"：整行不响应点击、右侧不出现
+     * 编辑图标（`DshInstanceSettingAdapter` :191-201 两个方向都显式赋值）。这正是需要的形态，
+     * 加一个 `Row.Note` 只会多一条要维护的绑定分支。
+     *
+     * ## 标题为什么按状态取两个**已有的** key
+     * 本轮不加 string（字符串归 W6），所以只能复用。这一行只在 `lastError` 非空时出现，而
+     * `lastError` 只在 BROKEN / NOT_INSTALLED 两态被 `markState` 写入（`DshInstances` :213-215，
+     * READY 会清空），于是取值只有两种：
+     * - BROKEN ⇒ `dsh_installed_broken`（"安装失败"）：这正是"这次安装没成"的语义，值位是
+     *   `DshInstaller.fail` 写下的原因（网络/DNS/npm 摘要），读起来是"安装失败 | 网络异常…"。
+     *   注意 W6 给这条 key 钉的注释是"只允许 state == BROKEN 使用" —— 这里满足。
+     * - NOT_INSTALLED ⇒ `dsh_state_not_installed`（"未安装"）：这条路径的 `lastError` 是**取消**
+     *   （`DshInstaller` :554/575 写 `dsh_install_cancelled`），用"安装失败"去描述一次用户主动
+     *   取消是不实的（E6 §3.0a 第 2 条专门点过这个坑），所以退回状态词本身。
+     * 两个都是"这个实例现在是什么"的既有说法，与上面 status 行**同一族 key**，不会在页内造出
+     * 第三套术语。
+     *
+     * ## 已知限制
+     * 值位所在的布局（`item_dsh_setting_value.xml` 的 `value`）是 `singleLine + ellipsize=end`，
+     * 较长的原因（例如 `dsh_install_error_network` 那整句）在这里会被尾省略；卡片那侧是
+     * `maxLines=4`，完整原因在卡片上仍可见。要放宽这一行得动布局 XML 或给 `Row.Value` 加
+     * `maxLines`（两者都不在本波次的文件表内），登记为遗留。
+     */
+    private fun lastErrorRow(): DshInstanceSettingAdapter.Row.Value? {
+        val state = inst?.state
+        val error = inst?.lastError?.takeIf { it.isNotBlank() } ?: return null
+        val title = when (state) {
+            DshInstance.State.BROKEN -> R.string.dsh_installed_broken
+            else -> R.string.dsh_state_not_installed
+        }
+        return DshInstanceSettingAdapter.Row.Value(
+            title, 0,
+            { error }, DshInstanceSettingAdapter.Tag.STATUS, editable = false
         )
     }
 
@@ -430,9 +519,7 @@ class DshInstanceSettingPage(
                 } else {
                     DshInstances.updateConfig(i.id, name = text.trim())
                     reload()
-                    // BL-163：实例在跑时改名不会影响已启动的进程（运行复用启动时的快照），
-                    // 追加一句"重启后生效"，免得用户改完对着旧名字的界面以为没保存。
-                    toastRestartToApplyIfRunning(i.id)
+                    toastSaveOutcome(i.id)
                 }
             }
 
@@ -486,10 +573,40 @@ class DshInstanceSettingPage(
         } else {
             DshInstances.updateConfig(i.id, port = port)
             reload()
-            // BL-153-UI/BL-163：运行中改端口不会重启进程（DshRuntime 复用已跑起来的那份），
-            // 不提示的话"改完没变化"会被当成没保存。非运行态不加这句，避免噪音。
-            toastRestartToApplyIfRunning(i.id)
+            toastSaveOutcome(i.id)
         }
+    }
+
+    /**
+     * 配置改动后的反馈（fix12 / §2.15 B-4）。
+     *
+     * ## 为什么不直接判 `saveAsync()` 的返回值
+     * `updateConfig(...)` **内部**已经调过一次 `saveAsync()`，而它返回的 Boolean 被丢掉了
+     * （`DshInstances.updateConfig` 是 `Unit`）。本轮 P/W 分工不允许改 `DshInstances.kt` 的签名，
+     * 所以这里退一步读**它留下的两个健康位**：
+     * - `manifestLoadFailed` 为真 ⇒ `saveAsync()` 刚刚必然同步拒绝过（W1 的实现是入口处判位后
+     *   直接 `return false`），这次改动**只改了内存**；
+     * - `manifestWriteFailed` 为真 ⇒ 写盘那一步失败了（也可能是之前某次留下的 —— 同样意味着
+     *   "盘上没有"）。
+     *
+     * 两个位里任意一个为真，就说明"用户看到的这份新值是内存里的、盘上没有"，必须说
+     * `dsh_change_not_saved`，而不是原来那句"重启后生效"（那句话在这里是双重误导：既假设
+     * 改动已经落盘，又把用户的注意力引到重启上）。
+     *
+     * ## 理想的契约（本轮不改，登记在报告里）
+     * `updateConfig` 应当自己返回 `saveAsync()` 的 Boolean，调用方按返回值分叉。现在这条
+     * "读全局位"的写法有一个已知窗口：写失败是**异步**置位（协程里写盘），本次读位时可能
+     * 还没翻转 —— 最坏情况下这一次的 toast 仍是"重启后生效"，下一次进来才看见横幅。
+     * 横幅（实例页常驻）与写失败置位同源，所以这个窗口不会让用户永久失去知情。
+     */
+    private fun toastSaveOutcome(id: String) {
+        if (DshInstances.manifestLoadFailed.value || DshInstances.manifestWriteFailed.value) {
+            toast(context.getString(R.string.dsh_change_not_saved))
+            return
+        }
+        // BL-163：实例在跑时改配置不会影响已启动的进程（运行复用启动时的快照），
+        // 追加一句"重启后生效"，免得用户改完对着旧配置的界面以为没保存。
+        toastRestartToApplyIfRunning(id)
     }
 
     /**
@@ -549,13 +666,43 @@ class DshInstanceSettingPage(
                     // 那个"，从行渲染到用户点击之间状态可能已换实例（TOCTOU），stopIf 在运行时
                     // 同一把锁里重新判定"跑的是不是它"，不会误停别的实例。
                     DshRuntime.stopIf(i.id)
-                } else if (i.state == DshInstance.State.INSTALLING) {
-                    // 安装中：与列表页 busy 语义一致（安装中本来就没有可启动的东西），点击静默不做。
-                    // 文案已切成「安装中」（runRows），不存在"写着启动、点击无效"的干扰。
                     return
-                } else {
-                    startInstance(i)
                 }
+                // ★ fix12（E6-2 / E6-6）：三个"此刻不该在这里动手"的态。行已经压暗
+                //   （runRows 的 actionEnabled），这里再挡一层并**给一句 toast 说明该去哪** ——
+                //   改前 INSTALLING 是静默 no-op（满色可点、点了没反应，E6-6 的原话），
+                //   BROKEN / NOT_INSTALLED 则是直接落到 startInstance，等运行时才弹失败。
+                //   判据与 runRows 的文案分支**逐条对齐**，两处不同步就会又变成"写着重试、点下去启动"。
+                //   文案都是**已有的** key（本轮不加 string）：安装中用它自己的事实句；
+                //   另外两态共用一个"回列表去操作"的指路句 —— 真正的按钮在那里
+                //   （BROKEN 是卡片的「重试」，NOT_INSTALLED 是卡片的「安装」）。
+                when (i.state) {
+                    DshInstance.State.INSTALLING -> {
+                        // 同一句即可：安装中就是"这个版本正在装"，与卡片「安装中」同一事实。
+                        toast(context.getString(R.string.dsh_install_in_flight))
+                        return
+                    }
+                    DshInstance.State.BROKEN -> {
+                        // 重试的完整流程（确认框 + 停旧进程 + 发起安装那套）只在卡片上，
+                        // 这里只指路，不在详情页另开一条语义不同的第二入口。
+                        // 不用 dsh_reinstall_pick_version：它的原文断言"还没成功装过任何版本"，
+                        // 而 BROKEN 实例恰恰装过（失败），那句话在这里是假话。
+                        toast(context.getString(R.string.dsh_action_go_instances))
+                        return
+                    }
+                    DshInstance.State.NOT_INSTALLED -> {
+                        // ★ R2c-1（fix12 收尾）：NOT_INSTALLED 与 BROKEN 分开指路。
+                        //   "去实例列表"是**错的方向**：卡片上的「安装」本身也只是切到版本页
+                        //   （`DshInstanceAdapter` 的 notInstalled → onOpenVersions），用户要跳两次
+                        //   才到真正的安装入口。详情页自己就有 switchTab 的能力，一步到位。
+                        //   零新增 string：复用 `dsh_action_download` 那句"去下载"。
+                        toast(context.getString(R.string.dsh_action_download))
+                        host.switchTab(DshShellHost.TAB_VERSIONS)
+                        return
+                    }
+                    DshInstance.State.READY -> Unit // 落到下面的启动
+                }
+                startInstance(i)
             }
             DshInstanceSettingAdapter.Tag.VERIFY -> verifyRuntime()
             DshInstanceSettingAdapter.Tag.REINSTALL -> reinstall(i)
@@ -650,9 +797,13 @@ class DshInstanceSettingPage(
      * 同一处理：跳走会把用户正在看的详情页顶掉，而且他没得选（必须先去版本页挑一个）。
      */
     private fun reinstall(i: DshInstance) {
-        // 安装中重复触发，按已跳过口径提示
+        // 安装中重复触发。★ fix12（E6-4）：原来这里说的是
+        // `dsh_install_skipped` = "%1$s 已安装，可直接启动" —— 那句话在**说谎**：
+        // 触发条件是"这台实例正有一个安装在跑"，与"装好了"无关；用户被劝去启动一个
+        // 半个身子还在 npm 里的实例。`dsh_install_in_flight`（"该版本正在安装中"）才是事实，
+        // 且它不带占位符 —— 原来那处还传了 `i.dshVersion ?: i.name`，新 key 用不上（§2.15 明文）。
         if (DshServices.installer(context).isInstalling(i.id)) {
-            toast(context.getString(R.string.dsh_install_skipped, i.dshVersion ?: i.name))
+            toast(context.getString(R.string.dsh_install_in_flight))
             return
         }
         val version = i.dshVersion
@@ -730,8 +881,11 @@ class DshInstanceSettingPage(
                 toast(context.getString(R.string.dsh_install_started, version))
             } else {
                 // 极窄竞态：等停止的窗口里别的入口（版本页等）先发起了同实例安装 ——
-                // installer 已把忽略原因写进实例日志，这里按"已跳过"口径给同样的反馈。
-                toast(context.getString(R.string.dsh_install_skipped, i.dshVersion ?: i.name))
+                // installer 已把忽略原因写进实例日志。
+                // ★ fix12（E6-4）：同一处谎言，同样改口 —— 这里的语义是"单飞闸门被占"
+                //   （installer.install 返回 false ⇒ 本次**没有**安装开始），
+                //   不是 dsh_install_skipped 那句"%1$s 已安装，可直接启动"。
+                toast(context.getString(R.string.dsh_install_in_flight))
             }
         }
     }
@@ -751,7 +905,10 @@ class DshInstanceSettingPage(
                 // BL-148：列表页删除有 Toast、这里全程静默 —— 摘清单虽即时，目录删除在后台
                 // 要数秒，"点了删除什么都没发生"的观感就来自这段空窗。补上与列表页同源的
                 // dsh_delete_started；收尾再按结果补一条（见下）。
-                DshInstances.delete(i.id) { leftover ->
+                // ■ V1 §5-2（fix12 收尾）：必须接住返回值。清单读取失败期间 `delete()` 会**拒绝**
+                //   并 return false（内存没摘、目录没删），而旧写法无条件 toast「正在删除…」——
+                //   用户以为删了，重启后实例原样复活（正是本轮 E2-N-1 要消灭的形态，只是入口不同）。
+                val accepted = DshInstances.delete(i.id) { leftover ->
                     // onFinished 不在主线程（DshAppScope 的 IO）→ 切主线程再 toast。
                     // 用独立 [mainHandler] 而不是页面 scope：删除一开始实例就摘清单、详情页
                     // 退层、本页 scope 被取消 —— 而收尾最快也在"等进程离场 + 删 ~300MB"之后，
@@ -764,7 +921,11 @@ class DshInstanceSettingPage(
                         }
                     }
                 }
-                toast(context.getString(R.string.dsh_delete_started))
+                toast(
+                    context.getString(
+                        if (accepted) R.string.dsh_delete_started else R.string.dsh_delete_refused
+                    )
+                )
             }
             .setNegativeButton(context.getString(R.string.dialog_negative), null)
             .create()
