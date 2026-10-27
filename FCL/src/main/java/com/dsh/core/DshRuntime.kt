@@ -146,6 +146,71 @@ fun resolveLaunchTarget(
 }
 
 /**
+ * ★ R26（DESIGN-A §1.4）：`startLocked` 在 fork 之前的**决策结论**（三态）。
+ *
+ * 为什么需要第三态 [Reuse]：现码里"同一实例已在跑"走的是 `return StartOutcome.Started`，
+ * 与"拒绝启动"和"应当 fork"都不同 —— 被压进 Refuse 会让界面报一个假失败，被压进 Proceed
+ * 会让 seccomp 重试**永不 fork**（H1 的成因，见 [canJoinExistingRun]）。所以必须显式建模。
+ */
+sealed interface StartDecision {
+    /** 前置判据都满足，应当 fork（调用点必须保证 Proceed 之后紧接着就是 fork） */
+    object Proceed : StartDecision
+
+    /** 拒绝启动，[reason] 是已本地化的原因（调用方直接落 `StartOutcome.NotReady`） */
+    data class Refuse(val reason: String) : StartDecision
+
+    /** 同一实例已有**活**的 run —— 复用现有进程，**不 fork**（调用方直接落 `StartOutcome.Started`） */
+    object Reuse : StartDecision
+}
+
+/**
+ * ★ R26：`startLocked` 的**决策内核**（纯函数，JVM 可直测）。
+ *
+ * 输入全部是"已经读好的事实"，不碰文件系统、不碰 `Context`：
+ * - `preflightOk` / `preflightReason`：[ProotCommand.preflight] 的结果（文案的最后一层兜底在这里）；
+ * - `launchTarget`：[resolveLaunchTarget] 的结果（它本身也是纯函数）；
+ * - `canJoinExisting`：[DshRuntime.canJoinExistingRunLocked] 的结果。
+ *
+ * 判定顺序与 `startLocked` 原 if 链**逐条一致**（顺序本身是契约）：
+ * 1. 预检不过 ⇒ Refuse —— 预检是"环境根本不能用"，任何"复用在跑实例"的判据都排它之后；
+ * 2. [LaunchTarget.Degraded] ⇒ Refuse（会跑预装、但不是用户要的版本：不许静默降级）；
+ * 3. [LaunchTarget.MissingEntry] ⇒ Refuse（有 package.json = 半棵树，提示重装；没有 = 未安装）；
+ * 4. [LaunchTarget.Unreadable] ⇒ Refuse（磁盘一时读不出来，不能建议重装，见该类型的说明）；
+ * 5. `canJoinExisting` ⇒ Reuse（**必须**在三段 launchTarget 判定之后，与现码 `:661` 一致：
+ *    包都不可信时不许因为"状态看着在跑"就放行）；
+ * 6. 其余 ⇒ Proceed。
+ *
+ * 第 5 步的位置是 R26 的重点：seccomp 重试时状态仍是 `Starting` 但句柄已被清，
+ * [DshRuntime.canJoinExistingRunLocked] 因此为 false ⇒ Proceed ⇒ 真的 fork。
+ */
+fun planStart(
+    preflightOk: Boolean,
+    preflightReason: String?,
+    launchTarget: LaunchTarget,
+    canJoinExisting: Boolean,
+    degradedMessage: String,
+    missingEntryMessage: String,
+    notInstalledMessage: String,
+    unreadableMessage: String
+): StartDecision {
+    // 兜底与旧实现同款：pre.reason 为空时才用这句。本地化文案（dsh_start_not_ready）由调用点先取，
+    // 这里保留纯函数能给出的最后一层字面量 —— 否则纯函数就得依赖 Context。
+    if (!preflightOk) return StartDecision.Refuse(preflightReason ?: "runtime not ready")
+    return when {
+        launchTarget is LaunchTarget.Degraded -> StartDecision.Refuse(degradedMessage)
+        // 两条文案的区分保留（现场不同、用户该做的事也不同）：
+        // 有 package.json = 装了一半（重装），连 package.json 都没有 = 没装（先装）。
+        launchTarget is LaunchTarget.MissingEntry ->
+            StartDecision.Refuse(
+                if (launchTarget.hasPackageJson) missingEntryMessage else notInstalledMessage
+            )
+        launchTarget is LaunchTarget.Unreadable -> StartDecision.Refuse(unreadableMessage)
+        canJoinExisting -> StartDecision.Reuse
+        else -> StartDecision.Proceed
+    }
+}
+
+/**
  * dsh 运行时管理器：在 proot 里启动/停止 `dsh web` 长驻进程，并捕获它打印的
  * `http://127.0.0.1:<port>/?token=XXXX`，供 WebView 加载。
  *
@@ -646,18 +711,12 @@ object DshRuntime {
         // 新生命周期：清掉上一次记下的 node pid（那是上一个实例的，留着只会误导停止逻辑）
         nodePid = 0
 
+        // 预检失败**不在这里早退**：它的结论要和 launchTarget 一起进 [planStart] 才能保证
+        // "判定顺序只有一份"。顺序上它仍是第一条（见 planStart 的文档），这里只取事实。
         val pre = ProotCommand.preflight(
             context, DshPaths.ROOTFS_DIR,
             "${ProotCommand.GUEST_ROOT}/scripts/start-dsh.sh"
         )
-        if (!pre.ok) {
-            val reason = pre.reason
-                ?: appContext?.getString(R.string.dsh_start_not_ready) ?: "runtime not ready"
-            // 兜底重试阶段如果连预检都过不去，说明这次重试也没戏：把状态落到 Failed，
-            // 否则状态会永远停在 Starting（界面上是"启动中"转圈不动）。
-            if (noSeccomp) failRetry(instance, reason)
-            return StartOutcome.NotReady(reason)
-        }
 
         // 真正校验\"装好了\"：状态字段可能是过期的，以磁盘为准。
         // ★ fix12（C-08）：判据从"两次 isFile"换成 [resolveLaunchTarget] 的**单一纯函数** ——
@@ -675,58 +734,76 @@ object DshRuntime {
             { f -> f.isFile && runCatching { f.readText() }.isFailure }
         )
         // 目标类型同时决定两件事：能不能启动、以及 fork 时下发给脚本的 DSH_LAUNCH_TARGET。
+        // ★ R26：Degraded / MissingEntry / Unreadable 不再在这里 return —— 它们的结论统一由
+        //   [planStart] 给（判定顺序只有一份）。这里只留 fork 能走到的两支；其余给空串占位
+        //   （不可达：Refuse 分支已经在用之前返回）。
         val targetKind = when (launchTarget) {
             is LaunchTarget.Instance -> "instance"
             is LaunchTarget.Preinstalled -> "preinstalled"
-            // 会跑预装、但预装版本不是用户要的那个：**拒绝启动并说清两个版本**。
-            // 旧行为是放行后由脚本静默 fallback（C-07），用户看到的只是"起来了"。
-            is LaunchTarget.Degraded -> {
-                val reason = context.getString(
-                    R.string.dsh_start_degraded,
-                    launchTarget.expected ?: "?",
-                    launchTarget.actual ?: "?"
-                )
-                if (noSeccomp) failRetry(instance, reason)
-                return StartOutcome.NotReady(reason)
-            }
+            is LaunchTarget.Degraded -> ""
+            is LaunchTarget.MissingEntry -> ""
+            is LaunchTarget.Unreadable -> ""
+        }
+        // 拒绝文案也在这里先算好：planStart 是纯函数，不能自己去取 Context。
+        // Degraded 要带 expected/actual 两个参数（会跑预装、但预装版本不是用户要的那个：
+        // **拒绝启动并说清两个版本**；旧行为是放行后由脚本静默 fallback，用户只看到"起来了"）。
+        val degradedMessage = when (launchTarget) {
+            is LaunchTarget.Degraded -> context.getString(
+                R.string.dsh_start_degraded,
+                launchTarget.expected ?: "?",
+                launchTarget.actual ?: "?"
+            )
+            else -> ""
+        }
+        // 预检原因：保持旧实现的兜底链（pre.reason → 本地化 dsh_start_not_ready → planStart 里的
+        // "runtime not ready" 字面量）。前两层依赖 Context，只能在这里取。
+        val decision = planStart(
+            preflightOk = pre.ok,
+            preflightReason = pre.reason ?: appContext?.getString(R.string.dsh_start_not_ready),
+            launchTarget = launchTarget,
+            // 同一实例已经在跑：直接复用
+            // ★ Round24 A1a：判据从 runningInstanceId() 换成三元组（见 [canJoinExistingRunLocked]）。
+            //   旧判据只看状态不看进程死没死 —— 正是 H1（seccomp 重试永不 fork）的成因。
+            canJoinExisting = canJoinExistingRunLocked(instance.id),
+            degradedMessage = degradedMessage,
             // 没有可跑的包。两条文案的区分保留（现场不同、用户该做的事也不同）：
             // 有 package.json = 装了一半（重装），连 package.json 都没有 = 没装（先装）。
-            is LaunchTarget.MissingEntry -> {
-                val reason = context.getString(
-                    if (launchTarget.hasPackageJson) R.string.dsh_reason_missing_entry
-                    else R.string.dsh_reason_not_installed
-                )
-                if (noSeccomp) failRetry(instance, reason)
-                return StartOutcome.NotReady(reason)
-            }
+            missingEntryMessage = context.getString(R.string.dsh_reason_missing_entry),
+            notInstalledMessage = context.getString(R.string.dsh_reason_not_installed),
             // ★ R2b-A1-1：磁盘一时读不出来。**不能**套用"请重装"——那把一个可恢复的读故障
             //   （EIO / SELinux / 文件正被替换）变成让用户重下 500MB。文案只说"稍后重试"。
-            is LaunchTarget.Unreadable -> {
-                val reason = context.getString(R.string.dsh_reason_disk_unreadable)
-                DshLogBus.appendFor(
-                    instance.id,
-                    "[runtime] cannot read package.json (preinstalled=${launchTarget.preinstalled}); " +
-                        "refusing to start without touching instance state"
-                )
-                if (noSeccomp) failRetry(instance, reason)
-                return StartOutcome.NotReady(reason)
+            unreadableMessage = context.getString(R.string.dsh_reason_disk_unreadable)
+        )
+        when (decision) {
+            is StartDecision.Refuse -> {
+                // 旧实现里 Unreadable 分支有一行取证日志，保留在同一位置（只对这一态打）。
+                if (launchTarget is LaunchTarget.Unreadable) {
+                    DshLogBus.appendFor(
+                        instance.id,
+                        "[runtime] cannot read package.json (preinstalled=${launchTarget.preinstalled}); " +
+                            "refusing to start without touching instance state"
+                    )
+                }
+                // 兜底重试阶段连判据都过不去，说明这次重试也没戏：把状态落到 Failed，
+                // 否则状态会永远停在 Starting（界面上是"启动中"转圈不动）。
+                // ★ 两条拒绝来源（预检 / launchTarget）都要 failRetry —— 换到统一分支后不能少。
+                if (noSeccomp) failRetry(instance, decision.reason)
+                return StartOutcome.NotReady(decision.reason)
             }
-        }
-
-        // 同一实例已经在跑：直接复用
-        // ★ Round24 A1a：判据从 runningInstanceId() 换成三元组（见 [canJoinExistingRunLocked]）。
-        //   旧判据只看状态不看进程死没死 —— 正是 H1（seccomp 重试永不 fork）的成因。
-        if (canJoinExistingRunLocked(instance.id)) {
-            // 实例级：讲的是"这个实例自己已经在跑"，属于它本次生命周期的一部分
-            DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已在运行，复用现有进程")
-            return StartOutcome.Started
+            is StartDecision.Reuse -> {
+                // 实例级：讲的是"这个实例自己已经在跑"，属于它本次生命周期的一部分
+                DshLogBus.appendFor(instance.id, "[runtime] ${instance.name} 已在运行，复用现有进程")
+                return StartOutcome.Started
+            }
+            is StartDecision.Proceed -> Unit   // ↓ 紧接着就是 fork（结构约束，见 DESIGN-A §1.4）
         }
         // 实例级：把"这次到底跑哪份包"钉在日志里。启动后从 `ps` 看不出走了哪支，只有这行能与
         // 脚本的 `[start-dsh] dsh src/ver` 两行对上 —— C-07 之所以长期隐形，就是因为没有这行。
         val targetVersion = when (launchTarget) {
             is LaunchTarget.Instance -> launchTarget.version
             is LaunchTarget.Preinstalled -> launchTarget.version
-            // Degraded / MissingEntry / Unreadable 都已在上面的 when 里 return，这里是编译器要求的穷举补位。
+            // Degraded / MissingEntry / Unreadable 已由 [planStart] 拒绝（Refuse 分支已 return），
+            // 这里是编译器要求的穷举补位。
             is LaunchTarget.Degraded -> null
             is LaunchTarget.MissingEntry -> null
             is LaunchTarget.Unreadable -> null
@@ -1745,22 +1822,6 @@ object DshRuntime {
         DshLogBus.snapshotFor(instanceId).value.lines.takeLast(count).map { it.substringAfter("  ") }
 
     /**
-     * 判断"进程在就绪前退出"是否像是 proot 与内核 ptrace/seccomp 不兼容。
-     *
-     * 典型表现（真机上出现过的一类问题）：proot 起得来，但 rootfs 里的进程刚跑就被信号杀掉，
-     * 退出码是 128+signal（例如 SIGSYS=31 → 159、SIGSEGV=11 → 139），日志里出现
-     * seccomp / ptrace / Bad system call / Operation not permitted 等字样。
-     * 这类情况带 `PROOT_NO_SECCOMP=1` 重试通常就好了（见 [seccompFallbackUsed]）。
-     */
-    private fun looksLikeSeccompTrouble(code: Int, tail: List<String>): Boolean {
-        // 被信号杀死：proot 自身或 rootfs 内进程被内核拦下（注：主动停止的 143 在调用点已被排除）
-        if (code > 128) return true
-        val text = tail.joinToString(" ").lowercase()
-        return text.contains("seccomp") || text.contains("ptrace") ||
-            text.contains("bad system call") || text.contains("operation not permitted")
-    }
-
-    /**
      * 就绪前早期退出时，必要时安排一次 `PROOT_NO_SECCOMP=1` 的兜底重试。
      * @return true 表示已安排重试（此时**不要**落 Failed，状态维持在 Starting，界面不会闪一下失败）
      */
@@ -2268,6 +2329,33 @@ fun shouldSignal(pid: Long, cmdline: String?, expectNode: Boolean): Boolean {
     } else {
         cmdline.contains("proot")
     }
+}
+
+/**
+ * 判断"进程在就绪前退出"是否像是 proot 与内核 ptrace/seccomp 不兼容。
+ *
+ * 典型表现（真机上出现过的一类问题）：proot 起得来，但 rootfs 里的进程刚跑就被信号杀掉，
+ * 退出码是 128+signal（例如 SIGSYS=31 → 159、SIGSEGV=11 → 139），日志里出现
+ * seccomp / ptrace / Bad system call / Operation not permitted 等字样。
+ * 这类情况带 `PROOT_NO_SECCOMP=1` 重试通常就好了（见 [DshRuntime] 的 `seccompFallbackUsed`）。
+ *
+ * ★ R26（DESIGN-A §1.5）：从 [DshRuntime] 内部挪到顶层、去掉 `private`（同 [shouldSignal] /
+ *   [canSendQuitSignal] 的惯例）。原因：这条判据原来**零覆盖**，而 `code > 128` 是一刀切 ——
+ *   把行为钉进单测是"先钉住现状、再暴露脆弱点"，不是改 bug。
+ *
+ * ⚠️ 已知脆弱点：`code > 128` 意味着 **143（SIGTERM）也会命中**，而用户点「停止」走的正是
+ *   TERM ⇒ 若调用点不先排除，主动停止会被误判成 seccomp 问题并自动重启。
+ *   现由唯一调用点 [DshRuntime] 的 `retryIfSeccompLooksGuilty` 的上游（`onProcessExit` 里的
+ *   `wasStopRequested` 守卫）先排除。这个依赖是**隐形的**：把重试挪出 `Starting` 分支就会失效，
+ *   所以单测 `sigtermAlsoMatches_trapIsMovedToCallSite` 把 143=true 钉住并注明。
+ *   本函数**不能**自己判 143 —— 它拿不到 `wasStopRequested`（纯函数、无状态）。
+ */
+fun looksLikeSeccompTrouble(code: Int, tail: List<String>): Boolean {
+    // 被信号杀死：proot 自身或 rootfs 内进程被内核拦下（注：主动停止的 143 在调用点已被排除）
+    if (code > 128) return true
+    val text = tail.joinToString(" ").lowercase()
+    return text.contains("seccomp") || text.contains("ptrace") ||
+        text.contains("bad system call") || text.contains("operation not permitted")
 }
 
 /**

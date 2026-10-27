@@ -1,5 +1,6 @@
 package com.dsh
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -20,8 +21,8 @@ import java.util.Locale
  * 这个测试是**数据驱动**的：下面 [callSites] 登记了每个带占位符的 dsh 文案在代码里的参数类型。
  * 以后改了文案占位符、或改了调用点的参数类型，这里会先失败，而不是等到用户手机上崩。
  *
- * 注意：需要能读到 `FCL/src/main/res/values/strings.xml`（在仓库根或 FCL/ 目录下运行）；
- * 读不到时第二个测试会跳过（第一个会直接失败，避免"静默通过"）。
+ * 注意：需要能读到 `FCL/src/main/res/values/strings.xml` 及其中文/繁中两份（在仓库根或 FCL/ 目录下运行）；
+ * 三个语系（en / zh / zh-rTW）必须**都能**读到 —— R26 起缺一个就判失败，不再静默跳过。
  */
 class DshResourceFormatTest {
 
@@ -141,10 +142,18 @@ class DshResourceFormatTest {
 
     @Test
     fun dshStringFormatsAcceptTheArgsPassedInCode() {
-        val files = LOCALES.mapNotNull { resolve(it) }
+        // R26 / S6：三语**全部**参与格式化校验（此前只跑 en / zh，rTW 是覆盖盲区）。
+        val files = THREE_LOCALES.mapNotNull { resolve(it) }
         assertTrue(
             "找不到 strings.xml：请在仓库根目录或 FCL/ 目录下运行测试",
             files.isNotEmpty()
+        )
+        // ★ R26：三语文件必须**全部**解析到 —— 否则 mapNotNull 会静默跳过找不到的那个语言，
+        //   测试看似绿、实际只校验了两语（S6 的"假绿"第 5 类）。
+        assertEquals(
+            "三语文件必须都能解析到（缺一个就等于漏校验一个语系）",
+            THREE_LOCALES.size,
+            files.size
         )
         files.forEach { file ->
             val strings = parseStrings(file)
@@ -193,9 +202,9 @@ class DshResourceFormatTest {
      * **BL-206**：门禁框两档标题 + "系统没给版本"那条文案，三语必须齐全且中文里不许出现
      * 英文占位串 "unknown"。
      *
-     * 为什么单独钉这一组（而不是扩展 [LOCALES] 做全量三语校验）：rTW 文件刻意只覆盖 `dsh_*`
-     *（见其文件头），全量校验是 BL-209 的既有欠账，属另一条战线；这里只钉本轮新加的三条 ——
-     * 它们出现在**同一个对话框**里，缺一条的后果是"简体用户看到一个英文标题"或更糟：
+     * 为什么单独钉这一组（而不是只靠 [dshStringFormatsAcceptTheArgsPassedInCode]）：全量格式化
+     * 校验只看**带占位符并已登记**的 key，这四条里有不带占位符的，登记表覆盖不到；这里只钉本轮
+     * 新加的三条 —— 它们出现在**同一个对话框**里，缺一条的后果是"简体用户看到一个英文标题"或更糟：
      * 标题说"无法识别"、正文说"读到 unknown"，正是 BL-206 要消灭的自相矛盾。
      */
     @Test
@@ -274,11 +283,9 @@ class DshResourceFormatTest {
     // --- 工具 ---------------------------------------------------------------
 
     private companion object {
-        val LOCALES = listOf("values/strings.xml", "values-zh/strings.xml")
-
         /**
-         * BL-206：门禁框文案的三语校验用（**不含**在 [LOCALES] 里 —— rTW 刻意只覆盖 dsh_*，
-         * 全量格式化校验是 BL-209 的既有欠账，不在本轮范围）。
+         * **BL-206 / R26**：三语文案校验用 —— 全量格式化渲染（[dshStringFormatsAcceptTheArgsPassedInCode]）
+         * 与存在性校验共用这一组。rTW 从 R26 起必须参与格式化校验，不再留作 BL-209 的欠账。
          */
         val THREE_LOCALES = listOf("values/strings.xml", "values-zh/strings.xml", "values-zh-rTW/strings.xml")
 
