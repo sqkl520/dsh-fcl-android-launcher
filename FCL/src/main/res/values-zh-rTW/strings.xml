@@ -317,6 +317,10 @@
          （兩個外跳入口都以「版本過舊」為前置），而本頁顯示的又是剝掉 token 的裸位址 → 手敲進瀏覽器必 401。
          這一行補的就是那個出口，值位仍是裸位址，憑據只在使用者確認後進剪貼簿。 -->
     <string name="dsh_settings_row_copy_url">複製存取連結</string>
+    <!-- fix15 / R27 P0-B：複製出來的連結會隨 dsh 行程重新啟動而失效，這一行是「當場開啟」。 -->
+    <string name="dsh_settings_row_open_browser">在瀏覽器中開啟</string>
+    <string name="dsh_settings_desc_open_browser">立刻用瀏覽器開啟 dsh 介面</string>
+    <string name="dsh_settings_desc_open_browser_unavailable">沒有可用的瀏覽器，請改用「複製存取連結」</string>
     <string name="dsh_settings_desc_name">顯示在實例清單裡的名稱</string>
     <string name="dsh_settings_desc_model">對話使用的模型</string>
     <string name="dsh_settings_desc_profile">啟動時載入的 dsh profile</string>

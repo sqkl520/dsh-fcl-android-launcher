@@ -67,6 +67,65 @@ fun versionMatches(requested: String?, actual: String?): Boolean =
         (actual != null && requested == actual)
 
 /**
+ * 新建实例的**首选端口**（R27 / P0-C）。
+ *
+ * ## 为什么不再用 0（交给系统随机分配）
+ *
+ * dsh 的会话 cookie 名里编进了 `host:port`（`browser-auth.ts:106-107` 的
+ * `cookieName = 'dsh-auth-' + base64url(sha256(authority))`，authority 含端口）。
+ * 端口一变 ⇒ cookie 名变 ⇒ **浏览器里那条 30 天有效的 cookie 直接作废**，
+ * 外部浏览器只能退回一次性 token —— 而 token 每次进程启动都会重新生成，于是必然过期。
+ *
+ * 也就是说：**端口稳定 = 外部浏览器可以长期免认证**。这条把"随机端口"换成"稳定端口"，
+ * 是让「复制一条链接给浏览器用」这件事真正可行的前提。
+ *
+ * ## 规则
+ * - 从 [PORT_RANGE_START] 起按序号递增（序号来自实例 id 里的 `seq`，见 [buildId]）；
+ * - 撞上已用端口时**线性探测**（+1，最多试 [PORT_PROBE_ATTEMPTS] 次）；
+ * - 全部撞满则**回落到 0**（交给系统分配）—— 宁可这次不稳定，也不要让新建实例失败。
+ *
+ * ## 为什么仍然可能变成 0
+ * 端口是"首选值"不是"保证值"：真正 bind 时若已被别的 App 占用，
+ * `DshRuntime.resolveLaunchPort` 会退避并回写新端口（既有逻辑，不动）。
+ * 本函数只保证**我们自己**不会把同一个端口分配给两个实例。
+ *
+ * @param seq 该实例的进程序列号（正数）
+ * @param taken 当前所有实例已占用的端口（含 0，0 表示"未固定"，应被跳过）
+ */
+fun preferredPort(seq: Int, taken: Set<Int>): Int {
+    if (seq <= 0) return 0
+    var candidate = PORT_RANGE_START + (seq % PORT_RANGE_SIZE)
+    repeat(PORT_PROBE_ATTEMPTS) {
+        if (candidate !in taken && candidate > 0) return candidate
+        candidate = if (candidate >= PORT_RANGE_START + PORT_RANGE_SIZE - 1) {
+            PORT_RANGE_START
+        } else {
+            candidate + 1
+        }
+    }
+    return 0
+}
+
+/** 首选端口段的起点（避开常见服务端口；38501 这个数就落在这个段里）。 */
+const val PORT_RANGE_START = 38500
+
+/** 首选端口段的大小（每个实例一个槽位）。 */
+const val PORT_RANGE_SIZE = 500
+
+/** 撞端口时的线性探测次数上限。 */
+const val PORT_PROBE_ATTEMPTS = 20
+
+/**
+ * 从实例 id 里取序号。
+ *
+ * id 形如 `inst-<ms>-<seq>-<hex>`（[buildId]）。序号用来给新实例分配**互不相同**的
+ * 首选端口起点（[preferredPort]），所以解析失败时返回 0（⇒ `preferredPort` 回落到 0，
+ * 即"交给系统"）—— 宁可这个实例端口不固定，也不要因为 id 形态意外而崩溃。
+ */
+fun seqOf(id: String): Int =
+    id.split('-').getOrNull(2)?.toIntOrNull() ?: 0
+
+/**
  * repair 的判定内核（顶层纯函数，JVM 可测）。
  *
  * 判定表（顺序即优先级，**不得调换**）：
@@ -318,7 +377,15 @@ object DshInstances {
             id = id,
             name = name,
             model = model,
-            port = 0 // 0 = 交给系统分配，见 DshRuntime
+            // ★ R27 / P0-C：不再用 0（系统随机分配），改成一个**稳定的首选端口**。
+            //
+            // 理由：dsh 的 cookie 名编进了 host:port（browser-auth.ts:106-107），端口一变
+            // cookie 就作废 ⇒ 外部浏览器每次都要重新认证，而 token 每次启动都会换新。
+            // 端口稳定后，那条 30 天有效的 cookie 才能在浏览器里长期起作用。
+            //
+            // 0 仍然可能出现在两种情形：①端口段全被占（preferredPort 回落 0）；
+            // ②用户在设置页手工改成 0。两者都由 DshRuntime.resolveLaunchPort 的正常路径处理。
+            port = preferredPort(seqOf(id), _instances.value.mapNotNull { it.port }.toSet())
         )
         _instances.update { it + inst }
         if (_selectedId.value == null) _selectedId.value = id
