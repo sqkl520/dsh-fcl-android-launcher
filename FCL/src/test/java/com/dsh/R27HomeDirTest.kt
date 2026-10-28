@@ -1,8 +1,10 @@
 package com.dsh
 
+import com.dsh.core.hostPathForGuestDir
 import com.dsh.core.resolveHomeRootfs
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.io.File
 
 /**
  * R27 / P0-A2：`HOME` 的解析规则 —— 决定 dsh 目录选择器**从哪儿起步**。
@@ -88,5 +90,63 @@ class R27HomeDirTest {
             "/opt/dsh/instances",
             resolveHomeRootfs(instanceDir, "  /opt/dsh/instances  ")
         )
+    }
+
+    /**
+     * R28（锐评 C2-8）：含 `..` / `.` 的路径必须被拒绝并回落默认值。
+     *
+     * 这不是"防黑客"（用户填的是自己的 home，没有权限边界），而是**防歧义**：
+     * `/opt/dsh/../etc` 与 `/opt/etc` 是同一个位置，但日志、报错、界面回显会给出两条不同的
+     * 字符串 —— 出问题时用户和我看到的东西对不上。而且 dsh 的 picker 会把 path 原样回显在
+     * 面包屑里，含 `..` 的 crumb 点回去会跳来跳去。
+     */
+    @Test
+    fun dotSegmentsAreRejected() {
+        assertEquals("含 .. 的路径必须回落", instanceDir, resolveHomeRootfs(instanceDir, "/opt/dsh/../etc"))
+        assertEquals("含 . 的路径必须回落", instanceDir, resolveHomeRootfs(instanceDir, "/opt/./dsh"))
+        assertEquals("中间含 .. 同样回落", instanceDir, resolveHomeRootfs(instanceDir, "/opt/a/../../b"))
+    }
+}
+
+/**
+ * R28（锐评 C2-5）：guest 内路径 → 宿主路径的换算。
+ *
+ * 用途：用户自定义的「启动目录」若不存在，启动时要在宿主侧把它建出来 ——
+ * 否则 dsh 的 picker `opendir` 失败，用户看到的是同一行 12px 小字 + 空框（第三次踩同一个坑）。
+ *
+ * 换算依据：proot 把 `$GUEST_ROOT`（`/opt/dsh`）bind 到宿主 `DshPaths.ROOT_DIR`。
+ * 只有这一段在宿主侧有真实对应；rootfs 内部路径返回 null（不往解压出来的 rootfs 里写东西）。
+ */
+class R28GuestPathTest {
+
+    private val hostRoot = File("/host/root")
+    private val guestRoot = "/opt/dsh"
+
+    @Test
+    fun guestRootItselfMapsToHostRoot() {
+        assertEquals(hostRoot, hostPathForGuestDir("/opt/dsh", hostRoot, guestRoot))
+        assertEquals("尾随斜杠也认", hostRoot, hostPathForGuestDir("/opt/dsh/", hostRoot, guestRoot))
+    }
+
+    @Test
+    fun nestedGuestPathMapsUnderHostRoot() {
+        assertEquals(
+            "实例目录必须正确换算（这是最常用的情形）",
+            File("/host/root/instances/inst-x"),
+            hostPathForGuestDir("/opt/dsh/instances/inst-x", hostRoot, guestRoot)
+        )
+    }
+
+    /**
+     * rootfs 内部的路径返回 null —— 我们不往解压出来的 rootfs 里写东西。
+     *
+     * 这条同时是一个**安全边界**：如果这里返回了某个宿主路径，`mkdirs()` 就会在
+     * 意料之外的位置建目录。
+     */
+    @Test
+    fun pathOutsideGuestRootReturnsNull() {
+        assertEquals("rootfs 内部路径不归我们管", null, hostPathForGuestDir("/etc", hostRoot, guestRoot))
+        assertEquals("前缀相似但不是子路径", null, hostPathForGuestDir("/opt/dshx/foo", hostRoot, guestRoot))
+        assertEquals("根目录", null, hostPathForGuestDir("/", hostRoot, guestRoot))
     }
 }
