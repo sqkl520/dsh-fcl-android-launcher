@@ -126,6 +126,42 @@ fun seqOf(id: String): Int =
     id.split('-').getOrNull(2)?.toIntOrNull() ?: 0
 
 /**
+ * 一个实例启动时该用哪个目录当 `HOME`（rootfs 内绝对路径）。
+ *
+ * ## 为什么需要它
+ *
+ * dsh 的目录选择器（`dsh-host-directory-picker-browse`）打开对话框时用 `homedir()`（= `$HOME`）
+ * 当初始目录，而它的 `list()` **只返回目录**（`dirent.isDirectory() || isSymbolicLink()`）。
+ * 所以 `HOME` 指向"存在但没有任何子目录"的地方时，用户看到的就是**一个空框** ——
+ * 这正是"选择工作区目录加载不出来"的真正原因（R27 诊断）。
+ *
+ * 两个历史教训（都踩在同一个坑上）：
+ * - `HOME=/root`：rootfs 的 `/root` 只有 `.profile`/`.bashrc`，**零子目录** ⇒ 空框；
+ * - `HOME=<instance>/workspace`（fix15）：目录**确实是空的**（只 `mkdirs()` 建了壳）⇒ 仍是空框。
+ *
+ * ## 默认值为什么是实例目录
+ * `instances/<id>/` 天然含三个子目录 —— `home/`（DSH_HOME）、`workspace/`（agent 工作目录）、
+ * `node_modules/`（dsh 本体）⇒ 列表非空，且 `workspace/` 就在第一屏，点进去就是目标目录。
+ *
+ * ## 自定义值
+ * 用户可在实例设置里把 `HOME` 指到别处（例如整个 `instances/` 根）。
+ * 值必须是 **rootfs 内绝对路径**（以 `/` 开头）：相对路径会让 `homedir()` 解析到 proot 的
+ * 当前工作目录，行为随 `-w` 变化而变化 —— 那种"看起来能用但换个启动方式就变"的配置不接受。
+ *
+ * @param instancePathInRootfs 实例目录在 guest 内的绝对路径（如 `/opt/dsh/instances/<id>`）
+ * @param custom 用户自定义值（[DshInstance.homeDir]），可为 null
+ * @return 实际使用的 `HOME`
+ */
+fun resolveHomeRootfs(instancePathInRootfs: String, custom: String?): String {
+    val trimmed = custom?.trim()
+    // 只接受 guest 内绝对路径；非绝对 / 空白一律回落默认值（而不是拼出一个可疑路径）。
+    if (trimmed.isNullOrEmpty() || !trimmed.startsWith("/")) return instancePathInRootfs
+    // 去掉尾随斜杠，避免 HOME=/x/ 这类值在拼 `${HOME}/.config` 时出现双斜杠
+    // （多数程序容忍，但会让日志与错误信息变得难读）。
+    return trimmed.trimEnd('/').ifEmpty { "/" }
+}
+
+/**
  * repair 的判定内核（顶层纯函数，JVM 可测）。
  *
  * 判定表（顺序即优先级，**不得调换**）：
@@ -441,7 +477,14 @@ object DshInstances {
         name: String? = null,
         model: String? = null,
         profile: String? = null,
-        port: Int? = null
+        port: Int? = null,
+        /**
+         * 自定义 `HOME`（rootfs 内绝对路径）。传 `null` = **不改**（与其他参数同款语义）。
+         * 要"恢复默认"请传 [clearHomeDir] = true —— 两者分开是因为 `null` 已经表示"不动"。
+         */
+        homeDir: String? = null,
+        /** 把 [DshInstance.homeDir] 清成 `null`（恢复默认的实例目录）。优先于 [homeDir]。 */
+        clearHomeDir: Boolean = false
     ) {
         _instances.update { list ->
             list.map {
@@ -450,6 +493,7 @@ object DshInstances {
                     model = model ?: it.model,
                     profile = profile ?: it.profile,
                     port = port ?: it.port,
+                    homeDir = if (clearHomeDir) null else (homeDir ?: it.homeDir),
                     updatedAt = System.currentTimeMillis()
                 )
             }

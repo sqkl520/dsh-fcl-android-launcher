@@ -16,7 +16,9 @@ import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
 import com.dsh.core.DshServices
+import com.dsh.core.ProotCommand
 import com.dsh.core.UrlScanner
+import com.dsh.core.resolveHomeRootfs
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.UiDshInstanceDetailBinding
 import com.dsh.ui.DshInstanceSettingAdapter
@@ -418,6 +420,18 @@ class DshInstanceSettingPage(
             },
             DshInstanceSettingAdapter.Tag.PORT
         ),
+        // ★ R27 / P0-A2：「启动目录（HOME）」—— dsh 的目录选择器用它当初始目录。
+        //
+        // 为什么这一行值得给用户：默认值（实例目录）只含 `home`/`workspace`/`node_modules` 三项，
+        // 若用户想跨实例选目录、或想让 agent 直接落在家目录下的别处，就只能改这个值。
+        // 值位显示**当前生效的**路径（含默认值），不是只显示"已自定义"——用户要能一眼看到
+        // dsh 到底从哪里起步，否则"为什么列表里是这些"永远说不清。
+        DshInstanceSettingAdapter.Row.Value(
+            R.string.dsh_settings_row_home,
+            R.string.dsh_settings_desc_home,
+            { homeDirText() },
+            DshInstanceSettingAdapter.Tag.HOME_DIR
+        ),
         DshInstanceSettingAdapter.Row.Group(R.string.dsh_settings_section_maintain),
         DshInstanceSettingAdapter.Row.Action(
             R.string.dsh_action_reinstall, R.string.dsh_settings_desc_reinstall,
@@ -529,6 +543,23 @@ class DshInstanceSettingPage(
     private fun copyUrlText(): String = tokenUrl()?.substringBefore('?') ?: "-"
 
     /**
+     * 「启动目录（HOME）」行的值位：**当前生效的** guest 内路径。
+     *
+     * 显示的是"实际会用哪个"，而不是只显示"是否自定义过" —— 用户要能一眼看出 dsh 从哪儿起步，
+     * 否则"列表里为什么是这几项"永远说不清。自定义值与默认值都显示，默认值额外标注一下。
+     */
+    private fun homeDirText(): String {
+        val i = inst ?: return "-"
+        val guestPath = "${ProotCommand.GUEST_ROOT}/instances/${i.id}"
+        val effective = resolveHomeRootfs(guestPath, i.homeDir)
+        return if (i.homeDir.isNullOrBlank()) {
+            context.getString(R.string.dsh_home_default_value, effective)
+        } else {
+            effective
+        }
+    }
+
+    /**
      * 「在浏览器中打开」（R27 / P0-B）：把**此刻**带 token 的 URL 交给系统浏览器。
      *
      * 与 [confirmCopyUrl] 的分工：
@@ -584,6 +615,28 @@ class DshInstanceSettingPage(
                 if (i.port > 0) i.port.toString() else "",
                 allowEmpty = true
             ) { text -> commitPortValue(i, text) }
+
+            // ★ R27 / P0-A2：启动目录（HOME）。空 = 恢复默认（实例目录）。
+            //   只接受 guest 内绝对路径 —— 相对路径会随 proot 的 `-w` 漂移，
+            //   那种"看起来能用、换个启动方式就变"的值不接受（判据在 [resolveHomeRootfs]）。
+            DshInstanceSettingAdapter.Tag.HOME_DIR -> editText(
+                context.getString(R.string.dsh_settings_row_home),
+                i.homeDir ?: "",
+                allowEmpty = true
+            ) { text ->
+                val trimmed = text.trim()
+                if (trimmed.isEmpty()) {
+                    DshInstances.updateConfig(i.id, clearHomeDir = true)
+                    reload()
+                    toastSaveOutcome(i.id)
+                } else if (!trimmed.startsWith("/")) {
+                    toast(context.getString(R.string.dsh_home_must_be_absolute))
+                } else {
+                    DshInstances.updateConfig(i.id, homeDir = trimmed)
+                    reload()
+                    toastSaveOutcome(i.id)
+                }
+            }
 
             DshInstanceSettingAdapter.Tag.PATH -> {
                 val path = DshPaths.instanceDir(i.id).absolutePath
