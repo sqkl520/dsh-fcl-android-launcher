@@ -849,6 +849,30 @@ object DshRuntime {
         val launchPort = resolveLaunchPort(instance)
 
         val instancePathInRootfs = "${ProotCommand.GUEST_ROOT}/instances/${instance.id}"
+
+        // ★ R28（锐评 C2-5）：用户自定义的「启动目录」若不存在，**在这里建出来**。
+        //
+        // dsh 的 picker 打开时会对 `homedir()` 做 `opendir`；目录不存在 ⇒
+        // `DirectoryPickerError("directory-unreadable")` ⇒ 前端只显示一行 12px 的小字
+        // （`DirectoryBrowser.module.css:279-288`），用户看到的还是"空框" ——
+        // 也就是同一个坑的第三次。设置页没法做这个校验（那时拿不到 guest 视图），
+        // 但启动时我们知道完整的映射关系，所以在这里补齐。
+        //
+        // 只对落在 `$GUEST_ROOT` 下的路径生效（那一段在宿主侧有真实对应）；
+        // rootfs 内部的路径交给 rootfs 自己（我们不往解压出来的 rootfs 里写东西）。
+        val homeGuest = resolveHomeRootfs(instancePathInRootfs, instance.homeDir)
+        hostPathForGuestDir(homeGuest, File(DshPaths.ROOT_DIR), ProotCommand.GUEST_ROOT)?.let { dir ->
+            if (!dir.isDirectory) {
+                runCatching { dir.mkdirs() }.onFailure { e ->
+                    // 建不出来不是致命错误，但要留痕：否则用户会看到一个无法解释的空列表。
+                    DshLogBus.appendFor(
+                        instance.id,
+                        "[runtime] cannot create custom HOME ${dir.absolutePath}: ${e.message}"
+                    )
+                }
+            }
+        }
+
         // ★ 启动器不再向子进程注入 DEEPSEEK_API_KEY / DEEPSEEK_DEFAULT_MODEL（批次 5）。
         //
         // 硬理由不是"优先级低"，而是"注入之后用户在 App 内根本改不掉"：

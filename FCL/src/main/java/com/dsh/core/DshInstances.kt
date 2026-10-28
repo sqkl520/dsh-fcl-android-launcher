@@ -158,7 +158,42 @@ fun resolveHomeRootfs(instancePathInRootfs: String, custom: String?): String {
     if (trimmed.isNullOrEmpty() || !trimmed.startsWith("/")) return instancePathInRootfs
     // 去掉尾随斜杠，避免 HOME=/x/ 这类值在拼 `${HOME}/.config` 时出现双斜杠
     // （多数程序容忍，但会让日志与错误信息变得难读）。
-    return trimmed.trimEnd('/').ifEmpty { "/" }
+    val normalized = trimmed.trimEnd('/').ifEmpty { "/" }
+    // ★ R28（锐评 C2-8）：拒绝含 `..` 的路径。
+    //
+    // 这不是"防黑客"（用户填的是自己的 home，没有权限边界），而是**防歧义**：
+    // `/opt/dsh/../etc` 与 `/opt/etc` 是同一个位置，但日志、报错、以及"我设了什么"
+    // 的界面显示会给出两条不同的字符串 —— 出问题时用户和我看到的东西对不上。
+    // 而且 dsh 的 picker 会把 `path` 原样回显在面包屑里，含 `..` 的 crumb 点回去会跳来跳去。
+    //
+    // 拒绝的方式是**回落默认值**（与其它非法输入一致），而不是抛异常：
+    // 这个函数在 UI 的每一帧渲染里都会被调用（`homeDirText()`），抛异常会让整页崩掉。
+    if (normalized.split('/').any { it == ".." || it == "." }) return instancePathInRootfs
+    return normalized
+}
+
+/**
+ * 把 guest 内路径换算成宿主文件系统路径（R28 / 锐评 C2-5）。
+ *
+ * 项目的 proot 把 `$GUEST_ROOT`（`/opt/dsh`）bind 到宿主 `DshPaths.ROOT_DIR`，
+ * 其余路径走 rootfs。只有落在 `$GUEST_ROOT` 下的路径能在宿主侧直接对应到文件 ——
+ * 这也正是实例目录、`workspace/`、`npm-cache/` 这些"用户会选的地方"所在的范围。
+ *
+ * ## 为什么需要它
+ * 用户在设置里填的「启动目录」是 guest 内路径。若那个目录**不存在**，
+ * dsh 的 picker 会 `opendir` 失败、返回 `directory-unreadable` —— 用户看到的是一个空框加一行
+ * 12px 小字（几乎看不见），也就是**同一个坑的第三次**。所以启动前要在宿主侧把它建出来。
+ *
+ * @return 宿主的 [File]；路径不在 `$GUEST_ROOT` 下（即落在 rootfs 里）时返回 null ——
+ *         那部分我们无权也无需创建，交给 rootfs 自己的内容。
+ */
+fun hostPathForGuestDir(guestPath: String, hostRootDir: File, guestRoot: String): File? {
+    val root = guestRoot.trimEnd('/')
+    if (guestPath == root) return hostRootDir
+    if (!guestPath.startsWith("$root/")) return null
+    val relative = guestPath.removePrefix("$root/").trim('/')
+    if (relative.isEmpty()) return hostRootDir
+    return File(hostRootDir, relative)
 }
 
 /**

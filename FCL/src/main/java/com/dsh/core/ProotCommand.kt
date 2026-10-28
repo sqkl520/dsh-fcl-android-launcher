@@ -132,17 +132,24 @@ object ProotCommand {
      * @param argvEnv 非敏感配置（INSTANCE_DIR/PORT/PROFILE/...）
      * @param procEnv 不宜出现在命令行里的值（当前是 PROOT_NO_SECCOMP；见 [isAllowedEnvKey] 的说明）
      * @param workDirRootfs 初始工作目录（默认 /root；实例运行时应传实例 workspace）
-     * @param homeRootfs guest 内的 `HOME`（默认 /root；实例运行时应传实例 workspace，见下方 KDoc）
+     * @param homeRootfs guest 内的 `HOME`（默认 /root；实例启动时传实例目录，见下方 KDoc）
      * @param bindCacheAsTmp 是否把宿主 cacheDir/dsh/tmp 挂成 /tmp（默认是）
      *
      * ## 为什么 `HOME` 必须与 `workDirRootfs` 分开成参数（R27 / P0-A）
      *
      * dsh 的目录选择器（`@deepseek-ai/dsh-host-directory-picker-browse`）在"打开对话框"时
-     * 用 `homedir()` 作为初始目录，而 `homedir()` 在 POSIX 上就读 `$HOME`。过去这里把 `HOME`
-     * 写死成 `/root`，而 rootfs 的 `/root` **是空目录**（只有 `.profile`/`.bashrc`，零子目录），
-     * 加上 picker 只列目录 ⇒ 列表恒为空 ⇒ 用户看到"选择工作区目录"是一个空框。
+     * 用 `homedir()` 作为初始目录，而 `homedir()` 在 POSIX 上就读 `$HOME`。
+     * 而它的 `list()` **只返回目录**（`dirent.isDirectory() || dirent.isSymbolicLink()`）。
      *
-     * 实例启动时把 `HOME` 指向实例自己的 workspace，对话框打开即落在用户真正能用的目录上。
+     * ⇒ `HOME` 必须指向**一个真正有子目录的位置**，否则用户看到的是空框。
+     *    本项目在这个坑上踩过两次：
+     *    - 最早写死 `/root`：rootfs 的 `/root` 只有 `.profile`/`.bashrc`，**零子目录**；
+     *    - fix15 改成 `<instance>/workspace`：方向对，但那个目录**是空的**
+     *      （只 `mkdirs()` 建了壳，从没往里写过东西）。
+     *
+     * 现在实例启动时由 [com.dsh.core.resolveHomeRootfs] 决定：默认是**实例目录本身**
+     * （天然含 `home/`、`workspace/`、`node_modules/` 三个子目录），也允许用户在设置里
+     * 指定任意 guest 内绝对路径。
      *
      * **与 `DSH_HOME` 无关**：dsh 的配置/凭据/cookie 落在 `DSH_HOME`（脚本里显式设为
      * `$INSTANCE_DIR/home`），不读 `$HOME/.dsh`，所以改 `HOME` 不会让任何配置"搬家"。
@@ -181,8 +188,8 @@ object ProotCommand {
             // 干净环境下执行目标脚本；非敏感项走 argv，敏感项走 procEnv
             add("/usr/bin/env")
             add("PATH=$DEFAULT_PATH")
-            // R27 / P0-A：HOME 从写死的 /root 改为可传参（实例启动时指向实例 workspace）。
-            // 见 [build] 的 KDoc：dsh 的目录选择器用 homedir() 当初始目录，而 /root 是空目录。
+            // R27：HOME 从写死的 /root 改为可传参。实例启动时指向**实例目录**
+            // （见 [com.dsh.core.resolveHomeRootfs]），因为 picker 只列目录、空目录会显示成空框。
             add("HOME=$homeRootfs")
             add("TMPDIR=/tmp")
             add("LANG=C.UTF-8")
