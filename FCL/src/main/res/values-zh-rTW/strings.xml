@@ -308,6 +308,11 @@
     <string name="dsh_setup_steps_header">準備項目</string>
     <string name="dsh_settings_row_name">實例名稱</string>
     <string name="dsh_settings_row_port">連接埠</string>
+    <!-- fix17 / R27 P0-A2：目錄選擇器用 HOME 當初始目錄且只列目錄，必須指向有子目錄的位置。 -->
+    <string name="dsh_settings_row_home">啟動目錄</string>
+    <string name="dsh_settings_desc_home">目錄選擇器的起始位置；留空則使用實例目錄</string>
+    <string name="dsh_home_default_value">%1$s（預設）</string>
+    <string name="dsh_home_must_be_absolute">必須是執行環境內的絕對路徑（以 / 開頭）</string>
     <string name="dsh_settings_row_key">API Key</string>
     <string name="dsh_settings_row_key_status">連線狀態</string>
     <string name="dsh_settings_row_version">已安裝 dsh</string>

@@ -326,6 +326,11 @@
     <string name="dsh_setup_steps_header">准备项</string>
     <string name="dsh_settings_row_name">实例名称</string>
     <string name="dsh_settings_row_port">端口</string>
+    <!-- fix17 / R27 P0-A2：目录选择器用 HOME 当初始目录且只列目录，必须指向有子目录的位置。 -->
+    <string name="dsh_settings_row_home">启动目录</string>
+    <string name="dsh_settings_desc_home">目录选择器的起始位置；留空则用实例目录</string>
+    <string name="dsh_home_default_value">%1$s（默认）</string>
+    <string name="dsh_home_must_be_absolute">必须是运行环境内的绝对路径（以 / 开头）</string>
     <string name="dsh_settings_row_key">API Key</string>
     <string name="dsh_settings_row_key_status">连接状态</string>
     <string name="dsh_settings_row_version">已安装 dsh</string>
