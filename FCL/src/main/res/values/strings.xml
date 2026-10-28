@@ -340,6 +340,11 @@ Version %1$s</string>
          （两个外跳入口都以"版本过旧"为前置），而本页显示的又是剥掉 token 的裸地址 → 手敲进浏览器必 401。
          这一行补的就是那个出口，值位仍是裸地址，凭据只在用户确认后进剪贴板。 -->
     <string name="dsh_settings_row_copy_url">Copy access link</string>
+    <!-- fix15 / R27 P0-B：与「复制访问链接」并列的第二条出口。复制出来的链接会随
+         dsh 进程重启而失效（token 每次重启换新），这一行是"当场打开"，零过期风险。 -->
+    <string name="dsh_settings_row_open_browser">Open in browser</string>
+    <string name="dsh_settings_desc_open_browser">Open the dsh interface in your browser right now</string>
+    <string name="dsh_settings_desc_open_browser_unavailable">No browser available; try copying the link instead</string>
     <string name="dsh_settings_desc_name">Shown in the instance list</string>
     <string name="dsh_settings_desc_model">Model used for conversations</string>
     <string name="dsh_settings_desc_profile">dsh profile to boot</string>

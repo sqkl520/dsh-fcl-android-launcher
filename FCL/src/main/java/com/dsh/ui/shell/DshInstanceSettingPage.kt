@@ -3,6 +3,8 @@ package com.dsh.ui.shell
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -299,6 +301,26 @@ class DshInstanceSettingPage(
                 editable = copyUrlReady
             ),
 
+            // ★ R27 / P0-B：「在浏览器中打开」—— 与上面的「复制访问链接」是**两条不同的路**，
+            //   缺一不可：
+            //
+            //   · 复制：给用户一条可粘贴的地址，但**那条地址会过期** ——
+            //     dsh 的 launch token 每次进程启动都重新生成（`browser-auth.ts:52-58` 的
+            //     `randomBytes`），用户过一会儿再粘，token 已经作废；若端口也变过
+            //     （cookie 名编进了 authority，`:106-107`），浏览器里那条 30 天 cookie 同样作废。
+            //     于是"复制的链接"只对**当下这几分钟**有效。
+            //   · 打开：用 `ACTION_VIEW` **当场**把 `DshRuntime` 手里那个 url 交给浏览器，
+            //     端口与 token 都是此刻的真实值，零过期风险。
+            //
+            //   两个入口共用同一份"拿得到凭据才可点"的判据（copyUrlReady），
+            //   拿不到时都灰掉 —— 不在界面上摆一个点了必然失败的按钮。
+            DshInstanceSettingAdapter.Row.Value(
+                R.string.dsh_settings_row_open_browser,
+                if (copyUrlReady) R.string.dsh_settings_desc_open_browser else 0,
+                { "" }, DshInstanceSettingAdapter.Tag.OPEN_BROWSER,
+                editable = copyUrlReady
+            ),
+
             DshInstanceSettingAdapter.Row.Group(R.string.dsh_settings_section_env),
             DshInstanceSettingAdapter.Row.Value(
                 R.string.dsh_settings_row_version, 0,
@@ -506,6 +528,40 @@ class DshInstanceSettingPage(
     /** 「复制访问链接」行的值位：裸地址（与 [webUiText] 同款口径，凭据不铺在界面上），不可点时为 "-" */
     private fun copyUrlText(): String = tokenUrl()?.substringBefore('?') ?: "-"
 
+    /**
+     * 「在浏览器中打开」（R27 / P0-B）：把**此刻**带 token 的 URL 交给系统浏览器。
+     *
+     * 与 [confirmCopyUrl] 的分工：
+     * - 复制是"给你一条地址，等会儿自己粘"—— 而 dsh 的 token 每次进程启动都换新
+     *   （`browser-auth.ts:52-58`），所以复制出来的链接只在**当下几分钟**内有效；
+     * - 这里是"现在就打开"，端口与 token 都是刚从 `DshRuntime` 取的真实值，零过期风险。
+     *
+     * 不弹确认框：复制要确认是因为剪贴板里的凭据会留下来（可能被别的 App 读到），
+     * 而 `ACTION_VIEW` 是把地址直接交给浏览器，不会在别处留副本。
+     *
+     * 失败时（设备没有浏览器 / 系统拒绝）不静默：提示改用「复制访问链接」。
+     */
+    private fun openInBrowser() {
+        val url = tokenUrl()
+        if (url == null) {
+            // 行已按 copyUrlReady 灰掉，理论上到不了这里；到了也只是什么都不做并说明。
+            toast(context.getString(R.string.dsh_settings_desc_open_browser_unavailable))
+            return
+        }
+        val launched = runCatching {
+            host.activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }
+        if (launched.isFailure) {
+            // 实例级：这条属于该实例的"怎么把界面交给外部"的失败，用户到它的日志页能对上
+            DshLogBus.appendFor(
+                inst?.id ?: return,
+                "[setting] ACTION_VIEW failed: ${launched.exceptionOrNull()?.message}; " +
+                    "no browser can handle the url"
+            )
+            toast(context.getString(R.string.dsh_settings_desc_open_browser_unavailable))
+        }
+    }
+
     // ===== 值行动作 =====
 
     private fun onValue(row: DshInstanceSettingAdapter.Row.Value) {
@@ -544,6 +600,7 @@ class DshInstanceSettingPage(
             // 复制访问链接：只有拿得到带 token 的 URL 才会走到这里（editable = tokenUrl() != null）。
             // 点击不直接复制，先过一道确认 —— 见 [confirmCopyUrl]。
             DshInstanceSettingAdapter.Tag.COPY_URL -> confirmCopyUrl()
+            DshInstanceSettingAdapter.Tag.OPEN_BROWSER -> openInBrowser()
 
             else -> Unit
         }

@@ -85,7 +85,7 @@ class DshInstanceSettingAdapter(
      */
     enum class Tag {
         NAME, PORT,
-        STATUS, START_STOP, OPEN_WEB, COPY_URL,
+        STATUS, START_STOP, OPEN_WEB, COPY_URL, OPEN_BROWSER,
         VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE
     }
 
