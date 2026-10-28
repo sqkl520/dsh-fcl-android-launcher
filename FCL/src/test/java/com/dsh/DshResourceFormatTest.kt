@@ -98,6 +98,9 @@ class DshResourceFormatTest {
         // 按本测试的规则不需要登记），以及起 npm 之前的空间检查（两个参数都是 formatSize 的文本）
         "dsh_install_error_npm" to arrayOf<Any>("EAI_AGAIN"),
         "dsh_install_no_space" to arrayOf<Any>("600.0 MB", "1.20 GB"),
+        // fix17 / R27 P0-A2：设置页「启动目录」的值位。%1$s = guest 内绝对路径
+        //（如 `/opt/dsh/instances/inst-x`）—— 是路径字符串，不是数字。
+        "dsh_home_default_value" to arrayOf<Any>("/opt/dsh/instances/inst-x"),
 
         // 安装阶段：脚本报 key，启动器翻文案（见 DshInstaller.stageText）。
         // 这几条带 %1$s，参数是版本号 / Node 版本号。

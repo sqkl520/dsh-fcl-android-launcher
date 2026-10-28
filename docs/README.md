@@ -7,7 +7,7 @@
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 **GPL-3.0** 发布。
 >
-> **当前版本：`0.1.6-SNAPSHOT`**（code 122，fix16 已发布；最新包见 [`RELEASES.md`](RELEASES.md) 顶部）
+> **当前版本：`0.1.6-SNAPSHOT`**（code 123，fix17 已出包；最新包见 [`RELEASES.md`](RELEASES.md) 顶部）
 > —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 > **DeepSeek Harness（dsh）在未 root 安卓手机上的启动器**。
@@ -47,7 +47,7 @@
 - **资源**：`FCL/src/main/res` 111 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + version 标记；
   `rootfs.tar.xz` 不入 Git）· jniLibs 3 个（`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
-- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **483/483**；脚本自检 **25/25**
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **489/489**；脚本自检 **25/25**
 - **入口**：`SplashActivity` → 首启前置页（`DshSetupActivity`，底座未就绪时）→ **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
   无 MC 运行时门禁、无 EULA、无 MC 主界面）
 

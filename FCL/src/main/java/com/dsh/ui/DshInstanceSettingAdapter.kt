@@ -84,7 +84,7 @@ class DshInstanceSettingAdapter(
      * DshInstanceSettingPage.confirmCopyUrl 的口径注释）。
      */
     enum class Tag {
-        NAME, PORT,
+        NAME, PORT, HOME_DIR,
         STATUS, START_STOP, OPEN_WEB, COPY_URL, OPEN_BROWSER,
         VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE
     }

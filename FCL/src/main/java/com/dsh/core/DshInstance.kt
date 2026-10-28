@@ -61,7 +61,22 @@ data class DshInstance(
      * 最近一次失败原因（安装/启动），用于在列表里直接给出可操作的提示，
      * 而不是只丢一句"详见日志"。（外部只读，写经 DshInstances）
      */
-    var lastError: String? = null
+    var lastError: String? = null,
+
+    /**
+     * 自定义的 `HOME`（rootfs 内路径）。`null` = 用默认值（实例目录，见 [DshRuntime]）。
+     *
+     * ★ R27 / P0-A2：dsh 的目录选择器用 `homedir()`（= `$HOME`）当初始目录，且**只列目录** ——
+     *   所以这个值必须指向一个**有子目录的**位置，否则用户看到的还是空列表。
+     *   默认值 `instances/<id>/` 天然含 `home/`、`workspace/`、`node_modules/`，列表非空。
+     *
+     * 提供这个字段是为了让用户能把 home 指到别处（例如整个 `instances/` 根，方便跨实例选目录）。
+     * 值为 rootfs 内绝对路径（如 `/opt/dsh/instances`）。
+     * **只影响 `HOME`**，不影响 `DSH_HOME`（后者固定为 `<instance>/home`，配置/凭据不会搬家）。
+     *
+     * 外部只读，写经 [DshInstances.updateConfig]。
+     */
+    var homeDir: String? = null
 ) {
     enum class State {
         /** 目录已建但 node_modules 未装 */

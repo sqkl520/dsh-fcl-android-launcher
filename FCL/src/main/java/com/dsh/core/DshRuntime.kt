@@ -893,25 +893,39 @@ object DshRuntime {
             procEnv = secretEnv,
             workDirRootfs = "$instancePathInRootfs/workspace",
             bindCacheAsTmp = true,
-            // ★ R27 / P0-A：`HOME` 也指向实例 workspace（原来写死 `/root`）。
+            // ★ R27 / P0-A2：`HOME` 指向**实例目录**（`instances/<id>/`），不是 workspace。
             //
-            // 为什么必须与 workDirRootfs 同源：dsh 的目录选择器（`dsh-host-directory-picker-browse`）
-            // 打开对话框时用 `homedir()` 当初始目录，而 `homedir()` 在 POSIX 上就读 `$HOME`。
-            // rootfs 的 `/root` 是**空目录**（只有 `.profile`/`.bashrc`，零子目录），
-            // 而 picker 只列目录 ⇒ 列表恒为空 ⇒ 用户看到"选择工作区目录"是一个空框，
-            // 体感就是"根本加载不出来"（R27 三层根因的第一层）。
+            // ## 演进过程（两次都踩了同一个坑：目录"存在但为空"）
             //
-            // 改到 workspace 之后：对话框一打开就落在用户真正能用的目录（实例工作区），
-            // 而且与 dsh 的工作目录一致，"在这里放文件"与"在这里选目录"是同一个地方。
+            // dsh 的目录选择器（`dsh-host-directory-picker-browse`）打开对话框时用 `homedir()`
+            // 当初始目录，而 `homedir()` 在 POSIX 上就读 `$HOME`；`list()` **只返回目录**
+            // （`dirent.isDirectory() || isSymbolicLink()`），空目录 ⇒ 空列表 ⇒ 用户看到空框。
             //
-            // **安全边界**（改前已逐项核实，见 docs/reports/round27/SUMMARY.md §三 P0-A）：
+            // - 最初 `HOME=/root`：rootfs 的 `/root` 只有 `.profile`/`.bashrc`，**零子目录** ⇒ 空框。
+            // - fix15 改成 workspace：目录**确实是空的**（我们只 `mkdirs()` 建了壳，从没往里放过东西）
+            //   ⇒ 依然是空框。真机截图确认：标题显示成「主目录」，说明 HOME 生效了，但列表还是空。
+            // - 现在指向**实例目录本身**：它天然有三个子目录 —— `home/`（DSH_HOME：会话/配置/cookie）、
+            //   `workspace/`（agent 工作目录）、`node_modules/`（dsh 本体）⇒ 列表非空，
+            //   而且 `workspace/` 就在第一屏，用户点进去就是目标目录。
+            //
+            // ## 为什么不是 workspace 但预建几个子目录
+            // 那等于替用户决定目录结构（`projects/`、`notes/`…），而用户完全可以有自己的组织方式。
+            // 指向实例目录是"给出真实的、非空的、有意义的上下文"，不替他做决定。
+            //
+            // ## 用户会看到什么
+            // 打开对话框是「主目录」，里面三项：`home`、`workspace`、`node_modules`。
+            // ⚠️ `home/` 里含 `.credentials.yaml`（API Key）—— 但 picker 只列**目录**，
+            // 不列文件，所以密钥文件本身不会出现在列表里。用户点进 `home/` 会看到 `logs/`、
+            // `sessions/` 等子目录，仍然看不到 `.credentials.yaml` 这个文件。
+            //
+            // ## 安全边界（沿用 fix15 的核实结论，仍成立）
             // - dsh 的配置/凭据/cookie 在 `DSH_HOME`（脚本显式设为 `$INSTANCE_DIR/home`），
-            //   不读 `$HOME/.dsh` ⇒ 配置不会搬家；
+            //   不读 `$HOME/.dsh` ⇒ 配置不搬家；
             // - npm 缓存走显式的 `NPM_CONFIG_CACHE`（`<filesDir>/dsh/npm-cache`）
             //   ⇒ 不会因为 HOME 变了而重新下载依赖；
-            // - `HOME` 仍在 `isAllowedEnvKey` 白名单里（`ProotCommand.kt:182`），
-            //   但它由本函数显式构造、不接受外部输入，不会被注入面利用。
-            homeRootfs = "$instancePathInRootfs/workspace"
+            // - `HOME` 由本函数显式构造、不接受外部输入。
+            // 自定义 HOME 若有值就用它，否则用实例目录（判据见 [resolveHomeRootfs]）。
+            homeRootfs = resolveHomeRootfs(instancePathInRootfs, instance.homeDir)
         )
 
         _state.value = State.Starting(instance.id, instance.name)
