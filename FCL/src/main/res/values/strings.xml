@@ -334,7 +334,7 @@ Version %1$s</string>
     <!-- fix17 / R27 P0-A2：dsh 的目录选择器用 HOME 当初始目录，且只列目录 ——
          这个值必须指向有子目录的位置，否则用户看到的还是空列表。 -->
     <string name="dsh_settings_row_home">Start directory</string>
-    <string name="dsh_settings_desc_home">Where dsh starts in the directory picker; leave empty for the instance folder</string>
+    <string name="dsh_settings_desc_home">Where dsh starts in the picker (takes effect after restart). Do not pick the home folder of this instance as your workspace - it holds your API key</string>
     <string name="dsh_home_default_value">%1$s (default)</string>
     <string name="dsh_home_must_be_absolute">Must be an absolute path inside the runtime (starting with /)</string>
     <string name="dsh_settings_row_key">API key</string>

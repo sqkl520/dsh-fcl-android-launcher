@@ -884,6 +884,20 @@ object DshRuntime {
                         instance.id,
                         "[runtime] cannot create custom HOME ${plan.dir.absolutePath}"
                     )
+                } else {
+                    // ★ R28 / C1-C5(b)：刚建出来的一定是**空目录**。
+                    //
+                    // dsh 的 picker 对空目录返回 200 + `entries: []`，前端**没有空态文案** ——
+                    // 用户看到的是一个"能打开、但什么都没有"的框，和"加载失败"几乎无法区分，
+                    // 而且**没有任何报错**（原来 `opendir` 失败至少还有一行红字）。
+                    //
+                    // 所以这里必须留一条能对上号的日志：用户/我排查时能立刻判断
+                    // "是目录空"还是"是请求失败"。这是 typo 检测的唯一线索。
+                    DshLogBus.appendFor(
+                        instance.id,
+                        "[runtime] created custom HOME ${plan.dir.absolutePath} (empty until you add " +
+                            "files there; if this path looks like a typo, fix it in instance settings)"
+                    )
                 }
             }
             is HomeDirPlan.RefusePhantom -> {
@@ -951,19 +965,32 @@ object DshRuntime {
             // - 最初 `HOME=/root`：rootfs 的 `/root` 只有 `.profile`/`.bashrc`，**零子目录** ⇒ 空框。
             // - fix15 改成 workspace：目录**确实是空的**（我们只 `mkdirs()` 建了壳，从没往里放过东西）
             //   ⇒ 依然是空框。真机截图确认：标题显示成「主目录」，说明 HOME 生效了，但列表还是空。
-            // - 现在指向**实例目录本身**：它天然有三个子目录 —— `home/`（DSH_HOME：会话/配置/cookie）、
-            //   `workspace/`（agent 工作目录）、`node_modules/`（dsh 本体）⇒ 列表非空，
-            //   而且 `workspace/` 就在第一屏，用户点进去就是目标目录。
+            // - 现在指向**实例目录本身**：它含 `home/`（DSH_HOME：会话/配置/cookie）与
+            //   `workspace/`（agent 工作目录）两个子目录**恒存在**，用户自己装过 dsh 的还有
+            //   `node_modules/` ⇒ 列表非空，且 `workspace/` 就在第一屏。
+            //   ⚠️ 预装命中的实例（`dsh src : preinstalled`）**没有 `node_modules/`**，只有两项 ——
+            //   "三个子目录"不是恒等式（R28 / C1-A3 更正）。
             //
             // ## 为什么不是 workspace 但预建几个子目录
             // 那等于替用户决定目录结构（`projects/`、`notes/`…），而用户完全可以有自己的组织方式。
             // 指向实例目录是"给出真实的、非空的、有意义的上下文"，不替他做决定。
             //
-            // ## 用户会看到什么
-            // 打开对话框是「主目录」，里面三项：`home`、`workspace`、`node_modules`。
-            // ⚠️ `home/` 里含 `.credentials.yaml`（API Key）—— 但 picker 只列**目录**，
-            // 不列文件，所以密钥文件本身不会出现在列表里。用户点进 `home/` 会看到 `logs/`、
-            // `sessions/` 等子目录，仍然看不到 `.credentials.yaml` 这个文件。
+            // ## ⚠️ 安全：`home/` 里有 API Key，而 dsh 的文件 API **允许读工作区外的文件**
+            //
+            // 这一节原写"picker 只列目录 ⇒ `.credentials.yaml` 看不到 ⇒ 安全" —— **那句话是错的**
+            // （R28 / C1-C3 实测推翻）。真实情况：
+            // - `home/` 下确实有 `.credentials.yaml`（API Key）与 `settings.yaml`；
+            // - dsh 的 `workspace-files.read` / `readBytes` 的文档明写
+            //   "files outside it are allowed"（`dsh/packages/api/workspace-files/src/index.ts:226/251`），
+            //   `confine()` 只挂在 `list`（`:345`）上；
+            // - ⇒ 用户若把 `home/` 选成工作区，agent / 会话**可以读到 API Key**。
+            //
+            // 我们无法改 dsh 的这套语义（那是它的设计：agent 要能读任意文件）。能做的是：
+            // ①让 picker 的默认落点远离 `home/`（实例目录的第一屏是 `workspace/` 与 `home/` 并列，
+            //   用户点错的可能存在）；②在设置项的说明里写清"不要把 home 目录选成工作区"。
+            // 后者已写进 `dsh_settings_desc_home` 的描述与发版说明。
+            // 顺带更正另一处：`home/` 下**没有** `logs/` 目录（全仓 `dshHomePath('logs'` 零命中），
+            // 实际是 `profiles/`、`storages/`、`sessions/`、`cache/` 与两个 yaml。
             //
             // ## 安全边界（沿 fix15 的核实结论；**fix17 起多了一条，见下**）
             // - dsh 的配置/凭据/cookie 在 `DSH_HOME`（脚本显式设为 `$INSTANCE_DIR/home`），

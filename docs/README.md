@@ -7,7 +7,7 @@
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 **GPL-3.0** 发布。
 >
-> **当前版本：`0.1.6-SNAPSHOT`**（code 125，fix19 已出包；最新包见 [`RELEASES.md`](RELEASES.md) 顶部）
+> **当前版本：`0.1.6-SNAPSHOT`**（code 126，fix20 已出包；最新包见 [`RELEASES.md`](RELEASES.md) 顶部）
 > —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 > **DeepSeek Harness（dsh）在未 root 安卓手机上的启动器**。
