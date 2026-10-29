@@ -400,6 +400,15 @@
     <string name="dsh_webview_no_exit">目前無法顯示頁面。請點「重試」、查看日誌，或返回。</string>
     <!-- fix10 / BL-199：點「稍後」後的停留態（不開啟介面，但給一個明確的下一步） -->
     <string name="dsh_webview_gate_deferred">暫未開啟 dsh 介面。想開啟時點「重試」。</string>
+    <!-- BL-206：複製成功後的停留態 —— 與「稍後」面板（dsh_webview_gate_deferred）刻意分開。
+         使用者剛點完「複製連結」、正要拿連結去瀏覽器，此時若沿用「暫未開啟 dsh 介面」，
+         就是把「已完成一件事」錯誤歸因成「什麼都沒發生」，還只給一個指向相反意圖的下一步
+         （在本頁開啟），使用者會以為複製失敗了。BL-206 的教訓：錯誤歸因比沒有文案更糟。
+         文案須同時回答三件事：連結已複製 / 到瀏覽器貼上開啟 / 想在應用程式內開啟就點「重試」。
+         「重試」須與本語言 dsh_action_retry 的原文逐字一致，使用者不必在兩個詞之間換算。
+         ⚠ 本條禁止出現撇號與反斜線：aapt2 對兩種撇號轉義寫法都報
+         Invalid unicode escape sequence（本專案踩過）。 -->
+    <string name="dsh_webview_gate_copied">連結已複製。到瀏覽器貼上開啟即可；想在應用程式內開啟時點「重試」。</string>
     <!-- BL-184：升級指引補一句「更新後仍異常就走複製連結」 -->
     <string name="dsh_webview_compat_upgrade_hint">升級方法：在應用商店將「Android System WebView」（部分裝置為 Chrome）更新到最新版，然後重新開啟本頁。若更新後仍異常，用「複製連結」把位址拿到其他較新的瀏覽器裡開啟。</string>
     <string name="dsh_webview_render_gone_repeat">頁面多次崩潰，已停止自動恢復。點「重試」重新載入。</string>
