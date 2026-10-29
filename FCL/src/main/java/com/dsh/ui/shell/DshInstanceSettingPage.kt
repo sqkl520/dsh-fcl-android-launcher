@@ -617,8 +617,13 @@ class DshInstanceSettingPage(
             ) { text -> commitPortValue(i, text) }
 
             // ★ R27 / P0-A2：启动目录（HOME）。空 = 恢复默认（实例目录）。
-            //   只接受 guest 内绝对路径 —— 相对路径会随 proot 的 `-w` 漂移，
-            //   那种"看起来能用、换个启动方式就变"的值不接受（判据在 [resolveHomeRootfs]）。
+            //
+            // ★ R28 / C2-B-3：**保存前必须归一化**，否则会出现"存的值 ≠ 显示的值"：
+            //   UI 原来只拦 `startsWith("/")`，放行 `/opt/dsh/../etc` 与带尾斜杠的写法；
+            //   而 `resolveHomeRootfs` 在运行时会拒绝/归一化它们 —— 于是界面显示默认路径，
+            //   既不是用户填的、也没有任何提示（`homeDirText()` 因 homeDir 非空不标"(默认)"）。
+            //   现在用同一个函数先算一遍：归一化后若与传入值不同且仍然合法，就存归一化的；
+            //   若归一化后等于默认值（说明被拒了），就不保存并提示。
             DshInstanceSettingAdapter.Tag.HOME_DIR -> editText(
                 context.getString(R.string.dsh_settings_row_home),
                 i.homeDir ?: "",
@@ -629,12 +634,19 @@ class DshInstanceSettingPage(
                     DshInstances.updateConfig(i.id, clearHomeDir = true)
                     reload()
                     toastSaveOutcome(i.id)
-                } else if (!trimmed.startsWith("/")) {
-                    toast(context.getString(R.string.dsh_home_must_be_absolute))
-                } else {
-                    DshInstances.updateConfig(i.id, homeDir = trimmed)
-                    reload()
-                    toastSaveOutcome(i.id)
+                    return@editText
+                }
+                val guestInstancePath = "${ProotCommand.GUEST_ROOT}/instances/${i.id}"
+                val normalized = resolveHomeRootfs(guestInstancePath, trimmed)
+                when {
+                    // 被清洗规则拒了（含 .. / . 或非绝对路径）—— 归一化结果等于默认值。
+                    normalized == guestInstancePath && trimmed != guestInstancePath ->
+                        toast(context.getString(R.string.dsh_home_must_be_absolute))
+                    else -> {
+                        DshInstances.updateConfig(i.id, homeDir = normalized)
+                        reload()
+                        toastSaveOutcome(i.id)
+                    }
                 }
             }
 

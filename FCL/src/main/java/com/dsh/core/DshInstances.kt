@@ -193,7 +193,62 @@ fun hostPathForGuestDir(guestPath: String, hostRootDir: File, guestRoot: String)
     if (!guestPath.startsWith("$root/")) return null
     val relative = guestPath.removePrefix("$root/").trim('/')
     if (relative.isEmpty()) return hostRootDir
+    // ★ R28 / C2-C：拒绝含 dot-segment 的相对段。
+    //
+    // 本函数是 public 的，KDoc 里把它称作"安全边界"，但它原来只做字符串拼接 ——
+    // `a/../../etc` 会逃出 `hostRootDir`。生产路径上调用方已经先过 [resolveHomeRootfs]
+    // （它会拒绝 `..`），但"边界靠调用方记得先洗一遍"不是边界。这里自己再挡一次。
+    if (relative.split('/').any { it == ".." || it == "." }) return null
     return File(hostRootDir, relative)
+}
+
+/** 自定义 HOME 在宿主侧该如何创建（[planHomeDirCreation] 的输出）。 */
+sealed interface HomeDirPlan {
+    /** 目录已存在，什么都不用做。 */
+    object AlreadyExists : HomeDirPlan
+
+    /** 需要创建 [dir]（不在 `instances/` 下，安全）。 */
+    data class Create(val dir: File) : HomeDirPlan
+
+    /**
+     * 拒绝创建：路径落在 `instances/` 下但不存在。
+     *
+     * `adoptOrphanInstanceDirs()` 会把 `instances/` 下"存在但不在清单里"的目录收编成
+     * NOT_INSTALLED 实例（`DshInstances.rebuildMissingInstances:1421-1428`），
+     * 且每个冷启成功出口都会跑（`:1179/1228/1237/1279`）。在这里建目录 = 凭空多出一个幽灵实例。
+     */
+    data class RefusePhantom(val dir: File) : HomeDirPlan
+
+    /** 路径不在 `$GUEST_ROOT` 下（rootfs 内部）—— 我们不往解压出来的 rootfs 里写东西。 */
+    object OutsideGuestRoot : HomeDirPlan
+}
+
+/**
+ * 决定"要不要为自定义 HOME 建目录"（纯函数，R28 / C2-C-1）。
+ *
+ * **为什么要抽出来**：原来的判断写在 `DshRuntime.startLocked` 里，而那里需要
+ * Context / DshPaths / 锁 —— JVM 单测碰不到。结果就是"把这段代码整体删掉"或
+ * "改回 workspace"这类回归**全绿通过**（C2 实测）。判定内核抽成纯函数后才钉得住。
+ *
+ * @param homeGuest 已经过 [resolveHomeRootfs] 的 guest 内路径
+ * @param hostRootDir guest 的 `$GUEST_ROOT` 对应的宿主目录（`DshPaths.ROOT_DIR`）
+ * @param guestRoot guest 根（`ProotCommand.GUEST_ROOT` = `/opt/dsh`）
+ * @param instancesHostDir 宿主侧的 `instances/` 目录（`DshPaths.INSTANCES_DIR`）
+ * @param exists 目录是否存在（注入以便单测；生产传 `File::isDirectory`）
+ */
+fun planHomeDirCreation(
+    homeGuest: String,
+    hostRootDir: File,
+    guestRoot: String,
+    instancesHostDir: File,
+    exists: (File) -> Boolean
+): HomeDirPlan {
+    val dir = hostPathForGuestDir(homeGuest, hostRootDir, guestRoot) ?: return HomeDirPlan.OutsideGuestRoot
+    if (exists(dir)) return HomeDirPlan.AlreadyExists
+    val instancesPath = instancesHostDir.absolutePath
+    val insideInstances = dir.absolutePath == instancesPath ||
+        dir.absolutePath.startsWith(instancesPath + File.separator)
+    return if (insideInstances) HomeDirPlan.RefusePhantom(dir) else HomeDirPlan.Create(dir)
 }
 
 /**
