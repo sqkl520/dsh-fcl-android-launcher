@@ -910,6 +910,38 @@ object DshRuntime {
             HomeDirPlan.AlreadyExists, HomeDirPlan.OutsideGuestRoot -> Unit
         }
 
+        // ★ R28 / C3-D：**自动判据** —— 生效的 HOME 里必须有至少 1 个子目录，否则打 WARN。
+        //
+        // 为什么需要它（这个坑已经踩了三次）：
+        // - `HOME=/root`：rootfs 的 /root 只有 `.profile`/`.bashrc`，零子目录；
+        // - fix15 改成 `workspace`：那个目录是 `mkdirs()` 建的空壳，零子目录；
+        // - fix18 的自定义目录不存在：建出来也是空目录。
+        // 三次的症状**完全一样**：用户打开「选择工作区目录」看到一个空框，且**没有任何报错**
+        // （dsh 的 picker 对空目录返回 200 + `entries: []`，前端无空态文案）。
+        //
+        // 三次都是靠人盯着截图猜出来的。而这是一个**构造性可判的事实**：
+        // dsh 的 picker 只列目录（`directory-picker-browse/src/index.ts:259`），
+        // 所以"HOME 里没有子目录" ⇔ "用户必然看到空框"。
+        //
+        // 一行统计 + 一行为 WARN，就能让这个问题在下一次自动暴露在日志里，
+        // 而不是等用户截图。注意：**只告警、不改行为** —— 用户可能是故意指向一个空目录
+        // （准备往里建东西），我们不能替他改。
+        hostPathForGuestDir(homeGuest, File(DshPaths.ROOT_DIR), ProotCommand.GUEST_ROOT)?.let { dir ->
+            if (dir.isDirectory) {
+                val subdirs = runCatching {
+                    dir.listFiles()?.count { it.isDirectory } ?: 0
+                }.getOrDefault(0)
+                if (subdirs == 0) {
+                    DshLogBus.appendFor(
+                        instance.id,
+                        "[runtime] WARN home-has-no-subdir path=$homeGuest —— dsh 的目录选择器只列目录，" +
+                            "空目录会让「选择工作区目录」显示成一个空框（无任何报错）。" +
+                            "如果你看到对话框是空的，原因就在这里。"
+                    )
+                }
+            }
+        }
+
         // ★ 启动器不再向子进程注入 DEEPSEEK_API_KEY / DEEPSEEK_DEFAULT_MODEL（批次 5）。
         //
         // 硬理由不是"优先级低"，而是"注入之后用户在 App 内根本改不掉"：

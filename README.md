@@ -21,9 +21,9 @@
 > 如果喜欢这个项目就 Star 一下喵 ⭐
 >
 > **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
-> 最新验证包是 `0.1.6-SNAPSHOT-fix20`（截至本文最后更新）。本 README 不单独维护版本号 ——
+> 最新验证包是 `0.1.6-SNAPSHOT-fix21`（截至本文最后更新）。本 README 不单独维护版本号 ——
 > 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
-> 装完请到**关于页核对版本号后缀**（如 `-fix20`）确认装对了包；文件名带 `-fixN` 的才是当前验证包。
+> 装完请到**关于页核对版本号后缀**（如 `-fix21`）确认装对了包；文件名带 `-fixN` 的才是当前验证包。
 
 ---
 
@@ -95,7 +95,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 
 ## 📌 当前进度
 
-> 最后更新：2026-10-28（fix20）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
+> 最后更新：2026-10-29（fix21）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
 
 | 模块 | 状态 |
 |---|---|
@@ -114,6 +114,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 修复轮次 **fix18**（R28 锐评返工：注释纠偏 + `..` 拒绝 + 自定义目录自动创建） | ✅ 已出包（code 124） |
 | 修复轮次 **fix19**（R28 二轮锐评：幽灵实例保护 + 调用点契约测试） | ✅ 已出包（code 125） |
 | 修复轮次 **fix20**（R28 三轮锐评：API Key 暴露面提示 + typo 空目录可诊断） | ✅ 已出包（code 126） |
+| 修复轮次 **fix21**（R28 C3 用户视角：空目录自动告警 + 更正三处错误说明） | ✅ 已出包（code 127） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
 **质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **501/501** · 脚本自检 25/25
@@ -156,7 +157,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 - **贡献指南**：[`CONTRIBUTING.md`](CONTRIBUTING.md) —— 怎么报问题、怎么提 PR、代码风格与测试要求。
 - **构建与测试**：`.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest`（Windows，单测）；
   `sh run-compile.sh` → `sh run-tests.sh`（arm64 Linux / 手机沙箱，编译校验 + 单测）。环境接线见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)。
-- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix20`）、机型、Android 版本、复现步骤；
+- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix21`）、机型、Android 版本、复现步骤；
   想改代码请先开个 Issue 说一声，避免白写。
 
 [![Contributors](https://contrib.rocks/image?repo=sqkl520/dsh-fcl-android-launcher)](https://github.com/sqkl520/dsh-fcl-android-launcher/graphs/contributors)
