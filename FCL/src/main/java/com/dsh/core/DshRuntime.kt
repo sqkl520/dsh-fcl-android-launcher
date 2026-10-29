@@ -860,17 +860,40 @@ object DshRuntime {
         //
         // 只对落在 `$GUEST_ROOT` 下的路径生效（那一段在宿主侧有真实对应）；
         // rootfs 内部的路径交给 rootfs 自己（我们不往解压出来的 rootfs 里写东西）。
+        //
+        // ★ R28 / C2-B-1：判定内核抽成纯函数 [planHomeDirCreation]（JVM 可测）。
+        //   最要防的一条：**绝不在 `instances/` 下建新目录** ——
+        //   `adoptOrphanInstanceDirs()` 会把"存在但不在清单里"的目录收编成幽灵实例
+        //   （`DshInstances.rebuildMissingInstances:1421-1428`，每个冷启成功出口都跑）。
+        //
+        // ★ 这里算出的 `homeGuest` 在下面 fork 时**复用**（`homeRootfs = homeGuest`），
+        //   不会再算一遍 —— 两次调用之间任何"就地修正"都会漂成"建了 A 目录、HOME 指 B"。
         val homeGuest = resolveHomeRootfs(instancePathInRootfs, instance.homeDir)
-        hostPathForGuestDir(homeGuest, File(DshPaths.ROOT_DIR), ProotCommand.GUEST_ROOT)?.let { dir ->
-            if (!dir.isDirectory) {
-                runCatching { dir.mkdirs() }.onFailure { e ->
-                    // 建不出来不是致命错误，但要留痕：否则用户会看到一个无法解释的空列表。
+        when (val plan = planHomeDirCreation(
+            homeGuest = homeGuest,
+            hostRootDir = File(DshPaths.ROOT_DIR),
+            guestRoot = ProotCommand.GUEST_ROOT,
+            instancesHostDir = File(DshPaths.INSTANCES_DIR),
+            exists = { it.isDirectory }
+        )) {
+            is HomeDirPlan.Create -> {
+                // mkdirs() 失败时**返回 false 而不是抛异常**（C2-B-2），所以必须判返回值 ——
+                // 原来写的是 `runCatching {…}.onFailure{}`，那行日志几乎永不执行。
+                if (!runCatching { plan.dir.mkdirs() }.getOrDefault(false)) {
                     DshLogBus.appendFor(
                         instance.id,
-                        "[runtime] cannot create custom HOME ${dir.absolutePath}: ${e.message}"
+                        "[runtime] cannot create custom HOME ${plan.dir.absolutePath}"
                     )
                 }
             }
+            is HomeDirPlan.RefusePhantom -> {
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[runtime] custom HOME ${plan.dir.absolutePath} is under instances/ but does not " +
+                        "exist; refusing to create it (it would be adopted as a phantom instance)"
+                )
+            }
+            HomeDirPlan.AlreadyExists, HomeDirPlan.OutsideGuestRoot -> Unit
         }
 
         // ★ 启动器不再向子进程注入 DEEPSEEK_API_KEY / DEEPSEEK_DEFAULT_MODEL（批次 5）。
@@ -942,14 +965,23 @@ object DshRuntime {
             // 不列文件，所以密钥文件本身不会出现在列表里。用户点进 `home/` 会看到 `logs/`、
             // `sessions/` 等子目录，仍然看不到 `.credentials.yaml` 这个文件。
             //
-            // ## 安全边界（沿用 fix15 的核实结论，仍成立）
+            // ## 安全边界（沿 fix15 的核实结论；**fix17 起多了一条，见下**）
             // - dsh 的配置/凭据/cookie 在 `DSH_HOME`（脚本显式设为 `$INSTANCE_DIR/home`），
             //   不读 `$HOME/.dsh` ⇒ 配置不搬家；
             // - npm 缓存走显式的 `NPM_CONFIG_CACHE`（`<filesDir>/dsh/npm-cache`）
-            //   ⇒ 不会因为 HOME 变了而重新下载依赖；
-            // - `HOME` 由本函数显式构造、不接受外部输入。
+            //   ⇒ 不会因为 HOME 变了而重新下载依赖。
+            //
+            // ⚠️ **`HOME` 现在接受用户输入**（fix17 起的「启动目录」设置项）——
+            //    原先这里写着"由本函数显式构造、不接受外部输入"，那句已经不成立，必须更正：
+            //    · 输入经过 [resolveHomeRootfs] 清洗：只接受 guest 内绝对路径、拒绝 `..`/`.`、
+            //      归一化尾斜杠，非法值一律回落默认；
+            //    · 它只影响 `$HOME`（一个环境变量），不会改变 dsh 读配置的位置（那是 `DSH_HOME`）；
+            //    · 唯一需要提防的副作用是"在 `instances/` 下建目录会被收编成幽灵实例"——
+            //      已由 [planHomeDirCreation] 挡掉（见上面的说明和 `:863` 附近）。
             // 自定义 HOME 若有值就用它，否则用实例目录（判据见 [resolveHomeRootfs]）。
-            homeRootfs = resolveHomeRootfs(instancePathInRootfs, instance.homeDir)
+            // 复用上面算好的 homeGuest（C2-E-2）：两处各算一次的话，中间任何"就地修正"
+            // 都会漂成"建了 A 目录、HOME 却指 B"。
+            homeRootfs = homeGuest
         )
 
         _state.value = State.Starting(instance.id, instance.name)

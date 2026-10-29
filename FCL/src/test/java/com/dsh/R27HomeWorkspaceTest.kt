@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * R27 / P0-A：「选择工作区目录」是空框 —— 把 `HOME` 从 `/root` 改到实例 workspace。
+ * R27：「选择工作区目录」是空框 —— `HOME` 的注入契约。
  *
  * ## 为什么这条要有测试
  *
@@ -16,7 +16,12 @@ import org.junit.Test
  * ⇒ 用户点「选择工作区目录」看到一个空框，体感是"根本加载不出来"。
  *
  * 它**不会让任何现有测试变红**（没有崩溃、没有异常、请求也返回 200），
- * 所以只能靠一条正面断言钉住"实例启动时 HOME 必须是 workspace"。
+ * 所以只能靠正面断言钉住注入点。
+ *
+ * ⚠️ **注意本文件的定位（R28 / C2-D-2 更正）**：
+ * 这里钉的是 **`Spec` 把 `homeRootfs` 正确写进进程环境**这件事，
+ * **不是**"`HOME` 应该指向 workspace"—— 那个结论在 fix17 已被推翻
+ * （workspace 是空目录，仍会显示空框）。取值由 `resolveHomeRootfs` 决定，见 `R27HomeDirTest`。
  *
  * ## 为什么测 `Spec.toProcessBuilder()` 而不是 `build()`
  *
@@ -38,14 +43,14 @@ class R27HomeWorkspaceTest {
             argv = listOf("/bin/true"),
             argvEnv = emptyMap(),
             procEnv = emptyMap(),
-            homeRootfs = "/opt/dsh/instances/inst-x/workspace"
+            homeRootfs = "/opt/dsh/instances/inst-x"
         )
 
         val env = spec.toProcessBuilder().environment()
 
         assertEquals(
             "HOME 必须取 Spec.homeRootfs —— 否则 picker 仍会落在空的 /root 上（R27 第一层根因）",
-            "/opt/dsh/instances/inst-x/workspace",
+            "/opt/dsh/instances/inst-x",
             env["HOME"]
         )
     }
@@ -83,15 +88,16 @@ class R27HomeWorkspaceTest {
      */
     @Test
     fun specCarriesHomeSoBothSidesStayInSync() {
-        val workspace = "/opt/dsh/instances/inst-y/workspace"
+        // 示例值用"实例目录"（fix17 起的默认取值），避免读者误以为 HOME 应指向 workspace。
+        val home = "/opt/dsh/instances/inst-y"
         val spec = ProotCommand.Spec(
             argv = listOf("/bin/true"),
             argvEnv = emptyMap(),
             procEnv = emptyMap(),
-            homeRootfs = workspace
+            homeRootfs = home
         )
 
-        assertEquals("Spec 必须保留 homeRootfs 供 argv 侧使用", workspace, spec.homeRootfs)
+        assertEquals("Spec 必须保留 homeRootfs 供 argv 侧使用", home, spec.homeRootfs)
         assertEquals(
             "ProcessBuilder 侧必须与 argv 侧取同一个值",
             spec.homeRootfs,
