@@ -203,8 +203,7 @@ fun hostPathForGuestDir(guestPath: String, hostRootDir: File, guestRoot: String)
 }
 
 /** 自定义 HOME 在宿主侧该如何创建（[planHomeDirCreation] 的输出）。 */
-sealed interface HomeDirPlan {
-    /** 目录已存在，什么都不用做。 */
+sealed interface HomeDirPlan {    /** 目录已存在，什么都不用做。 */
     object AlreadyExists : HomeDirPlan
 
     /** 需要创建 [dir]（不在 `instances/` 下，安全）。 */
@@ -222,6 +221,145 @@ sealed interface HomeDirPlan {
     /** 路径不在 `$GUEST_ROOT` 下（rootfs 内部）—— 我们不往解压出来的 rootfs 里写东西。 */
     object OutsideGuestRoot : HomeDirPlan
 }
+
+/**
+ * 启动器自带 patch overlay 的**内容**（纯函数，BL-222）。
+ *
+ * ## 这是什么、为什么要它
+ *
+ * dsh 支持 `--patch <path>` 追加一层 patch，优先级高于 bundle / profile / `$DSH_HOME` 三层
+ * （`dsh-app-boot/lib/index.js:1127-1133`，最后一层 `context.overlays`）。这一层是**启动器自己的**，
+ * 不碰用户的 `cordis.patch.yml`，也不碰实例里 dsh 自己会写的 `profiles/<name>/cordis.patch.yml`。
+ *
+ * 为什么不能直接改 `$DSH_HOME/cordis.patch.yml`：
+ * - 那是 dsh 文档里定义的**用户层**（"machine-local preferences that apply to **every** profile"），
+ *   写进去会泄漏到用户的其它 profile；
+ * - 我们手里没有 YAML 解析器（`FCL/build.gradle.kts` 只有 gson + kotlinx-serialization），
+ *   "读→合并→写"只能靠字符串匹配，判断错一次就把用户自己的 patch 清空。
+ * - `--patch` 吃的就是 YAML，而 **JSON 是合法 YAML**（实测 0.2.1-rc.2 接受），所以用 gson
+ *   生成 JSON 即可，一行解析器都不用引。
+ *
+ * 两个实例都挂这层：每条都是"加法"，失败只影响自己那一行，不会连累启动：
+ *
+ * 1. **`launcher-assets`** —— 给 `/assets` 下的静态资源补 `cache-control: immutable`。
+ *    dsh 的 `frontend-static` 只写 `content-type`（`dsh-host-frontend-static/lib/index.js:73`），
+ *    于是外部浏览器每次导航都把整个前端重下一遍并重新 gzip。在手机上这是"打开很慢"里
+ *    唯一我们这侧能真正消掉的一项。
+ *    （`/plugins` 那边 dsh 自己就带 immutable 头，不用我们管。）
+ * 2. **`client-hmr` 的 `pollIntervalMs` 500 → 5000** —— 它每 500ms 把全部 plugin bundle
+ *    stat 一遍（在 proot 里每次 stat 都要过一次 ptrace）。**这不是"慢"的原因**，只是省电；
+ *    单独做它收益最小，跟着这层顺手带上。500ms 只负责"磁盘上的 bundle 被重写"的检测
+ *    （`pnpm run dev:web`），装插件走的是 `onGraphChanged` 事件，所以对终端用户零功能影响。
+ *
+ * ## 为什么**不**禁用 `client-hmr`
+ *
+ * 试过，评估后放弃：它是"在插件页装完插件、当前页面不刷新就出现"的**唯一**通路
+ * （全仓只有 `dsh-client-hmr/lib/client.js:272` 一处调 `entries.sync`）。禁掉之后插件页
+ * 仍会报"已生效"（那个判定看的是 boot 侧 `hmr`，`dsh-plugin-manager/lib/index.js:2360-2381`），
+ * 用户会看到"装好了、显示已生效、页面上没有"。**静默半失效比明说"要重启"更糟。**
+ *
+ * @param pluginGuestPath 启动器插件在 **guest 内**的绝对路径（rootfs 视角）。
+ *   用绝对路径而不是相对路径：overlay 文件在实例目录、插件在 `/opt/dsh/scripts/`，
+ *   两者不在同一层，相对路径会锚到 overlay 所在目录从而指错。
+ */
+fun launcherPatchOverlayJson(pluginGuestPath: String): String = """
+[
+  {
+    "id": "client-hmr",
+    "config": {
+      "pollIntervalMs": 5000
+    }
+  },
+  {
+    "insert": [
+      {
+        "id": "launcher-assets",
+        "name": ${jsonStringLiteral(pluginGuestPath)}
+      }
+    ]
+  }
+]
+""".trimStart()
+
+/**
+ * 把任意字符串变成一个 JSON 字符串字面量（含引号）。
+ *
+ * 只用于 [launcherPatchOverlayJson] 里那个路径 —— 它可能带 Windows 反斜杠或非 ASCII 字符。
+ * 写成手写实现而不是拉 gson：这个函数要在 JVM 单测里跑，而 gson 在主模块的 classpath 上
+ * 未必可用（harness 用的是编译产物 + 一组固定 jar）。
+ */
+internal fun jsonStringLiteral(raw: String): String {
+    val sb = StringBuilder(raw.length + 8)
+    sb.append('"')
+    for (c in raw) {
+        when (c) {
+            '"' -> sb.append("\\\"")
+            '\\' -> sb.append("\\\\")
+            '\n' -> sb.append("\\n")
+            '\r' -> sb.append("\\r")
+            '\t' -> sb.append("\\t")
+            '\b' -> sb.append("\\b")
+            '\u000C' -> sb.append("\\f")
+            else -> if (c < ' ') sb.append("\\u%04x".format(c.code)) else sb.append(c)
+        }
+    }
+    sb.append('"')
+    return sb.toString()
+}
+
+/**
+ * 把 [launcherPatchOverlayJson] 写进实例目录，返回宿主侧的 [File]（供启动脚本判断）；
+ * 任何一步失败都返回 `null`（调用方据此不传 `--patch`，启动照旧）。
+ *
+ * ## 三个刻意的选择
+ *
+ * 1. **写实例目录，不写 `$DSH_HOME`**。`$DSH_HOME/cordis.patch.yml` 是 dsh 定义的
+ *    **用户层**，对所有 profile 生效（实测：在里面写一条，`--profile <别的>` 也会被它影响）。
+ *    实例目录是"这一份安装"的私有空间，写崩了最多影响这一个实例。
+ * 2. **先写临时文件再 rename**。rename 在同一文件系统内是原子的；直接覆写会在中间态
+ *    留下半截 JSON，而 dsh 读到坏 overlay 会**直接启动失败**（实测
+ *    `failed to read overlay ... ENOENT` 后进程退出）—— 那是唯一一个"我们的优化把 dsh 弄挂了"
+ *    的路径，必须用原子写堵死。
+ * 3. **路径用 guest 绝对路径**。overlay 在实例目录、插件在 `/opt/dsh/scripts/`，
+ *    两者不在同一层，写相对路径会锚到 overlay 所在目录从而指错（实测相对路径按
+ *    overlay 所在目录解析）。
+ *
+ * @param instancePathInRootfs 实例在 **guest 内**的绝对路径（`/opt/dsh/instances/<id>`）
+ * @param scriptsHostDir 宿主侧的脚本目录（默认 `DshPaths.SCRIPTS_DIR`，注入以便单测）
+ * @return 写成功的宿主 [File]；插件不存在或写失败时为 `null`
+ */
+fun writeLauncherPatchOverlay(
+    instancePathInRootfs: String,
+    scriptsHostDir: File = File(DshPaths.SCRIPTS_DIR),
+): File? {
+    // 插件本体不在就别写 overlay：一条指向不存在模块的 insert 会让 dsh 每次启动都打一行
+    // warning（虽然不致命），日志噪音不该由我们自己制造。
+    if (!File(scriptsHostDir, LAUNCHER_ASSETS_PLUGIN).isFile) return null
+
+    val hostInstance = hostPathForGuestDir(
+        instancePathInRootfs, File(DshPaths.ROOT_DIR), ProotCommand.GUEST_ROOT
+    ) ?: return null
+    val target = File(hostInstance, LAUNCHER_PATCH_OVERLAY)
+    val pluginGuest = "${ProotCommand.GUEST_ROOT}/scripts/$LAUNCHER_ASSETS_PLUGIN"
+    val body = launcherPatchOverlayJson(pluginGuest)
+
+    val tmp = File(hostInstance, "$LAUNCHER_PATCH_OVERLAY.tmp")
+    return runCatching {
+        hostInstance.mkdirs()
+        tmp.writeText(body, Charsets.UTF_8)
+        // rename 覆盖已存在的目标：Java 的 File.renameTo 在 POSIX 上是原子的 rename(2)，
+        // Windows 上 renameTo 不会覆盖 —— 所以先删（失败也无所谓，下面会再试 rename）。
+        if (target.exists() && !target.delete()) return@runCatching null
+        if (!tmp.renameTo(target)) return@runCatching null
+        target
+    }.getOrNull()
+}
+
+/** 启动器自带的 `/assets` 缓存插件（assets 里 `dsh/scripts/` 下同名文件）。 */
+internal const val LAUNCHER_ASSETS_PLUGIN = "launcher-assets.mjs"
+
+/** 实例目录里那份 `--patch` overlay 的文件名（必须与 `start-dsh.sh` 里的判断一致）。 */
+internal const val LAUNCHER_PATCH_OVERLAY = "launcher.patch.yml"
 
 /**
  * 决定"要不要为自定义 HOME 建目录"（纯函数，R28 / C2-C-1）。

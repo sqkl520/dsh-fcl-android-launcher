@@ -7,7 +7,7 @@
 
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-506%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-513%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 **[⬇️ 下载最新版](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)** ·
@@ -118,7 +118,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 修复轮次 **fix22**（R29 C3 第 6 条：复制链接后不再重问 WebView 门禁） | ✅ 已出包（code 128） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
-**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **506/506** · 脚本自检 25/25
+**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **513/513** · 脚本自检 28/28
 （每轮修复都跑全量；关键修复均钉成断言）
 
 > 版本号唯一真源仍是 `gradle.properties` 的 `dshVersion` / `dshVersionCode`；

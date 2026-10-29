@@ -956,6 +956,25 @@ object DshRuntime {
         // 顺带：不再有 App 侧的明文 key，也就无需在日志里为它注册脱敏。
         // "没配 Key"不再是启动器要判断的事 —— 那是 dsh 自己的状态，UI 能起就照常起。
 
+        // ★ BL-222：写启动器自己的 patch overlay（`--patch`，优先级最高的一层）。
+        //
+        // 内容见 [launcherPatchOverlayJson]：给 `/assets/*` 补缓存头 + 把 client-hmr 的
+        // stat 轮询从 500ms 拉到 5000ms。两条都是"加法"，最坏情况是那一行不生效，
+        // 不会让 dsh 起不来（实测：插件 import 失败只打一行 warning，服务照常启动）。
+        //
+        // 写在**启动之前**，而且只写不删：
+        // - 必须在进程起来之前写完 —— dsh-hmr 会 watch 若干配置文件，运行期改写会触发
+        //   一次整树 recompose（等于给用户的运行中实例来一次重启级抖动）；
+        // - 只写不删：如果哪天不想要了，启动脚本按"文件不存在就不传 --patch"处理，
+        //   所以删文件也是安全的；但删的时机必须在 dsh 不跑的时候，这里不做。
+        //
+        // ⚠ 写失败**不能**让启动失败：overlay 是优化项，不是必需品。
+        //   `writeLauncherPatchOverlay` 返回 null 时脚本不会传 `--patch`，一切照旧。
+        runCatching { writeLauncherPatchOverlay(instancePathInRootfs) }
+            .onFailure {
+                DshLogBus.appendFor(instance.id, "[runtime] launcher patch overlay 写入失败（不影响启动）：$it")
+            }
+
         val argvEnv = mapOf(
             "INSTANCE_DIR" to instancePathInRootfs,
             "DSH_HOME" to "$instancePathInRootfs/home",
