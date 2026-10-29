@@ -99,6 +99,35 @@ class DshWebViewActivity : FCLActivity() {
     private var compatOk = false
 
     /**
+     * BL-221：用户已经从门禁框里**拿走链接**（复制成功）—— 本页不再替他做"要不要加载"的决定。
+     *
+     * 现场：用户复制带 token 的链接是要**去外部浏览器**打开 dsh，本页对他已经没有用处。
+     * 若复制完再把门禁摆回去，等于把"继续 / 复制链接 / 外部浏览器"三选一原样重问一遍
+     * ——而他刚刚已经回答过了（9 分钟内同一句话问三次）。所以收尾改为落到"链接已复制"
+     * 面板（[GateResume.DeferredPanel]），只留「重试」这一个"改主意，在本页打开"的出口。
+     *
+     * ## 为什么不复用 [compatOk]
+     * [compatOk] 的语义是"用户同意在本页用不达标的 WebView 内核加载 dsh"。复制链接**不是**
+     * 这个同意 —— 用户拿走链接恰恰是要**离开**本页。混用会让用户从浏览器切回来时直接
+     * `loadUrl`，用旧内核去渲染 dsh 0.2.x ⇒ 撞上 WebView 114 的必崩（[DshWebViewCompat]
+     * 拦的正是这件事）。两件事必须各有一个标记。
+     *
+     * ## 为什么不落盘
+     * 落盘 = 这台设备**永远**不再提示 WebView 过旧；而 `DshWebViewCompat` 的设计前提是
+     * "每次进入都让用户面对一次版本决策"。一次"少弹一次框"的体验优化，不能换来
+     * "永远失去这条安全提示"。所以它只活在本次 Activity 实例里，随 onDestroy 一起消失。
+     *
+     * ## 为什么 [gateDeferred] 不够
+     * 那是 `onLater`（用户点「稍后」）用的一次性标记，语义是"下一轮不要重摆"，只活到下一次
+     * `onDismissWithoutChoice` 消费掉；而这里要挡的是**之后每一次加载**（onStart 状态回放、
+     * Home 往返、401 兜底），[gateDeferred] 活不过 `onStart` 的状态回放。
+     *
+     * 落点两处：加载入口 [loadUrlChecked]（挡住重载并摆回面板）、
+     * [onRetryClicked]（任何分支动作之前统一复位 —— 重试 = 用户明确要求"在本页打开"）。
+     */
+    private var gateCopied = false
+
+    /**
      * BL-200/BL-201：复制确认框的实例引用（`null` = 没有确认框开着）。
      *
      * FCLAlertDialog 的按钮点击会先无条件 dismiss（java:93-106），所以点「复制链接」会让门禁框
@@ -817,8 +846,12 @@ class DshWebViewActivity : FCLActivity() {
                 when {
                     url != null && loadedUrl != url -> {
                         // 新 URL = 旧失败已作废：照旧收面板开新页（onPageStarted 亦会清 pageFailed）
+                        // BL-221：但 gateCopied 为真时不收 —— 那次 loadUrlChecked 会被标记挡回
+                        // "链接已复制"面板，先 showWeb 再摆回来就是一闪。**复制后从浏览器切回来
+                        // 走的正是这一支**（`loadedUrl` 已被复位成 null ⇒ 不等号成立），
+                        // 只守下面那两处 `if (!pageFailed)` 根本挡不到主路径。
                         loadedUrl = url
-                        showWeb()
+                        if (!gateCopied) showWeb()
                         loadUrlChecked(url)
                     }
                     url != null && webView.url == null -> {
@@ -826,14 +859,17 @@ class DshWebViewActivity : FCLActivity() {
                         // compatOk 已置时直连 load，不再重弹兼容对话框（BL-111 重入守卫）。
                         // BL-060 同源（V3 修复方向 5）：失败态下先不 showWeb，等本行触发的加载
                         // 真正开始（onPageStarted 清 pageFailed）再收面板，避免闪一下空白。
-                        if (!pageFailed) showWeb()
+                        // BL-221：gateCopied 同理 —— 此刻 showWeb 会收起"链接已复制"面板，
+                        // 紧接着 loadUrlChecked 又把它摆回来，用户看到面板闪一下。
+                        if (!pageFailed && !gateCopied) showWeb()
                         loadUrlChecked(url)
                     }
                     url == null -> loadBestUrl(st)
                     else -> {
                         // BL-060：状态回放（每次 onStart 重收集）/REORDER 复用重进这里时，
                         // 若页面处于加载失败态（pageFailed），保持错误面板，不用 showWeb 盖掉。
-                        if (!pageFailed) showWeb()
+                        // BL-221：gateCopied 为真时"链接已复制"面板就是正确现场，同理不盖。
+                        if (!pageFailed && !gateCopied) showWeb()
                     }
                 }
             }
@@ -861,7 +897,9 @@ class DshWebViewActivity : FCLActivity() {
             // 没拿到 token：先试 cookie 是否还有效；不行会走 401 兜底提示
             logWeb("[web] 未捕获到 token URL，尝试用已保存的 cookie 访问 $url")
         }
-        if (!pageFailed) showWeb()
+        // BL-221：与 render 里那两处同款守卫 —— gateCopied 为真时面板就是正确现场，
+        // 先 showWeb 再被 loadUrlChecked 摆回来同样是一闪。
+        if (!pageFailed && !gateCopied) showWeb()
         loadUrlChecked(url)
     }
 
@@ -878,6 +916,16 @@ class DshWebViewActivity : FCLActivity() {
     private fun loadUrlChecked(url: String) {
         // BL-056：WebView 已判死（崩溃重建失败）时不再对旧对象 loadUrl。
         if (webViewDead) return
+        // BL-221：用户已拿走链接（[gateCopied]）、正要去/刚从浏览器回来 —— 本页不再替他做
+        // 加载决定。挡在 compatOk 直通之前：否则一次 onStart 状态回放就会拿旧内核把 dsh 加载
+        // 起来（那正是用户拿走链接要避开的场面）。想在本页打开 = 点「重试」，
+        // onRetryClicked 会先清这个标记再走完整门禁。
+        if (gateCopied) {
+            loadedUrl = null
+            showError(getString(R.string.dsh_webview_gate_copied))
+            ensureVisibleExit(gateShown = false)
+            return
+        }
         if (compatOk) {
             webView.loadUrl(url)
             return
@@ -1003,6 +1051,8 @@ class DshWebViewActivity : FCLActivity() {
      * 2. 确认框无论复制成功、复制失败还是取消，收尾都**回到可决策现场**（见
      *    [resumeGateAfterCopyLink]）——BL-197：fix9 曾让"复制成功"跳过这一步，
      *    于是 loadedUrl=null 无人补、面板已收、WebView 未加载 ⇒ 整屏无控件的稳态空白。
+     *    BL-221 之后"复制成功"落到的是"链接已复制"面板而不是门禁框：现场仍是一个
+     *    带出口的稳态（[GateResume.DeferredPanel]），只是不再重问同一个问题。
      *
      * 本函数**不 dismiss 门禁框**：它由 FCLAlertDialog 自己关；这里只负责确认框这一层。
      */
@@ -1078,7 +1128,7 @@ class DshWebViewActivity : FCLActivity() {
      * `showWeb()` 收起、WebView 从未 `loadUrl` ⇒ 屏上没有任何控件，而且不会自愈
      * （下一次状态发射/onStart 回放才会重摆）。三位独立锐评同判（BL-197）。
      *
-     * 现在的时序（复制成功与取消**完全一致**）：
+     * 现在的时序（**没拿到链接**时：取消/复制失败，用户还在原地）：
      * 1. 确认框已关闭（本函数由它的 dismiss 监听调用）；
      * 2. 先 `loadedUrl = null`（与取消路径同一条复位），再 [postRender] 延迟 ≈180ms 重摆门禁 —
      *    延迟让旧确认框窗口先销毁干净，避免新旧窗口叠影（E1 的 P7：单靠 `decorView.post`
@@ -1086,11 +1136,16 @@ class DshWebViewActivity : FCLActivity() {
      * 3. 门禁框重摆时经 `onDialogWillShow` 再收一次确认框（幂等），并自增
      *    [decidableDialogSeq] —— 收尾逻辑据此确认"出口真的出来了"。
      *
+     * 复制**成功**的那一半不走上面的 2/3（BL-221）：落到"链接已复制"面板，见下面的例外。
+     *
      * 例外（都不允许留在空白页）：
      * - 复制期间门禁框已被状态回放重新摆出（序号变了）→ 屏上已有出口，不再干预；
      * - `compatOk` 已置 / 宿主正在销毁 / 没有可重载的 URL → 由纯函数
      *   [gateResumeAction] 判定；Abort 时同样延迟 render（错误/加载面板带全出口），
      *   最后统一由 [ensureVisibleExit] 兜"连面板都没有"的极端情况。
+     * - **BL-221：复制成功且现场还能重载** → 不重摆门禁，直接落"链接已复制"面板
+     *   （[GateResume.DeferredPanel]）。上面第 2 条的"延迟重摆"是为**没能拿到链接**的用户
+     *   恢复决策现场；拿到了链接的人要去的是外部浏览器，再摆一次门禁等于重问他刚回答过的问题。
      */
     private fun resumeGateAfterCopyLink(copied: Boolean, gateSeqAtStart: Long) {
         // BL-201：确认框开着期间发生过一次状态回放（Home 往返即可），门禁框已被重新摆出。
@@ -1118,6 +1173,22 @@ class DshWebViewActivity : FCLActivity() {
             }
             GateResume.StayOnPage -> {
                 // 防御性分支（compatOk 为真时门禁根本不会弹）：仍兜一次"屏上什么都没有"。
+                ensureVisibleExit(gateShown = false)
+            }
+            // BL-221：链接已复制 —— 不再重摆门禁，落到"链接已复制"面板。
+            // 与 [GateResume.Abort] 的区别：实例还活着、现场可恢复（点「重试」即可在本页打开）；
+            // 与 [GateResume.ReloadGate] 的区别：不把同一个问题再问第三遍。
+            GateResume.DeferredPanel -> {
+                // 与取消路径同一条复位：不让旧 URL 冒充"已在加载"（否则 ensureVisibleExit 的
+                // loadedUrl 判据会以为屏上有页面，面板都不给）。
+                loadedUrl = null
+                // 后续所有加载入口都靠这个标记挡回面板（状态回放 / Home 往返 / 401 兜底），
+                // 见 [gateCopied] 的字段注释。
+                gateCopied = true
+                // showError 是**同步**摆面板：本分支不排 post、不留"屏上什么都没有"的中间帧。
+                showError(getString(R.string.dsh_webview_gate_copied))
+                logWeb("[web] copy link: deferring to panel (no gate re-show), gateCopied=true")
+                // 纯防御（幂等、无副作用）：与其它分支同一纪律 —— 本页任何路径都不许以空白收场。
                 ensureVisibleExit(gateShown = false)
             }
             // Abort：宿主已销毁（postRender 会自行早退，什么都不碰），或实例已停/退出 ——
@@ -1323,6 +1394,10 @@ class DshWebViewActivity : FCLActivity() {
      * 若 WebView 已在崩溃重建中判死（[webViewDead]），任何状态都先补重建。
      */
     private fun onRetryClicked() {
+        // BL-221：重试 = 用户明确要求"在本页打开" ⇒ 复制链接留下的"别替我加载"标记必须**此刻**
+        // 失效。放在所有状态分支之前统一清一次：多个分支（Running / 已停重启 / 崩溃重建）
+        // 各自再写一遍迟早会漏一个，而漏掉的那一支会让"点重试没反应"（loadUrlChecked 又把面板摆回来）。
+        gateCopied = false
         if (webViewDead) {
             // 崩溃重建失败/放弃后的人工重试：先补重建再照常渲染。
             // 手动重试给满新一轮自动重建预算（用户在场，风暴仍被 MAX_CRASH_REBUILDS 兜住）。
@@ -1663,13 +1738,26 @@ fun trimDeltaFor(totalLines: Int, maxShown: Int, lastTrimmed: Int): Int =
  *    调用方另走"不碰 View"的兜底）；
  * 2. [compatOk]：本页早已放行过（理论上不可达，防御性保留）—— 页面已在或即将在，
  *    重摆门禁只会白弹一次（[GateResume.StayOnPage]）；
- * 3. [canReload]：还能拿到可加载的 URL（`Running` 且有 url 或端口）—— 复位 `loadedUrl`
- *    并延迟重摆门禁，让用户回到"继续 / 复制链接 / 外部浏览器"的决策现场
- *    （[GateResume.ReloadGate]）。**复制成功与取消同此一支**；
- * 4. 其余（实例已停/退出、没有 URL）：重摆门禁没有意义，转 [GateResume.Abort]，
- *    由调用方摆出带出口的错误面板。
+ * 3. 无可重载的现场（实例已停/退出、没有 URL）—— 重摆门禁没有意义，转 [GateResume.Abort]，
+ *    由调用方摆出带出口的错误面板。**排在 [copied] 之前**：实例已停时要报的是真实原因
+ *    （"dsh 未在运行"），不能被"链接已复制"这种话盖掉（BL-206 的教训：错误归因比没有文案更糟）；
+ * 4. [copied]：用户已经在确认框里把链接拿走了 —— 他要去的是**外部浏览器**，此刻再把
+ *    "继续 / 复制链接 / 外部浏览器"原样问一遍，等于重问他刚回答过的问题（用户日志里 9 分钟
+ *    内同一句问三次，其中一次就在复制成功两秒后）。落 [GateResume.DeferredPanel]；
+ * 5. 其余（复制被取消/失败）：复位 `loadedUrl` 并延迟重摆门禁，让用户回到可决策现场
+ *    （[GateResume.ReloadGate]）。
  *
- * [copied] 只影响日志口径，**不改变**动作 —— 这正是 BL-197 的修复点（fix9 让它决定是否 return）。
+ * ## 为什么前三支都排在 [copied] 之前（顺序是本函数唯一要守的契约）
+ * - `finishing` / `compatOk` 在前 ⇒ [copied] 在"宿主正在销毁"和"页面已放行"两种现场下
+ *   **毫无话语权**：那两种现场的判定与动作一个字都没变，既有断言一条都不用改。
+ * - 无可重载在前 ⇒ 实例已停时仍报真实原因（见上）。
+ * - 于是 [copied] 的全部影响力被压缩成一句可断言的话：**当且仅当现场还能重载、且本页
+ *   尚未放行时，把 [GateResume.ReloadGate] 换成 [GateResume.DeferredPanel]**。
+ *
+ * ## BL-197 的病根（fix9 的 `if (copied) return`）
+ * 病根不是"copied 影响了判定"而是"copied 导致**什么都不做**"：`loadedUrl=null`、面板已收、
+ * WebView 从未 loadUrl ⇒ 整屏无控件的空白，且不会自愈。新结构里 [copied] 可以影响判定，
+ * 但只能产出一个**必须摆面板**的动作（[GateResume.DeferredPanel]），结构上不可能再落回空白。
  *
  * 写成顶层函数而不是成员：单测 harness 的 classpath 没有 androidx，经 Activity 访问会连带
  * 加载父类链直接崩（同 [trimDeltaFor] 的理由）。
@@ -1683,28 +1771,33 @@ enum class GateResume {
 
     /** 无法恢复门禁：调用方必须摆出带出口的面板，不允许停在空白页。 */
     Abort,
+
+    /** 链接已复制：不重摆门禁，落到"链接已复制"面板（与 Abort 的区别：实例还活着、现场可恢复）。 */
+    DeferredPanel,
 }
 
 /**
  * BL-197：复制流程收尾的决策函数（签名与语义见 [GateResume]）。
  *
- * @param copied 确认框里是否真的把链接放进了剪贴板（**不影响**动作，只用于日志）
+ * @param copied 确认框里是否真的把链接放进了剪贴板（只在 [GateResume] 的队列末尾生效：
+ *   当且仅当现场还能重载、且本页尚未放行时，把重摆门禁换成"链接已复制"面板）
  * @param compatOk 本页是否已经放行过版本门禁
  * @param finishing 宿主是否正在 finish/销毁
  * @param canReload 当前状态是否还能拿到可加载的 URL
  */
-@Suppress("UNUSED_PARAMETER") // copied 只进日志口径：刻意不参与判定（BL-197 的修复点）
 fun gateResumeAction(
     copied: Boolean,
     compatOk: Boolean,
     finishing: Boolean,
     canReload: Boolean,
 ): GateResume = when {
-    // 顺序即优先级：销毁态先挡（碰 View 会崩），已放行不干预，能重载就回到决策现场，
-    // 其余一律交调用方摆出带出口的面板。copied 在这里**不出现**是刻意的。
+    // 顺序即优先级（理由与"为什么这么排"见 [GateResume] 的 KDoc）：
+    // 销毁态先挡（碰 View 会崩）→ 已放行不干预 → 实例已停先报真实原因 → 复制成功落面板 →
+    // 其余回到决策现场。
     finishing -> GateResume.Abort
     compatOk -> GateResume.StayOnPage
-    canReload -> GateResume.ReloadGate
-    else -> GateResume.Abort
+    !canReload -> GateResume.Abort
+    copied -> GateResume.DeferredPanel
+    else -> GateResume.ReloadGate
 }
 
