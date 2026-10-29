@@ -265,10 +265,33 @@ trap 'on_signal TERM' TERM
 trap 'on_signal INT' INT
 
 # --- 启动 node（后台）----------------------------------------------------
+# BL-222：启动器在启动前写了一份自己的 patch overlay（实例目录下的 launcher.patch.yml），
+# 用 `--patch` 传进去，优先级高于 bundle / profile / $DSH_HOME 三层。
+#
+# 三个坑，都是实测踩出来的：
+# ① **旗标位置是硬约束**：`dsh web --patch X --no-open ...` 生效；把 --patch 放到
+#    --no-open 之后会 `error: unknown option '--patch'` —— dsh 的命令行在第一个不认识的
+#    token 处把后续全部交给 app 解析。
+# ② **overlay 缺失时绝对不能传**：dsh 读不到 overlay 会直接退出（不是降级）。
+#    所以这里必须 -f 判一次；文件在但内容坏掉属于我们自己的写错，Kotlin 侧是原子写，不会产生半截文件。
+# ③ **不支持 --patch 的旧版本**：旗标在 0.0.1-rc.1 / 0.1.0-rc.7 / 0.1.2-alpha.5 /
+#    0.1.6-alpha.2 / 0.2.1-rc.2 都有；万一哪天上游删了，传它会直接 usage error。
+#    这里的退化处理：先带 --patch 起，若 node 在 READY 之前就退出（说明可能是 usage error），
+#    再把去掉 --patch 的命令重试一次 —— 优化项永远不该成为"起不来"的原因。
 # 坑点(已验证): 默认 web profile 的 dsh-hmr 需要 node 带 --expose-internals，
 # 且该 flag 不允许放进 NODE_OPTIONS，只能直接传给 node。
-node --expose-internals "$BIN_JS" web --no-open --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &
-NODE_PID=$!
+LAUNCHER_PATCH="$INSTANCE_DIR/launcher.patch.yml"
+PATCH_USED=0
+if [ -f "$LAUNCHER_PATCH" ]; then
+  node --expose-internals "$BIN_JS" web --patch "$LAUNCHER_PATCH" --no-open --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &
+  NODE_PID=$!
+  PATCH_USED=1
+else
+  node --expose-internals "$BIN_JS" web --no-open --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &
+  NODE_PID=$!
+fi
+# ★ 这里**不做** sleep：正常启动要几十秒，为"检测 usage error"先等 2 秒是给所有用户
+#   加税。退化重试挂在下面 READY 循环里 node 提前退出的那个既有出口上（见 PATCH_USED）。
 
 # 把 node 的真实 pid（+本次实际请求的端口）写给宿主侧启动器：停止时它按这个 pid 精确终止。
 # 失败不致命（脚本自己的 trap 仍能清理），但要明确告警——否则"停止后 node 残留"又会无迹可查。
@@ -312,6 +335,21 @@ while : ; do
     flush_new
     wait "$NODE_PID" 2>/dev/null
     code=$?
+    # ★ BL-222：带 --patch 启动却在 READY 之前就退出 —— 最可能是上游删了 `--patch` 旗标
+    #   （usage error 是毫秒级返回的，所以走到这里基本就是它）。退化重试一次不带 --patch，
+    #   并把上一次的失败输出留在日志里（不能吞掉，否则将来真出别的问题就查不到了）。
+    #   只重试一次：PATCH_USED 置 0 之后不会再进来。
+    if [ "$PATCH_USED" = "1" ]; then
+      echo "[start-dsh] WARN: dsh exited before READY while using --patch (code=${code:-1}), retrying without it"
+      echo "[start-dsh] previous attempt (last 8 lines):" >&2
+      tail -8 "$LOGFILE" >&2 2>/dev/null || true
+      : > "$LOGFILE"
+      PATCH_USED=0
+      node --expose-internals "$BIN_JS" web --no-open --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &
+      NODE_PID=$!
+      : > "$NODE_PID_FILE" 2>/dev/null || true
+      continue
+    fi
     # 端口被占是"看起来莫名其妙的 node-exit code=1"最常见的原因（node 日志里必有 EADDRINUSE）。
     # 给出机器可读的原因，启动器据此显示"端口被占用"而不是一句 code=1。
     if grep -q 'EADDRINUSE' "$LOGFILE" 2>/dev/null; then
