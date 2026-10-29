@@ -421,6 +421,15 @@
     <string name="dsh_webview_no_exit">当前无法显示页面。请点「重试」、查看日志，或返回。</string>
     <!-- fix10 / BL-199：点「稍后」后的停留态（不打开界面，但给一个明确的下一步） -->
     <string name="dsh_webview_gate_deferred">暂未打开 dsh 界面。想打开时点「重试」。</string>
+    <!-- BL-206：复制成功后的停留态 —— 与「稍后」面板（dsh_webview_gate_deferred）刻意分开。
+         用户刚点完「复制链接」、正要拿链接去浏览器，此时若复用「暂未打开 dsh 界面」，
+         就是把"已完成一件事"错误归因成"什么都没发生"，还只给一个指向相反意图的下一步
+         （在本页打开），用户会以为复制失败了。BL-206 的教训：错误归因比没有文案更糟。
+         文案须同时回答三件事：链接已复制 / 到浏览器粘贴打开 / 想在应用内打开就点「重试」。
+         「重试」须与本语言 dsh_action_retry 的原文逐字一致，用户不必在两个词之间换算。
+         ⚠ 本条禁止出现撇号与反斜杠：aapt2 对两种撇号转义写法都报
+         Invalid unicode escape sequence（本项目踩过）。 -->
+    <string name="dsh_webview_gate_copied">链接已复制。到浏览器里粘贴打开即可；想在应用内打开时点「重试」。</string>
     <!-- BL-184：升级指引补一句"更新后仍异常就走复制链接" -->
     <string name="dsh_webview_compat_upgrade_hint">升级方法：在应用商店将「Android System WebView」（部分设备为 Chrome）更新到最新版，然后重新打开本页。若更新后仍异常，用「复制链接」把地址拿到其他较新的浏览器里打开。</string>
     <string name="dsh_webview_render_gone_repeat">页面多次崩溃，已停止自动恢复。点「重试」重新加载。</string>

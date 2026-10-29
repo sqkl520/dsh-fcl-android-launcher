@@ -442,6 +442,15 @@ Version %1$s</string>
     <string name="dsh_webview_no_exit">Nothing can be shown right now. Tap Retry, check the logs, or go back.</string>
     <!-- fix10 / BL-199：点「稍后」后的停留态（不打开界面，但给一个明确的下一步） -->
     <string name="dsh_webview_gate_deferred">dsh UI is not opened yet. Tap Retry when you want to open it.</string>
+    <!-- BL-206：复制成功后的停留态 —— 与「稍后」面板（dsh_webview_gate_deferred）刻意分开。
+         用户刚点完「复制链接」、正要拿链接去浏览器，此时若复用「暂未打开 dsh 界面」，
+         就是把"已完成一件事"错误归因成"什么都没发生"，还只给一个指向相反意图的下一步
+         （在本页打开），用户会以为复制失败了。BL-206 的教训：错误归因比没有文案更糟。
+         文案须同时回答三件事：链接已复制 / 到浏览器粘贴打开 / 想在应用内打开就点「重试」。
+         「重试」须与本语言 dsh_action_retry 的原文逐字一致，用户不必在两个词之间换算。
+         ⚠ 本条禁止出现撇号与反斜杠：aapt2 对两种撇号转义写法都报
+         Invalid unicode escape sequence（本项目踩过）。 -->
+    <string name="dsh_webview_gate_copied">Link copied. Paste it in your browser to open dsh; tap Retry to open it in the app instead.</string>
     <!-- BL-184：升级指引补一句"更新后仍异常就走复制链接"——升级不一定能解决（内核也可能已最新但仍是旧内核） -->
     <string name="dsh_webview_compat_upgrade_hint">How to upgrade: update "Android System WebView" (sometimes "Chrome") to the latest version in your app store, then reopen this page. If it still fails after updating, use "Copy link" and open the address in another, newer browser.</string>
     <string name="dsh_webview_render_gone_repeat">The page crashed repeatedly and could not be recovered. Tap Retry to load it again.</string>
