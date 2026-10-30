@@ -13,8 +13,8 @@
 
 | 组件 | 版本 | 常见路径 | 说明 |
 |---|---|---|---|
-| JDK | **17**（如 Microsoft OpenJDK） | `C:/Program Files/Microsoft/jdk-17.0.20.101-hotspot` | AGP 8.x 要求；**若系统默认 JDK 不是 17，必须显式让 Gradle 用 17** |
-| Android Studio | 2026.1.3.7 | `C:\Program Files\Android\Android Studio` | 写代码用；命令行构建不依赖它 |
+| JDK | **17**（如 Microsoft OpenJDK） | `C:/Program Files/Microsoft/jdk-17.0.20.101-hotspot` | AGP 8.x 要求 JDK **17+**；模块的源码/字节码目标都钉在 `JavaVersion.VERSION_17`（`FCL/build.gradle.kts`）。本机 `~/.gradle/gradle.properties` 当前指向 JDK 21，模块仍按 17 出字节码 —— 想少一类环境差异就按 §1.2 钉成 17 |
+| Android Studio | 2026.1.3（build `AI-261.26222.65.2613.15948027`） | `C:\Program Files\Android\Android Studio` | 写代码用；命令行构建不依赖它 |
 | Android SDK | platform **35**、build-tools **35.0.0**、platform-tools | `D:\Android\Sdk` | 包名：`Google.AndroidStudio` + `cmdline-tools` |
 | Android NDK | **27.0.12077973** | `D:\Android\Sdk\ndk\27.0.12077973` | 只用于 `ptyjni` 桥接 |
 | CMake（SDK 自带） | **3.22.1** | `D:\Android\Sdk\cmake\3.22.1\bin\{cmake,ninja}.exe` | AGP `externalNativeBuild` 用；**x64 原生执行，无需 qemu** |
@@ -35,6 +35,12 @@ setx ANDROID_SDK_ROOT "D:\Android\Sdk"
 setx ANDROID_HOME     "D:\Android\Sdk"
 ```
 
+> ★ **`org.gradle.java.home` 决定的是 Gradle 守护进程的 JVM**。本机这一行当前指向 JDK 21
+> （`C:/Program Files/Eclipse Adoptium/jdk-21.0.9.10-hotspot`），编译与出包都正常
+> （模块的源码/字节码目标写死 `JavaVersion.VERSION_17`），`./gradlew --version` 里会出现
+> `Daemon JVM: …jdk-21…`。想避免这类差异就把这行钉成 17；
+> 不钉也能编，但**别把"守护进程 JVM"当成"项目要求的 JDK"来写文档**。
+
 ### 1.3 行尾：脚本必须是 LF ⚠️
 
 Git 的 `core.autocrlf` **必须设为 `false`**（并配 `core.eol=lf`）：
@@ -44,9 +50,10 @@ git config --global core.autocrlf false
 git config --global core.eol lf
 ```
 
-原因：`FCL/src/main/assets/dsh/scripts/*.sh` 会被**原样打进 APK**，
-真机上由 proot 里的 `/bin/sh` 执行。Windows 检出成 CRLF 后，首行变成 `#!/bin/sh\r`，
-解释器找不到 → 底座脚本全废。`.gitattributes` 已对该目录声明 `text eol=lf` 兜底，
+原因：`FCL/src/main/assets/dsh/scripts/` 下的文件会被**原样打进 APK**，
+`.sh` 在真机上由 proot 里的 `/bin/sh` 执行，`.mjs`（`launcher-assets.mjs`，dsh 插件）由 Node 加载。
+Windows 检出成 CRLF 后，`#!/bin/sh\r` 让解释器找不到 → 底座脚本全废。
+`.gitattributes` 已对该目录整体声明 `text eol=lf`（含 `.mjs`）兜底，
 但**全局配置也要对**，否则旧检出不会自动更正。
 
 验证（应输出 `i/lf  w/lf`）：
@@ -58,7 +65,8 @@ git ls-files --eol FCL/src/main/assets/dsh/scripts/
 ### 1.4 Android Studio 首次打开要做的
 
 1. `File → Open` 选仓库根目录（含 `settings.gradle.kts` 的那一层，**不是**里面的 `FCL/`）
-2. `Settings → Build → Build Tools → Gradle → Gradle JDK` 选 **17**（Studio 自带 JBR 是 21，AGP 8.13 要 17）
+2. `Settings → Build → Build Tools → Gradle → Gradle JDK` 选 **17**（本项目这份 Studio 自带的 JBR 是 25，
+   别拿它当项目的 JDK 基线；AGP 8.x 要求 17+，模块目标也钉在 17）
 3. 首次同步会下载 Gradle 8.14.4 + 依赖，需联网，数分钟
 
 ### 1.5 本平台的坑
@@ -76,7 +84,7 @@ git ls-files --eol FCL/src/main/assets/dsh/scripts/
 | JDK | **17** | `/usr/lib/jvm/java-17-openjdk-arm64` | AGP 8.x 要求 |
 | Android SDK | compileSdk **35**、build-tools **35.0.0**、platform-tools | `/opt/android-sdk` | 可用 `ANDROID_SDK_ROOT` 覆盖（脚本已支持） |
 | Android NDK | **27.0.12077973** | `/opt/android-sdk/ndk/27.0.12077973` | 只用于 `ptyjni` 桥接 |
-| Gradle | wrapper 自带 | `FCL/gradlew` | 无需单独安装 |
+| Gradle | wrapper 自带 | `<仓库根>/gradlew` | 无需单独安装（`FCL/` 下没有 `gradlew`，用仓库根那个） |
 | 系统 cmake/ninja | 任意较新版本 | `/usr/bin/{cmake,ninja}` | `run-compile.sh` 用它编 ptyjni |
 
 `ANDROID_SDK_ROOT` 若指向别处，脚本会自动跟随：
@@ -135,12 +143,16 @@ cmake → cmake.real(脚本) → cmake.real.real(真二进制)   # qemu 去执�
 .\gradlew.bat --no-daemon :FCL:testFordebugUnitTest
 
 # 打包（需先补 rootfs，见 ROOTFS.md）
-.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleRelease
 ```
 
-在 arm64 Linux 上也可以用仓库根目录的 `run-compile.sh` / `run-tests.sh` / `build-apk.sh`
-（纯 POSIX sh，自动识别源码目录）—— 它们和上面三条 Gradle 命令做的是同一件事。
-Windows 上直接跑不了这些 `.sh`，用上面的 Gradle 命令即可。
+> 出货是 `assembleRelease`（T-D1，2026-10-19 起：正式包名 / 非 debuggable / 专用密钥）。
+> 调试通道用 `:FCL:assembleFordebug`（debuggable + `run-as`，包名带 `.debug` 后缀，可与出货包并存）。
+
+在 arm64 Linux 上，如果你手上有 `run-compile.sh` / `run-tests.sh` / `build-apk.sh` 这三个脚本
+（纯 POSIX sh，自动识别源码目录），它们和上面三条 Gradle 命令做的是同一件事；
+只 clone 了源码仓的话这三个脚本不在仓库里，直接跑上面的 Gradle 命令即可（逐条等价）。
+Windows 上跑不了这些 `.sh`，同样用上面的 Gradle 命令。
 
 ---
 
