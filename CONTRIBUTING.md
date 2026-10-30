@@ -22,7 +22,7 @@ DeepSeek Harness（dsh）安卓启动器，基于 [Fold Craft Launcher](https://
 
 | 需要 | 为什么 |
 |---|---|
-| **版本号后缀**（关于页里那串，如 `0.1.6-SNAPSHOT-fix15`） | 没有它无法判断你装的是不是当前验证包；README 历史上有过版本号对不上的事故 |
+| **版本号后缀**（关于页里那串，如 `0.1.6-SNAPSHOT-fix22`） | 没有它无法判断你装的是不是当前验证包；README 历史上有过版本号对不上的事故 |
 | **机型 + Android 版本** | proot / WebView / 存储路径的行为跟 ROM 强相关 |
 | **复现步骤** | "点了启动就白屏"和"装完 dsh 点启动白屏"是两类问题 |
 | **日志片段** | 应用内日志页可复制；实例日志与全局日志分开看，贴对应那份 |
@@ -106,7 +106,7 @@ fork → 从 main 开分支 → 改 → 本地跑绿 → 提 PR
 ```sh
 sh run-compile.sh    # 先编主代码（单测依赖它的产物）
 sh run-tests.sh      # Kotlin 单测 + 运行时脚本自检
-sh build-apk.sh      # 出 APK 到 output/
+sh build-apk.sh      # 出 APK（release 出货包）到 output/
 ```
 
 三条都要**按顺序**跑：`run-tests.sh` 用的是 `run-compile.sh` 编出来的 class，

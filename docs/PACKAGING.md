@@ -67,8 +67,24 @@ cd <仓库根>
 > 早期打包曾把 APK 放那里，后来统一改到 `output/`。
 
 第二轮加固（2026-09-22）后，assets 里的 `version` 与 `scripts/version` 已提到 **2**
-（子项版本变化会触发增量重解压）。**之后脚本又迭代多次，当前 `scripts/version` = 7**；
+（子项版本变化会触发增量重解压）。**之后脚本又迭代多次，当前 `scripts/version` = 12**；
 rootfs 的 `version` 已改为版本串形式（`debian-…-slim1`，见 `ROOTFS.md`），不再是整数。
+
+> **fix22（code 128）** 新增了 `scripts/launcher-assets.mjs`，`scripts/version` 11 → 12 ——
+> 所以从 fix21 及更早的包升级上来，**会**触发一次 `scripts` 重解压（约 45 KB，秒级，不动 rootfs）。
+> `scripts` 目录现在是：`probe.sh` / `setup-node-dsh.sh` / `start-dsh.sh` / `launcher-assets.mjs` / `version`。
+
+## `--patch` overlay（启动器自己那一层配置）
+
+启动前启动器会往**实例目录**写 `launcher.patch.yml`（内容是 JSON —— JSON 是合法 YAML），
+`start-dsh.sh` 检测到该文件就用 `dsh web --patch <该文件> --no-open ...` 传进去：
+
+- 由 `com.dsh.core.DshInstances.writeLauncherPatchOverlay()` 生成，含两条：挂上 `launcher-assets`
+  插件（`/assets` 缓存头），把 `client-hmr.pollIntervalMs` 从 500 调到 5000（省电，不影响功能）；
+- **不写** `$DSH_HOME/cordis.patch.yml` —— 那是 dsh 的用户层，会对用户所有 profile 生效；
+- 原子写（`.tmp` + rename）：半截文件会让 dsh 直接启动失败；
+- 写失败 / 文件不存在都**不影响启动**（脚本就不传 `--patch`）；带 `--patch` 却在就绪前退出时，
+  脚本会去掉它自动重试一次；`--patch` 必须放在 `web` 之后、`--no-open` 之前。
 
 ## 布局（`FCL/src/main/assets/dsh/` 目录内）
 
@@ -82,28 +98,32 @@ dsh/
     version            rootfs 子项版本（版本串形式，如 `debian-…-slim1`）
     rootfs.tar.xz      [已就位·不入 Git] Debian 12 bookworm arm64 + Node 22 + 预装 dsh（瘦身后 142MB，见 ROOTFS.md）
   scripts/
-    version            （当前 7）
+    version            （当前 12）
     setup-node-dsh.sh  已放入（打印 STAGE=... 进度；装完硬校验）
-    start-dsh.sh       已放入（打印 READY url=/FAILED reason=...；信号转发；支持 PORT=0）
+    start-dsh.sh       已放入（打印 READY url=/FAILED reason=...；信号转发；支持 PORT=0；
+                       有 launcher.patch.yml 时用 `--patch` 传给 dsh，带 --patch 起不来则去掉重试一次）
     probe.sh           已放入（自检探针，DshBootstrap.verify 调用）
+    launcher-assets.mjs 已放入（**dsh 插件**，非 shell：给 /assets 补 cache-control: immutable）
 ```
 
-## 你需要补齐的两类二进制文件
+## 两类平台大文件
 
 代码链路（解压、加执行位、增量更新、原子替换、rootfs 布局自愈、自检、proot 命令拼装）已全部就绪
-并通过编译验证，但 **proot 二进制** 和 **rootfs 压缩包** 是平台相关的大文件，需你按下述方式准备后放入。
+并通过编译验证。**两类文件现在都已在仓库里**：proot 三件套在 `FCL/src/main/jniLibs/arm64-v8a/`
+（已入 Git），rootfs 压缩包在 `FCL/src/main/assets/dsh/rootfs/`（142 MB，不入 Git，需要自己备）。
+下面写的是**换机器 / 换版本时怎么重新准备**。
 
-### 1) proot 二进制（二选一，**强烈推荐方案 A**）
+### 1) proot 二进制（**现状：已在 jniLibs，方案 A**）
 
-**方案 A（推荐）：作为 jniLibs 打包**
-- 把 arm64 的 proot、proot loader 分别命名为 `libproot.so`、`libproot-loader.so`
-  （**连字符**，与 assets 旧写法的下划线 `_loader` 不同；代码的回退路径也已统一为连字符）
-  放到 `FCL/src/main/jniLibs/arm64-v8a/`（另有 `libbusybox.so` 提供 POSIX 工具）。
+**方案 A（现行）：作为 jniLibs 打包**
+- `libproot.so`、`libproot-loader.so`、`libbusybox.so` 都在 `FCL/src/main/jniLibs/arm64-v8a/`，已入 Git。
+- 命名用**连字符** `proot-loader`（assets 旧写法的下划线 `_loader` 已废弃；代码的回退路径
+  也统一为连字符）。
 - 系统安装时会自动解压到 `nativeLibraryDir` 并**自带执行位**，最稳。
 - `DshPaths.resolveProotBin/Loader` 会优先用这里的；`ProotCommand.preflight` 也会因此通过。
-- 此时 `dsh/proot/` 下的 so 可不放（bootstrap 会跳过，回退逻辑仍在）。
+- `dsh/proot/` 下只有一个 `PLACEHOLDER.txt` 与 `version`，**不放二进制**。
 
-**方案 B：作为 assets 打包**
+**方案 B（不推荐，仅作历史说明）：作为 assets 打包**
 - 把二进制放到 assets 目录 `FCL/src/main/assets/dsh/proot/libproot.so`、`.../libproot-loader.so`。
 - `DshBootstrap` 解压后会 `setExecutable(true)`。但注意：**targetSdk ≥ 29 起，App 私有数据目录里的
   可执行文件普遍受 W^X/SELinux 限制，多数新机型上会 exec 失败**。
@@ -126,18 +146,24 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
   （例如顶层是 `ubuntu/`），`DshBootstrap` 会在解压后**自动上提**并记录一行日志；
   仍不可用则给出明确报错，而不是让 proot 抛晦涩错误。
 
-> 注：这两类文件动辄几十~几百 MB，未纳入本仓库。放入后把对应子目录的 `version`
-> 改成更大的整数即可触发重新解压（**改 `scripts/` 或 `rootfs/` 的 version 只会重解该项**）。
+> 注：rootfs 压缩包这类大文件（几十~几百 MB）未纳入本仓库。放入后把对应子目录的 `version`
+> 改成新值即可触发重新解压（**改 `scripts/` 或 `rootfs/` 的 version 只会重解该项**；
+> `scripts/version` 是递增整数，`rootfs/version` 是版本串、按字符串比较）。
 
 ## 首启之后会发生什么（排查用）
 
-1. `DshBootstrap.install()`：检查磁盘空间（首装约需 1.4GB / 升级约需 862MB，不够直接提示）
-   → 按 `version` 逐项解压（scripts → proot → rootfs）→ rootfs 解到 `rootfs.tmp` 校验后原子替换。
+1. `DshBootstrap.install()`：需要解压 rootfs 时先检查磁盘空间（首装约需 **1.5 GB** 可用 /
+   仅升级 rootfs 约需 **960 MB**，不够直接提示）—— 门槛取自 `DshBootstrap.requiredFreeBytes`，
+   不是固定常数，别在这里写死成别的数
+   → 逐项处理：**scripts** 按 version 比对、落后才解压；**proot/loader 不再从 assets 解压**
+   （直接取 `nativeLibraryDir` 里的三个 jniLibs，缺哪个就明确报哪个）；**rootfs** 解到
+   `rootfs.tmp`、校验后原子替换。
 2. **自检**：在 proot 里执行 `scripts/probe.sh`，必须打印 `dsh-probe-ok`；
    否则报"自检未通过：<原因>"（这一步会在装 dsh 之前暴露 proot 缺失/权限/loader/rootfs 布局问题）。
 3. 安装 dsh：`setup-node-dsh.sh` 输出 `[setup] STAGE=...` 供界面显示进度；
    npm 缓存共享在 `<filesDir>/dsh/npm-cache`。
-4. 启动：`start-dsh.sh` 探测就绪后打印 `[start-dsh] READY url=http://127.0.0.1:<port>/?token=...`。
+4. 启动：启动前会往实例目录写 `launcher.patch.yml`（见上），`start-dsh.sh` 探测就绪后打印
+   `[start-dsh] READY url=http://127.0.0.1:<port>/?token=...`。
 
 ## 密钥与令牌（安全约定）
 
@@ -194,6 +220,7 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 5. **交给 AGP 打包**：临时注释 `build.gradle.kts` 里两处 `externalNativeBuild`，
    并加一句 `sourceSets.getByName("main") { jniLibs.srcDir("/tmp/fcl-jnilibs") }`，
    然后 `./gradlew --no-daemon -Darch=arm64 :FCL:assembleFordebug`。**打完记得还原 `build.gradle.kts`**。
+   （当时出货通道还是 `fordebug`；现在出货走 `assembleRelease`，见本文开头与〔Windows 打包〕。）
 
 ### 实测结果（2026-09-29）
 

@@ -13,6 +13,10 @@
 - 落点：`FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（相对**源码仓根**；gitignore，不进 Git）
   以及 `FCL/src/main/assets/dsh/rootfs/version`（文本，一串版本标记）
 
+> ⚠️ **现包有一处已知杂质**：`rootfs.tar.xz` 顶层含 `./ztest/` 与 `./ztest/f.txt`（2 字节的测试残留，
+> 即解压后 rootfs 里多一个 `/ztest`）。无害，**不必为它单独升 `rootfs/version`**（升级会触发已装设备
+> 全量重解压）；下次按本文重建时 §6 的清理清单会顺手剔掉。
+
 ## 0. 为什么需要预打包 rootfs
 
 dsh 的原生模块（koffi / node-pty / sharp …）**只发布 linux 版**，Android 的 bionic libc 跑不了；
@@ -56,15 +60,15 @@ ln -sf /opt/node22/bin/npm  "$R/usr/local/bin/npm"
 
 ## 4. 预装 dsh（关键：装到 `/opt/dsh-preinstalled`）
 
-`setup-node-dsh.sh` 会检查"预装版本 == 请求版本"，命中就跳过下载。
+`setup-node-dsh.sh` 会检查"预装版本 == 请求版本"，命中就跳过下载
+（它读的是 `$DSH_PREINSTALL_DIR/node_modules/@deepseek-ai/dsh/package.json` 里的 `version`）。
 
 ```sh
 DSH_VER=0.1.6-alpha.2
 mkdir -p "$R/opt/dsh-preinstalled"
 cd "$R/opt/dsh-preinstalled"
 "$R/opt/node22/bin/npm" install --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VER"
-# 记下版本，供 App 侧比对
-echo "$DSH_VER" > "$R/opt/dsh-preinstalled/.dsh-version"
+# 不必另写版本文本文件：安装脚本直接读 package.json 的 version 做比对
 ```
 
 ## 5. 装编译工具（原生模块用）
@@ -95,6 +99,9 @@ rm -f "$R/usr/bin/perl" "$R/usr/bin/gunzip" "$R/usr/bin/bzip2" "$R/var/lib/dpkg/
 
 # ④ npm 缓存与临时文件
 rm -rf "$R/root/.npm" "$R/tmp/"* 2>/dev/null || true
+
+# ⑤ 构建期的测试残留（现包里就有一份 ./ztest/，见文首的已知杂质说明）
+rm -rf "$R/ztest"
 ```
 
 ## 7. 打包与校验
