@@ -44,8 +44,9 @@
   - `com/tungsten/fclcore/` 373 个（`fakefx` / `util` / `task` / `event`）
   - `com/tungsten/fcl/` 4 个（`FCLApp` / `SplashActivity` / `RuntimeUtils` 等）
   - `com/tungsten/fclauncher/utils/` 2、`com/mio/util/` 5、`ZipFileSystem/` 12（+ 2 个资源文件）
-- **资源**：`FCL/src/main/res` 111 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + version 标记；
-  `rootfs.tar.xz` 不入 Git）· jniLibs 3 个（`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
+- **资源**：`FCL/src/main/res` 105 个文件 · assets 仅 `dsh/`（3 个 POSIX sh + 1 个前端缓存插件
+  `launcher-assets.mjs` + 各级 `version` 标记；`rootfs.tar.xz` 不入 Git）· jniLibs 3 个
+  （`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
 - **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **513/513**；脚本自检 **28/28**
 - **入口**：`SplashActivity` → 首启前置页（`DshSetupActivity`，底座未就绪时）→ **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
@@ -68,7 +69,7 @@ rootfs 已于 2026-10-06 瘦身：`rootfs.tar.xz` **314 MB → 142 MB（−52.7%
 |---|---|
 | `FCL/src/main/java/com/dsh/` | **dsh 启动器主体**（`core` 21 + `ui` 22），43 个文件 |
 | `FCL/src/main/java/com/tungsten/` | FCL 基座（`fcllibrary` UI 框架 + `fclcore` 工具） |
-| `FCL/src/main/assets/dsh/` | 运行时底座：`scripts/`（3 个 POSIX sh）+ `rootfs/`（tar.xz 不入 Git） |
+| `FCL/src/main/assets/dsh/` | 运行时底座：`scripts/`（3 个 POSIX sh + `launcher-assets.mjs`）+ `rootfs/`（tar.xz 不入 Git） |
 | `FCL/src/test/java/com/dsh/` | JVM 单测 |
 | `docs/` | 本目录 |
 
@@ -86,9 +87,12 @@ rootfs 已于 2026-10-06 瘦身：`rootfs.tar.xz` **314 MB → 142 MB（−52.7%
 # 单测
 .\gradlew.bat --no-daemon :FCL:testFordebugUnitTest
 
-# 打包（需先备好 rootfs，见 ROOTFS.md）
-.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleFordebug
+# 打包出货包（需先备好 rootfs，见 ROOTFS.md）
+.\gradlew.bat --no-daemon -Darch=arm64 :FCL:assembleRelease
 ```
+
+> 出货走 `assembleRelease`（正式包名 / 非 debuggable / 专用密钥，2026-10-19 起）。
+> 调试通道仍可用 `:FCL:assembleFordebug`（debuggable，包名带 `.debug` 后缀，可与出货包并存安装）。
 
 打包前必须备好 `FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz`（142 MB，不入 Git）。
 最省事的办法是**从已发布的 APK 里无损取出**（APK 内是 STORED，取出来逐字节相同）：
