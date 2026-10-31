@@ -1,6 +1,7 @@
 package com.dsh.ui
 
 import android.annotation.SuppressLint
+import com.dsh.fcl.androidlauncher.BuildConfig
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -397,6 +398,14 @@ class DshWebViewActivity : FCLActivity() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
         }
+        // R30/BL-223 诊断：只在可调试包里开 WebView 远程调试。
+        // 目的：把「WS 握手到底带了什么」从推断变成证据 —— 真机 logcat 只给出
+        // ERR_WS_UPGRADE，看不到请求头，也看不到 CookieManager 里到底有没有那条 cookie。
+        // 出货包（release）保持关闭，避免暴露调试面。
+        if (BuildConfig.DEBUG) {
+            runCatching { WebView.setWebContentsDebuggingEnabled(true) }
+                .onFailure { logWeb("[wsdiag] enable webview debugging failed: ${it.message}") }
+        }
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -471,6 +480,10 @@ class DshWebViewActivity : FCLActivity() {
                 crashRebuildsResetAt = SystemClock.uptimeMillis() + CRASH_BUDGET_RESET_DELAY_MS
                 // 让 token→cookie 的结果立刻落盘，App 重启后免 token 直接进
                 runCatching { CookieManager.getInstance().flush() }
+                // R30/BL-223 诊断：直接问 CookieManager 有没有 dsh 的会话 cookie。
+                // 这是把「WS 为什么 401」从推断变成证据的关键一步 —— 真机 logcat 只有
+                // ERR_WS_UPGRADE，看不出 cookie 到底存没存。只在可调试包里做。
+                if (BuildConfig.DEBUG && url != null) diagnoseDshCookie(url)
                 // 走到这里才算"界面真的出来了"（判据见 maybeShowFirstRunKeyHint 的注释）
                 if (isLoopback(url)) maybeShowFirstRunKeyHint()
             }
@@ -996,7 +1009,11 @@ class DshWebViewActivity : FCLActivity() {
                 decidableDialogSeq++
                 dismissCopyDialog()
                 closeLogOverlay()
-            }
+            },
+            // R30/BL-223：把 WebView 交给门禁去做 API 探测。仅在版本低于阈值时才用得上
+            // （版本达标走早退路径，不会碰它）。探测完会 loadData 一个空文档 —— 这正好
+            // 在 onContinue 的 loadUrl 之前，不会覆盖真实页面。
+            probeHost = if (webViewDead) null else webView,
         )
     }
 
@@ -1568,6 +1585,43 @@ class DshWebViewActivity : FCLActivity() {
         if (url == null) return false
         val host = runCatching { Uri.parse(url).host }.getOrNull() ?: return false
         return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
+    /**
+     * R30/BL-223 诊断：把 dsh 会话 cookie 的真实状态打出来。
+     *
+     * 背景：真机上 dsh 界面能渲染（说明 HTTP 主文档的 token→cookie 走通了），
+     * 但 WS 握手报 `net::ERR_WS_UPGRADE`。上游 `admit()` 只认 cookie，
+     * 所以"cookie 到底在不在"是决定修法的关键，不能靠猜。
+     *
+     * 打印三件事：
+     * 1. CookieManager 里该 origin 下的全部 cookie 名（脱敏：只留**前 12 字符**）；
+     * 2. 是否存在 dsh 的会话 cookie（名以 `dsh-auth-` 开头）；
+     * 3. 期望的 cookie 名（与上游 `cookieName()` 同算法：`dsh-auth-` + base64url(sha256(authority))）。
+     *
+     * 注意：**只打名字，不打值** —— 值是可用于冒充的凭据，进了日志就等于泄露。
+     */
+    private fun diagnoseDshCookie(pageUrl: String) {
+        runCatching {
+            val uri = Uri.parse(pageUrl)
+            val authority = uri.authority ?: return@runCatching
+            val all = CookieManager.getInstance().getCookie(pageUrl).orEmpty()
+            val names = all.split(";")
+                .mapNotNull { it.substringBefore("=").trim().ifEmpty { null } }
+            val dshNames = com.dsh.core.DshAuthCookie.sessionCookieNames(all)
+            val expected = com.dsh.core.DshAuthCookie.nameFor(authority)
+            logWeb(
+                "[wsdiag] url=$pageUrl authority=$authority " +
+                    "cookies=${names.size} dshCookies=${dshNames.size} " +
+                    "expected=$expected present=${names.contains(expected)}"
+            )
+            if (dshNames.isEmpty()) {
+                logWeb("[wsdiag] !! no dsh-auth-* cookie — WS 握手会 401（这就是 ERR_WS_UPGRADE 的来源）")
+            } else if (!names.contains(expected)) {
+                logWeb("[wsdiag] !! dsh-auth cookie 存在但名字不匹配 —— authority 变了？（端口变过？）" +
+                    " 实际=${dshNames.joinToString(",")}")
+            }
+        }.onFailure { logWeb("[wsdiag] diagnose failed: ${it.message}") }
     }
 
     /** 页面加载中/等待运行时：显示状态面板（带转圈），隐藏 WebView */

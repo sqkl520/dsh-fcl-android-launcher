@@ -414,6 +414,14 @@ Version %1$s</string>
     <!-- BL-184：不再承诺"外部浏览器一定能打开"——外部浏览器内核同样可能过旧（白屏/无响应），
          所以把「复制链接」抬成第一推荐。%1$d 仍是要求的最低主版本号（DshResourceFormatTest 已登记）。 -->
     <string name="dsh_webview_compat_message">The current WebView is too old (dsh needs version %1$d or newer), so the UI may stay blank or stop responding. Note: external browsers also need a recent engine — the browser built into many phones is outdated too and may show the same blank page. Recommended: tap "Copy link" and paste the credentialed address into an up-to-date browser, or update WebView first and try again.</string>
+    <!-- R30/BL-223：**实测后改写的主文案**（真机 HONOR X10 Max / WebView 114 验过）。
+         旧文案说"界面可能白屏或没有响应"——**不准确**。实测表现是：界面**正常打开、
+         能看**，但任何需要后端的操作都是死的（选工作区永远"正在加载"、发不出消息、
+         设置打不开…），而且**没有任何报错**，用户只会觉得"卡"/"慢"。
+         这比白屏更难诊断，所以文案必须把"能看≠能用"这件事说破。
+         %1$s = 具体缺失的 API（例如 "Promise.withResolvers (needs 119+)"），
+         由运行期真探测得出，不是照版本号猜的。 -->
+    <string name="dsh_webview_compat_message_missing">This device\'s WebView is missing APIs that dsh requires: %1$s. dsh will open and look normal, but it will not actually work — choosing a workspace, sending messages and opening settings all silently fail with no error message. The reliable fix is to tap "Copy link" and open that address in an up-to-date browser (Chrome, Edge, Firefox…). Updating Android System WebView in your app store also works if your phone allows it. Continuing in this app will not make those features work.</string>
     <!-- BL-185：版本串读不出（厂商非标格式）时单独一套文案，把"复制链接"作为第一推荐。
          BL-206：正文不再重复"无法识别版本"（那是标题的话），改为直接陈述读到的原文 ——
          标题 + 正文各说一遍同一件事，会让用户以为框里有两处独立的判断。 -->

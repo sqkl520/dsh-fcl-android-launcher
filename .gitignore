@@ -44,3 +44,13 @@ FCL/src/main/java/com/mio/Main.kt
 /.zcode/
 .zcodeignore
 AGENTS.md
+
+# ---- 本地工具产物（不进仓库）----
+# Honor Suite 安装包 45MB + 从 Google 下的 USB 驱动，都是"装机用的一次性下载物"，
+# 需要时按 tools/honor-adb/README.md 重新下载即可。
+tools/honor-adb/*.exe
+tools/honor-adb/amd64/
+tools/honor-adb/i386/
+tools/honor-adb/android_winusb.inf
+tools/honor-adb/androidwinusb*.cat
+tools/honor-adb/source.properties
