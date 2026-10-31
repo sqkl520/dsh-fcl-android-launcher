@@ -63,6 +63,122 @@ object DshWebViewCompat {
     const val MIN_WEBVIEW_MAJOR = 119
 
     /**
+     * R30/BL-223：在**真实运行的 WebView** 里探测 dsh 必需的 ES 新 API 是否存在。
+     *
+     * ## 为什么要真探测，而不是只看版本号
+     *
+     * 版本号只是间接指标。真机上可能遇到：
+     * - 厂商魔改过的 Chromium（版本号虚高但 API 被裁）；
+     * - WebView 被降级/回滚但 `versionName` 没变；
+     * - 我们自己的版本解析踩偏（虽然已有 8 种格式的测试）。
+     *
+     * 探测一次的实际收益：门禁文案能写出**具体缺什么**，用户看到的就不是
+     * 泛泛的"太旧"，而是"缺少 Promise.withResolvers（需 119+）"。
+     *
+     * ## 实测背景（HONOR X10 Max / WebView 114）
+     *
+     * ```
+     * [typeof Promise.withResolvers, typeof AbortSignal.any] → "undefined | undefined"
+     * ```
+     * 后果不是"白屏"，而是**界面正常打开但功能全废**：首屏脚本抛异常 → 客户端模块图
+     * 建不完 → `/plugins/??…` 拉不下来 → 所有 `/api/…` 请求 404 → 列表永远「正在加载」。
+     * 这比白屏更难诊断，用户会以为只是慢。
+     */
+    private const val API_PROBE_JS = """
+        (function () {
+          var missing = [];
+          if (typeof Promise.withResolvers !== 'function') missing.push('Promise.withResolvers (needs 119+)');
+          if (typeof AbortSignal.any !== 'function') missing.push('AbortSignal.any (needs 116+)');
+          return missing.join('\u0001');
+        })()
+    """
+
+    /**
+     * 解析 [API_PROBE_JS] 的 `evaluateJavascript` 回包。
+     *
+     * `evaluateJavascript` 回的是**JSON 字面量**：字符串结果会被包成 `"a\u0001b"`，
+     * 空结果可能是 `null` 或 `""`。
+     *
+     * 抽成纯函数是为了能测 —— 这段解析一旦写错，门禁文案会显示成
+     * `"Promise.withResolvers (needs 119+)"`（带引号）或者整串当成一项，
+     * 用户看到的是一句带转角引号的怪话。
+     *
+     * @param raw `evaluateJavascript` 的原样回调值
+     * @return 缺失项列表；解析不出或"都支持"时返回空列表
+     */
+    internal fun parseProbeResult(raw: String?): List<String> {
+        if (raw == null) return emptyList()
+        var text = raw.trim()
+        if (text.isEmpty() || text == "null") return emptyList()
+        // JSON 字符串字面量：去掉首尾引号，并把 \u0001 还原成分隔符
+        if (text.length >= 2 && text.first() == '"' && text.last() == '"') {
+            text = text.substring(1, text.length - 1)
+        }
+        text = text.replace("\\u0001", "\u0001")
+        if (text.isBlank()) return emptyList()
+        return text.split('\u0001').map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /**
+     * 在 `webView` 里异步探测缺失的 API。
+     *
+     * @param onResult 回调在主线程；参数是缺失项的人类可读名（可能为空列表 = 都支持）。
+     *                 探测失败（WebView 已销毁等）也回调空列表 —— 门禁不能因为
+     *                 诊断失败而卡住用户。
+     */
+    fun probeMissingApis(
+        webView: android.webkit.WebView,
+        onResult: (List<String>) -> Unit,
+    ) {
+        val delivered = java.util.concurrent.atomic.AtomicBoolean(false)
+        DshLogBus.append("[webview-compat] probe: start")
+        val finish = { list: List<String> ->
+            if (delivered.compareAndSet(false, true)) {
+                webView.post { onResult(list) }
+            }
+        }
+        runCatching {
+            // ★ 探测需要一个**已加载的文档**。门禁发生在 loadUrl 之前，此时 WebView 里
+            //   可能是 about:blank 或根本没有文档，evaluateJavascript 会静默不回调。
+            //   先 loadData 一个最小文档，等 onPageFinished 再探测。
+            //
+            // ★★ 探测**必须**把宿主原来的 WebViewClient 还原回去 —— 否则探测完 loadUrl
+            //    真实页面时，宿主那一整套 onPageFinished/onReceivedError/401 处理全都没了，
+            //    页面会加载成功但界面永远停在"加载中"（这是个自伤型的诊断 bug，比不诊断更糟）。
+            val originalClient = webView.webViewClient
+            // 用 var 捕获：finish 可能在 onPageFinished 里、也可能在 1.5 秒兜底里触发，
+            // 两处都要还原一次（还原是幂等的，重复赋值无害）。
+            var restored = false
+            fun restoreClient() {
+                if (restored) return
+                restored = true
+                runCatching { webView.webViewClient = originalClient }
+            }
+            val probeClient = object : android.webkit.WebViewClient() {
+                override fun onPageFinished(view: android.webkit.WebView?, u: String?) {
+                    runCatching {
+                        view?.evaluateJavascript(API_PROBE_JS) { raw ->
+                            restoreClient()
+                            finish(parseProbeResult(raw))
+                        }
+                    }.onFailure { restoreClient(); finish(emptyList()) }
+                }
+            }
+            webView.webViewClient = probeClient
+            webView.loadData(
+                "<!doctype html><meta charset=utf-8><title>probe</title>",
+                "text/html", "utf-8"
+            )
+            // 兜底：老 WebView 上 loadData/onPageFinished 都可能异常，1.5 秒后当作"探测不可用"。
+            webView.postDelayed({
+                if (!delivered.get()) {
+                    DshLogBus.append("[webview-compat] probe timed out (no onPageFinished within 1.5s); falling back to version-only copy")
+                }
+                restoreClient(); finish(emptyList())
+            }, 1500)
+        }.onFailure { finish(emptyList()) }
+    }
+    /**
      * BL-213：门禁框（四支全挂）按钮的左右内边距，dp。
      *
      * `FCLButton` 默认 16dp/侧，四支均分时 320dp/4=80dp 的槽里只剩 48dp 给文字 —— 连
@@ -212,6 +328,7 @@ object DshWebViewCompat {
         onDismissWithoutChoice: (() -> Unit)? = null,
         onDialogWillShow: (() -> Unit)? = null,
         onLater: (() -> Unit)? = null,
+        probeHost: android.webkit.WebView? = null,
     ) {
         val versionName = runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
         // BL-206：空白串与 null 同等看待 —— 否则文案会变成「读到 ""」（引号里什么都没有），
@@ -250,10 +367,40 @@ object DshWebViewCompat {
             DshLogBus.append("[webview-compat] WebView $versionName below $MIN_WEBVIEW_MAJOR, asking user")
             activity.getString(R.string.dsh_webview_compat_message, MIN_WEBVIEW_MAJOR)
         }
+        // R30/BL-223：版本低于阈值时，先**在真实 WebView 里探测**缺哪些 API，
+        // 再决定文案。探测有结果就用"点名具体缺什么"的版本（`_message_missing`），
+        // 探测不出/超时就退回原来的泛化文案 —— 门禁不能因为诊断失败而卡住用户。
+        //
+        // ★ 为什么值得多这一次异步：实测（HONOR X10 Max / WebView 114）发现，
+        //   "版本太旧"在这台设备上的真实表现**不是白屏**，而是界面正常打开、
+        //   所有后端操作静默失败（选工作区永远"正在加载"、发不出消息）。
+        //   旧文案说的"可能白屏或没有响应"会让用户以为"还能凑合用"，
+        //   而实际上点「仍要继续」进来之后什么都干不了。
+        if (major != null && probeHost != null) {
+            probeMissingApis(probeHost) { missing ->
+                val text = if (missing.isEmpty()) {
+                    activity.getString(R.string.dsh_webview_compat_message, MIN_WEBVIEW_MAJOR)
+                } else {
+                    DshLogBus.append(
+                        "[webview-compat] probe: missing APIs = ${missing.joinToString("; ")}"
+                    )
+                    activity.getString(
+                        R.string.dsh_webview_compat_message_missing,
+                        missing.joinToString(", ")
+                    )
+                }
+                showGateDialog(
+                    activity, activity.getString(titleRes), text,
+                    onContinue, onExternal, onCopyLink,
+                    onDismissWithoutChoice, onDialogWillShow, onLater,
+                )
+            }
+            return
+        }
         showGateDialog(
             activity,
             activity.getString(titleRes),
-            message,
+            message!!,
             onContinue,
             onExternal,
             onCopyLink,
