@@ -420,6 +420,8 @@
     <!-- BL-182：门禁框第三出路。按钮行 320dp 四支均分，每槽 80dp、文字区 ≈72dp -->
     <string name="dsh_webview_compat_copy">复制链接</string>
     <string name="dsh_webview_compat_copied">链接已复制</string>
+    <!-- R30/BL-225：外跳同时复制链接（兜底），详见英文文件的注释 -->
+    <string name="dsh_webview_open_external_copied">链接已同时复制。浏览器若提示需要认证，粘贴到地址栏即可。</string>
     <string name="dsh_webview_compat_copy_unavailable">当前实例还拿不到带凭据的访问链接，请先启动实例。</string>
     <!-- fix10 / BL-207：复制失败专用文案（此前复用 open_link_failed「已自动复制链接」，而失败时剪贴板里可能是旧凭据，直接误导） -->
     <string name="dsh_copy_url_failed">复制失败，请重试。</string>

@@ -443,6 +443,10 @@ Version %1$s</string>
     <!-- BL-182：门禁框第三出路。文案必须短：按钮行 320dp 四支均分，每槽 80dp、文字区 ≈72dp -->
     <string name="dsh_webview_compat_copy">Copy link</string>
     <string name="dsh_webview_compat_copied">Link copied</string>
+    <!-- R30/BL-225：外跳时同时把链接放进剪贴板（兜底）。真机实测发现外跳后浏览器
+         拿到的是裸 URL（丢 token），用户会看到 "authentication required"。
+         这句告诉用户：如果浏览器里没进去，粘贴一下就能进。 -->
+    <string name="dsh_webview_open_external_copied">Link also copied. If the browser asks for authentication, paste it into the address bar.</string>
     <string name="dsh_webview_compat_copy_unavailable">No access link with credentials is available for the current instance. Start the instance first.</string>
     <!-- fix10 / BL-207：复制失败专用文案（此前复用 open_link_failed「已自动复制链接」，而失败时剪贴板里可能是旧凭据，直接误导） -->
     <string name="dsh_copy_url_failed">Copy failed. Please try again.</string>
