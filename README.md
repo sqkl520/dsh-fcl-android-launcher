@@ -7,8 +7,11 @@
 
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-513%20passing-brightgreen?style=flat-square)
+![No Root](https://img.shields.io/badge/root-not%20required-success?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-530%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
+
+**不需要 root** · **不需要电脑** · **不花一分钱** —— 装个 APK 就能在手机上跑 dsh
 
 **[⬇️ 下载最新版](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)** ·
 [文档总览](docs/README.md) ·
@@ -81,6 +84,20 @@ Android App (本仓库)
 ```
 
 界面沿用 FCL 的视觉风格与 GUI 框架（`fcllibrary` + `ThemeEngine`）。
+
+### 技术栈
+
+| 层 | 用了什么 |
+|---|---|
+| App | Kotlin（68 个源文件）+ Java（410 个，FCL 底座），Android SDK 34 |
+| Linux 环境 | **proot**（`libproot.so` + `libproot-loader.so`），无需 root |
+| 发行版 | **Debian 12 bookworm arm64**（瘦身后约 148 MB，内置 Node 22） |
+| 运行时 | **Node.js 22** + npm，用来装 dsh 及其依赖 |
+| 界面 | Android **WebView** 加载 `http://127.0.0.1:<port>/` |
+| 测试 | 自制 MiniRunner（530 条单测）+ 运行时脚本自检（28 条） |
+
+技术选型细节见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)，
+无 root 的原理见上方「W^X 绕过」。
 
 <details>
 <summary><b>关键设计：W^X 绕过（PROOT_LOADER）—— 为什么不用降 targetSdk</b></summary>
