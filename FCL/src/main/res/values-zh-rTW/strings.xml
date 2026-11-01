@@ -399,6 +399,8 @@
     <!-- BL-182：門禁框第三出路。按鈕列 320dp 四支均分，每槽 80dp、文字區 ≈72dp -->
     <string name="dsh_webview_compat_copy">複製連結</string>
     <string name="dsh_webview_compat_copied">連結已複製</string>
+    <!-- R30/BL-225：外跳同時複製連結（兜底），詳見英文檔案的註解 -->
+    <string name="dsh_webview_open_external_copied">連結已同時複製。瀏覽器若提示需要認證，貼到網址列即可。</string>
     <string name="dsh_webview_compat_copy_unavailable">目前實例還拿不到帶憑據的存取連結，請先啟動實例。</string>
     <!-- fix10 / BL-207：複製失敗專用文案（此前複用 open_link_failed「已自動複製連結」，而失敗時剪貼簿裡可能是舊憑據，直接誤導） -->
     <string name="dsh_copy_url_failed">複製失敗，請重試。</string>

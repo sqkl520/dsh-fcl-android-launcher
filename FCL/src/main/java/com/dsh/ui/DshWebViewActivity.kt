@@ -1355,6 +1355,30 @@ class DshWebViewActivity : FCLActivity() {
                     "(adopt fallback / bare url); url=$url"
             )
         }
+        // ★ R30/BL-225：外跳**同时**把链接放进剪贴板，作为兜底。
+        //
+        // ## 为什么必须兜底（真机实测）
+        //
+        // HONOR X10 Max / Android 10 / Edge 155：
+        // - App 日志写的是 `auth=yes`（`UrlScanner.tokenOf(url) != null`，URL 确实带 token）
+        // - 但 Edge 里用 CDP 量到的是 `http://127.0.0.1:38501/` —— **没有 query**
+        // - 结果页显示 `dsh web authentication required`
+        //
+        // 根因尚未定死（见 BUGLEDGER BL-225）。但"用户进不去"这件事不能等根因：
+        // 外跳成功与否都复制一份，用户粘贴一下就能进。这比让用户在两个 App 之间干瞪眼好。
+        //
+        // 顺序有意为之：**先复制再 startActivity**。App 可能在 startActivity 之后立刻
+        // finish()，此时再去碰剪贴板有概率被系统拒（进程正在退）。
+        var clipboardOk = false
+        runCatching {
+            val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("dsh", url))
+            clipboardOk = true
+        }.onFailure {
+            logWeb("[web] external open: clipboard fallback failed: ${it.message}")
+        }
+
         val ok = runCatching {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }.isSuccess
@@ -1364,10 +1388,19 @@ class DshWebViewActivity : FCLActivity() {
             // `token=` 前缀，但不把凭据交给日志是最稳的口径）。"交给哪个 App"当前记不了 ——
             // manifest 无 <queries> + targetSdk=34 ⇒ resolveActivity 恒 null（E1-C-13），
             // 这条限制写在日志里，免得后来人以为漏了。
+            //
+            // R30/BL-225：补记**实际交给 Intent 的完整 URL 的长度与 query 有无** ——
+            // 只记结构不记值，但足以区分"我们传的本来就是裸 URL"和"传的是带 token 的"。
+            val q = Uri.parse(url).query
             logWeb(
                 "[web] external open dispatched: ${urlSkeleton(url)} " +
+                    "(urlLen=${url.length} queryLen=${q?.length ?: 0} clipboard=$clipboardOk) " +
                     "(target app not resolvable: no <queries> in manifest)"
             )
+            if (clipboardOk) {
+                Toast.makeText(this, R.string.dsh_webview_open_external_copied, Toast.LENGTH_LONG)
+                    .show()
+            }
             // ★ R14-V2B 新问题-1：成功路径**不再**抢前台。原实现三步（ACTION_VIEW →
             //   intentForShell → finish）同帧连发，最后一个 startActivity（外壳 REORDER）
             //   通常赢得前台 —— 浏览器被我们自己的壳盖住，用户看不到"跳出去了"。
