@@ -408,6 +408,8 @@
     <string name="dsh_copy_url_failed">複製失敗，請重試。</string>
     <!-- fix10 / BL-197：保底出口面板（門禁框、狀態面板、已載入頁面三樣都沒有時不許留白屏） -->
     <string name="dsh_webview_no_exit">目前無法顯示頁面。請點「重試」、查看日誌，或返回。</string>
+    <!-- R33：loadUrlChecked 的縱深防禦門 —— 只允許回環 http(s) URL 進 WebView -->
+    <string name="dsh_webview_url_blocked">這個網址被擋下了：此頁面只允許開啟本機的 dsh 網址。請點「重試」或查看日誌。</string>
     <!-- fix10 / BL-199：點「稍後」後的停留態（不開啟介面，但給一個明確的下一步） -->
     <string name="dsh_webview_gate_deferred">暫未開啟 dsh 介面。想開啟時點「重試」。</string>
     <!-- BL-206：複製成功後的停留態 —— 與「稍後」面板（dsh_webview_gate_deferred）刻意分開。

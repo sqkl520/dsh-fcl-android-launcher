@@ -429,6 +429,8 @@
     <string name="dsh_copy_url_failed">复制失败，请重试。</string>
     <!-- fix10 / BL-197：兜底出口面板（门禁框、状态面板、已加载页面三样都没有时不许留白屏） -->
     <string name="dsh_webview_no_exit">当前无法显示页面。请点「重试」、查看日志，或返回。</string>
+    <!-- R33：loadUrlChecked 的纵深防御门 —— 只允许回环 http(s) URL 进 WebView -->
+    <string name="dsh_webview_url_blocked">这个地址被拦下了：此页面只允许打开本机的 dsh 地址。请点「重试」或查看日志。</string>
     <!-- fix10 / BL-199：点「稍后」后的停留态（不打开界面，但给一个明确的下一步） -->
     <string name="dsh_webview_gate_deferred">暂未打开 dsh 界面。想打开时点「重试」。</string>
     <!-- BL-206：复制成功后的停留态 —— 与「稍后」面板（dsh_webview_gate_deferred）刻意分开。

@@ -937,6 +937,24 @@ class DshWebViewActivity : FCLActivity() {
     private fun loadUrlChecked(url: String) {
         // BL-056：WebView 已判死（崩溃重建失败）时不再对旧对象 loadUrl。
         if (webViewDead) return
+        // ★ R33（N3 的纵深防御第二道）：只允许回环 http(s) URL 进 WebView。
+        //
+        // 上游 `DshRuntime.onProcessLine` 已经有一道同判据的门（`webUiUrlAllowed`），
+        // 这里是**第二道**，理由是这条路径的入口不止一处：`:529`（401 重试）、`:876` /
+        // `:886`（render 的两个分支）、`:924`（loadBestUrl）。四处都读 `state.url`，
+        // 上游门守住之后它们是安全的 —— 但只要将来有人加第五个入口写脏 `loadedUrl`，
+        // 上游那道就覆盖不到。放在这里等于把"能不能进 WebView"收敛成一个单点判据。
+        //
+        // 位置必须在 `compatOk` 直通**之前**：那条 `webView.loadUrl(url)` 是门禁系统的
+        // 放行通道，放在它后面等于没加。
+        //
+        // 判据与上游共用同一个 `webUiUrlAllowed`（scheme 白名单 + 回环 host），
+        // 不重抄一份清单 —— 抄第二份就是下一次口径漂移的种子。
+        if (!com.dsh.core.webUiUrlAllowed(url)) {
+            loadedUrl = null
+            showError(getString(R.string.dsh_webview_url_blocked))
+            return
+        }
         // BL-221：用户已拿走链接（[gateCopied]）、正要去/刚从浏览器回来 —— 本页不再替他做
         // 加载决定。挡在 compatOk 直通之前：否则一次 onStart 状态回放就会拿旧内核把 dsh 加载
         // 起来（那正是用户拿走链接要避开的场面）。想在本页打开 = 点「重试」，

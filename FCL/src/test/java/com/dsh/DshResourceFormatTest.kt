@@ -330,4 +330,26 @@ class DshResourceFormatTest {
             return null
         }
     }
+
+    /**
+     * ★ R33：`loadUrlChecked` 纵深防御门用到的新文案，三语必须齐全。
+     *
+     * 为什么单独钉：它是**安全门被触发时**用户唯一能看到的东西。
+     * 缺一条的表现不是崩溃，而是"简体用户看到一个英文错误" —— 比没有文案更糟，
+     * 用户不知道发生了什么，只会觉得"点了重试还是打不开"。
+     *
+     * 这条不带占位符，所以不受 [callSites] 那张表覆盖。
+     */
+    @Test
+    fun urlBlockedCopyExistsInAllThreeLocales() {
+        val key = "dsh_webview_url_blocked"
+        THREE_LOCALES.forEach { rel ->
+            val file = resolve(rel)
+                ?: throw AssertionError("找不到 $rel（三语校验必须真的读到三份文件，不能跳过）")
+            val strings = parseStrings(file)
+            val body = strings[key]
+                ?: throw AssertionError("@string/$key 在 $rel 中缺失（三语文案必须齐全）")
+            assertTrue("@string/$key 在 $rel 中是空的", body.isNotBlank())
+        }
+    }
 }
