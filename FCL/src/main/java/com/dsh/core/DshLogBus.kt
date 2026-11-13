@@ -316,6 +316,15 @@ object DshLogBus {
     private val registeredSecrets = CopyOnWriteArraySet<String>()
 
     /**
+     * ★ R33：可被注册为 secret 的最短长度。
+     *
+     * 低于此长度的串不做 `replace` 脱敏 —— 否则单字符 secret 会把整份日志打成马赛克
+     * （详见 [registerSecret] 的 KDoc）。dsh 真实 token 是 43 字符 base64url，
+     * 8 这个阈值离它很远，不会漏掉任何真 token。
+     */
+    private const val MIN_SECRET_LENGTH = 8
+
+    /**
      * BL-075 / test-only seam: global file path as [attachFile] bound it (null when unbound).
      * Production code uses [logFile] directly; exposed so the failure-path test can restore the
      * singleton exactly (see [detachFileForTest]).
@@ -455,6 +464,22 @@ object DshLogBus {
     }
 
     /**
+     * ★ R33：清空已注册的 secret（测试 seam）。
+     *
+     * 为什么需要它：[registeredSecrets] 是进程级 `CopyOnWriteArraySet`，[clear] 只清
+     * buffer/levels、**不清它** —— 而它又会无差别参与 [sanitize] 的 `replace`。
+     * 于是"某次注册了错误的/被伪造的 token"这件事在整个进程生命周期内无法撤销，
+     * 且会跨测试用例互相污染（前一个用例注册的串让后一个用例的断言莫名其妙地红）。
+     *
+     * 名字带 `ForTest` 是刻意的：生产代码不该在运行期调用它 —— 撤销脱敏等于把已经
+     * 决定要隐藏的串重新暴露出来，那是安全上的倒退。测试用完即弃，没有这个顾虑。
+     */
+    @JvmStatic
+    fun clearForTestOfRegisteredSecrets() {
+        registeredSecrets.clear()
+    }
+
+    /**
      * 只清某实例的缓冲，全局那份不动。
      * 实例不存在时**什么都不做，也不创建** —— "清空一个没人写过的日志"没有意义，
      * 顺手创建反而会让调用方以为这个实例有日志。
@@ -545,9 +570,28 @@ object DshLogBus {
         return out
     }
 
-    /** 注册一个需要脱敏的密钥（启动 token / API key） */
+    /**
+     * 注册一个需要脱敏的密钥（启动 token / API key）。
+     *
+     * ★ R33：**必须挡掉过短的串**。
+     *
+     * [sanitize] 对每个已注册串做无差别 `out.replace(t, "***")` —— 注册一个单字符
+     * （例如 `a`）之后，此后该进程里**任何**含 `a` 的行都会被打码：日志彻底失去可读性。
+     *
+     * 这条路径是真实可达的：`onProcessLine` 从**任意一行输出**里取 `?token=` 的值并直接调本函数。
+     * rootfs 内可写的 `/tmp` 里追加一行 `dsh web: https://evil.example:443/?token=a`，
+     * 就能让此后整个进程的日志被打成马赛克 —— 一个"让排障失效"的开关。
+     * 而 [registeredSecrets] 是进程级的，`clear()` 不清它，所以**一次污染永久生效**。
+     *
+     * 阈值取 [MIN_SECRET_LENGTH]：dsh 的真实 token 是 base64url 的 43 字符
+     * （实测 `et5w4-xSCJpP95w98yyXZOJOxkn-EOz1JAyS8T6eKqU`），
+     * 取 8 既能挡住单字符/双字符的误伤，又给"短 token 的平台"留足余量。
+     *
+     * 注意这**不影响** `token=` 那条正则通路（[sanitize] 第一行）——
+     * URL 里的 token 是结构化的，无论长短一律打码，不依赖本阈值。
+     */
     fun registerSecret(secret: String) {
-        if (secret.isEmpty()) return
+        if (secret.length < MIN_SECRET_LENGTH) return
         registeredSecrets += secret
         // 同时注册给 FCL 的 logger，避免经由 FCL 自身日志路径泄漏
         runCatching { com.tungsten.fclcore.util.Logging.registerAccessToken(secret) }
