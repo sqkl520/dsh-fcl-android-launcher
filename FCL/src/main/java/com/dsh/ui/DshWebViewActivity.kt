@@ -310,6 +310,14 @@ class DshWebViewActivity : FCLActivity() {
         setupWebView()
 
         findViewById<View>(R.id.btn_retry).setOnClickListener { onRetryClicked() }
+        // R31/BL-229：从「链接已复制」面板一键去浏览器。
+        // 复用 openExternalFresh 而不是裸 ACTION_VIEW —— 那里有归属校验（BL-187，
+        // 防止把别的实例的 token 发出去）和统一日志；它内部还会再复制一次（幂等）。
+        // snapshotUrl 传空：此刻 loadedUrl 已复位（DeferredPanel 分支），
+        // 真正该用的是 DshRuntime 里那个 fresh URL，由 openExternalFresh 自己取。
+        findViewById<View>(R.id.btn_browser).setOnClickListener {
+            openExternalFresh("", DshRuntime.runningInstanceId())
+        }
         findViewById<View>(R.id.btn_logs).setOnClickListener {
             // BL-025：默认行为**不离开本页** —— 打开同页全屏日志覆盖层
             // （FCL 的 LogWindow 做法：只切显隐，不出 Activity、不碰返回栈）。
@@ -935,7 +943,7 @@ class DshWebViewActivity : FCLActivity() {
         // onRetryClicked 会先清这个标记再走完整门禁。
         if (gateCopied) {
             loadedUrl = null
-            showError(getString(R.string.dsh_webview_gate_copied))
+            showCopiedPanel()
             ensureVisibleExit(gateShown = false)
             return
         }
@@ -1203,7 +1211,7 @@ class DshWebViewActivity : FCLActivity() {
                 // 见 [gateCopied] 的字段注释。
                 gateCopied = true
                 // showError 是**同步**摆面板：本分支不排 post、不留"屏上什么都没有"的中间帧。
-                showError(getString(R.string.dsh_webview_gate_copied))
+                showCopiedPanel()
                 logWeb("[web] copy link: deferring to panel (no gate re-show), gateCopied=true")
                 // 纯防御（幂等、无副作用）：与其它分支同一纪律 —— 本页任何路径都不许以空白收场。
                 ensureVisibleExit(gateShown = false)
@@ -1682,7 +1690,34 @@ class DshWebViewActivity : FCLActivity() {
         findViewById<View>(R.id.btn_retry).visibility = View.VISIBLE
         findViewById<View>(R.id.btn_logs).visibility = View.VISIBLE
         findViewById<View>(R.id.btn_stop).visibility = View.VISIBLE
+        // R31/BL-229：「去浏览器」只在"链接已复制"面板出现，其它错误态一律藏起来 ——
+        // 一条与当前状态无关的按钮比没有按钮更让人困惑。
+        findViewById<View>(R.id.btn_browser).visibility = View.GONE
         logWeb("[web] $message")
+    }
+
+    /**
+     * R31/BL-229：**「链接已复制」专用面板** —— 比 [showError] 多一支「去浏览器」。
+     *
+     * ## 为什么需要单独一个函数
+     *
+     * 门禁文案首推「复制链接」，用户照做之后原本只落到 `showError` 的三按钮面板
+     * （重试 / 日志 / 停止）——**没有任何指向浏览器的出口**。用户复制成功了，
+     * 但下一步"去哪"完全靠猜：得自己退到桌面、找到浏览器、长按地址栏粘贴。
+     *
+     * 而本机（WebView 114）**每次**打开界面都要走这一遍，这是最高频的一次交互。
+     *
+     * 这一支把"复制成功 → 打开浏览器"补成一条完整路径：
+     * 点它 → `openExternalFresh` → 先复制（幂等，反正刚复制过）→ `ACTION_VIEW`。
+     *
+     * 之所以复用 [openExternalFresh] 而不是直接 `ACTION_VIEW`：
+     * 它会做归属校验（BL-187，防止把别人的 token 发出去）并统一打日志。
+     */
+    private fun showCopiedPanel() {
+        // ★ 这里必须调 showError（父面板），不能调自己 —— 否则无限递归。
+        //   sed 全局替换时把本行也一起换掉了，编译能过但一调用就 StackOverflow。
+        showError(getString(R.string.dsh_webview_gate_copied))
+        findViewById<View>(R.id.btn_browser).visibility = View.VISIBLE
     }
 
     /**

@@ -109,6 +109,12 @@ class DshInstanceSettingAdapter(
         /**
          * 按钮行：右侧一个动作按钮（[dangerous] 用于删除这类破坏性操作）。
          *
+         * [dangerous]（r31-224 / C-06-02）：**真的会被读**——为真时动作按钮的文字用
+         * `@color/dsh_log_error`（与卡片/任务区失败行同一个语义色），为假时用主题的 autoTint。
+         * 判据收在顶层函数 [actionTextColorFor] 里，单测直接钉它。
+         * 本参数从加入起到 r31-224 之前**零读取点**（KDoc 承诺了区别对待，实现没做），
+         * 所以唯一的删除行构造点当时也没传；现在两处都补上了。
+         *
          * [enabled]（A7 / R24）：动作按钮此刻能不能点。停止中的实例要把启停行画成
          * 「正在停止…」且不可点 —— 只改文案不改可点性，就是又一处"写着停止、点下去没反应"。
          * **必须带默认值 `true`**：本文件之外还有多处构造点（runRows 的四行、configRows 的两行），
@@ -218,6 +224,24 @@ class DshInstanceSettingAdapter(
                 //   两个方向都显式赋值：行是复用的，不写回 1f 会让下一行继承上一行的灰。
                 b.action.isEnabled = row.enabled
                 b.action.alpha = if (row.enabled) ACTION_ALPHA_ENABLED else ACTION_ALPHA_DISABLED
+                // ★ r31-224 / C-06-02：`dangerous` 此前是**零读取点**的公开参数 —— KDoc 承诺
+                //   "删除这类破坏性操作"会被区别对待，实际传 true 界面一个字都不会变。
+                //   现在它决定动作按钮的文字色（与卡片/任务区失败行同一个 R.color.dsh_log_error）。
+                //
+                //   为什么在**绑定时**直接设色、而不是挂主题回调：FCLButton 构造时已把自己的
+                //   refreshTheme 注册在**这个 View** 上（ripple 按钮会 applyTextColor(autoTint)），
+                //   我们再 registerEvent(b.action) 会顶掉它；而挂在行根上的回调与它谁先跑取决于
+                //   WeakHashMap 的迭代顺序 —— 那样换肤后红色是否还在是**不确定**的。
+                //   所以换肤走"页面重绑"这条确定性路径（见 DshInstanceSettingPage.themeInvalidate）：
+                //   RecyclerView 的重绑发生在本次刷新循环**之后**，本行颜色必然最后写入。
+                //   普通行也必须显式写回：行是复用的，不写就会继承上一颗红按钮的颜色。
+                b.action.setTextColor(
+                    actionTextColorFor(
+                        dangerous = row.dangerous,
+                        dangerColor = b.action.context.getColor(R.color.dsh_log_error),
+                        normalColor = ThemeEngine.getInstance().getTheme().autoTint
+                    )
+                )
                 b.action.setOnClickListener { onAction(row) }
                 applyRowBackground(holder.itemView, position)
             }
@@ -264,3 +288,17 @@ class DshInstanceSettingAdapter(
         super.onViewRecycled(holder)
     }
 }
+
+/**
+ * 按钮行的文字色（r31-224 / `C-06-02`）：`dangerous` 决定用语义色还是普通色。
+ *
+ * 抽成顶层纯函数的意义在于**让 `dangerous` 的读取点可被单测钉住**：这条缺陷的形态是
+ * "公开参数零读取点"，任何只断言"参数存在/声明了 KDoc"的测试都抓不到它。把判据收成一个
+ * 可直接调用的函数后，测试可以用两个不同的入参拿到两个不同的返回值 —— 删掉这处读取
+ * （或把分支写成恒选一支）必然变红。
+ *
+ * 两个颜色都由调用方注入（`dangerColor` 来自 `R.color.dsh_log_error`，`normalColor` 来自
+ * 主题的 autoTint）：本函数不碰 Android 资源/主题，JVM 单测可直接调。
+ */
+fun actionTextColorFor(dangerous: Boolean, dangerColor: Int, normalColor: Int): Int =
+    if (dangerous) dangerColor else normalColor

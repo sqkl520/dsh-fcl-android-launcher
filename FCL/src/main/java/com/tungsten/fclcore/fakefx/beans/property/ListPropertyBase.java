@@ -84,6 +84,7 @@ public abstract class ListPropertyBase<E> extends ListProperty<E> {
             return "size";
         }
 
+        @Override
         protected void fireValueChangedEvent() {
             super.fireValueChangedEvent();
         }
@@ -114,6 +115,7 @@ public abstract class ListPropertyBase<E> extends ListProperty<E> {
             return "empty";
         }
 
+        @Override
         protected void fireValueChangedEvent() {
             super.fireValueChangedEvent();
         }

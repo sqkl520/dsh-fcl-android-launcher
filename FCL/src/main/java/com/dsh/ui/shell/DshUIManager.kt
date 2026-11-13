@@ -56,8 +56,15 @@ class DshUIManager(
         pager.offscreenPageLimit = ViewPager2.OFFSCREEN_PAGE_LIMIT_DEFAULT
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
-                pageSelectedListener?.invoke(position)
+                // ★ 顺序不能反（bl：slice-07-logic-f1）：标题源 pageTitle() 只能从**已创建**的页面取
+                //   （titleOf 走只读 uiAt，registry 空即回落到 tab 标题）。而本方法之前调
+                //   playEnterTransition —— 它内部的 getUI(position) 才是创建页面的那一处。
+                //   先 invoke 监听方 ⇒ 外壳取标题时页面还不存在 ⇒ 首次进入某 tab 只能显示 tab 标题，
+                //   该页一旦建好、再进同一 tab 却显示 pageTitle()，同一个 tab 两次进入标题不一致。
+                //   先建页（playEnterTransition → getUI）再通知，取标题与建页面就回到正确先后。
+                //   动画观感不变：playEnterTransition 仍是**同步、不 post**，两条语句在同一帧内执行。
                 playEnterTransition(position)
+                pageSelectedListener?.invoke(position)
             }
         })
     }
@@ -69,11 +76,21 @@ class DshUIManager(
      * 两个关键细节（照抄 FCL 的注释与做法）：
      * 1. **同步执行、不 post**：`onPageSelected` 时页面已挂载但尚未绘制，此时置透明不会出现
      *    "先显示再消失"的闪烁；
-     * 2. **只在位置真的变化时播放**：ViewPager2 在布局变化（软键盘弹出、页面内容刷新）后
+     * 2. **位置没变时通常不播**：ViewPager2 在布局变化（软键盘弹出、页面内容刷新）后
      *    会重新 dispatch 当前页，那种情况不播动画，否则页面会莫名闪一下。
+     *
+     * ★ R32/N1（verify-239）：第 2 条的早退**不能只看位置**。
+     *   [Adapter.onViewRecycled] 会把 `registry[bound]` 置 null（页面随视图回收销毁），
+     *   此时"离开再回到同一 tab"会满足 `position == lastSelectedPosition` 而直接早退，
+     *   [getUI] 根本不被调用 ⇒ 页面不重建 ⇒ 页面上只剩 tab 标题（`uiAt` 返回 null 时的回落）。
+     *   症状与 `slice-07-logic-f1` 相同但成因完全不同，**修顺序修不好**。
+     *   所以判据补一条：实例已被回收（`uiAt(position) == null`）时也必须往下走。
+     *   `getUI` 内的 `registry[position] ?: factories[position]()` 会重建，语义与 Adapter
+     *   bind 时走的是同一条路径，不会重复创建（`registry` 仍是唯一缓存）。
      */
     private fun playEnterTransition(position: Int) {
-        if (position == lastSelectedPosition) return
+        // 位置没变 **且** 页面实例仍活着 —— 才是"布局变化导致的重复 dispatch"，跳过。
+        if (position == lastSelectedPosition && uiAt(position) != null) return
         lastSelectedPosition = position
         val content = runCatching { getUI(position).contentView }.getOrNull() ?: return
         content.animate().cancel()

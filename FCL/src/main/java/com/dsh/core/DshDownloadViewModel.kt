@@ -88,6 +88,68 @@ fun reconcileInstalling(current: Set<String>, event: DshInstaller.Progress): Set
 }
 
 /**
+ * 找出"标记里已经过时"的版本（**纯函数**，JVM 直测）。r31-s02-conc-05 的自愈内核。
+ *
+ * ## 为什么需要它
+ *
+ * [DshInstaller.progress] 是 `MutableStateFlow<Progress?>` —— **单个字段、合帧语义**
+ * （只保留最新值，不是事件流），而安装器的单飞闸门是**按实例**的
+ * （`DshInstaller.kt:134-141` 的 `running` / `gate` 以 instanceId 为 key），两个不同版本
+ * 完全可以并行安装。于是：
+ *
+ * ```
+ * A 的 Done(vA) 写进 _progress → B 的下一条 Log/Stage 在同一/更晚时刻覆盖该字段
+ * → 收集器重读 .value 时 vA 的终态已不存在 → reconcileInstalling 永远收不到 Done(vA)
+ * → _installingVersions 永久保留 vA → 该行按钮永久"安装中"、直到 App 重启
+ * ```
+ *
+ * 收集器还**慢**（每收到一条就 `rebuild()`，而 rebuild 对每个版本做磁盘读），合帧概率不低。
+ * 所以只在事件上做状态迁移是不够的 —— 标记必须能从**权威事实**自愈。
+ *
+ * ## 权威事实（本函数的判据，逐条都来自 `DshInstances`，不来自事件流）
+ *
+ * 一个版本 v 的标记算"过时"必须同时满足：
+ * 1. **没有在途安装**指向 v（[inFlightVersions]：安装器 `isInstalling(id)` 为真的实例的
+ *    目标版本）—— 否则并行重装 v 会被误清；
+ * 2. 存在一个 `dshVersion == v` 的实例，其状态是 `READY` 或 `BROKEN` —— 这两个状态是安装**已经
+ *    落地**的终局结论（Done ⇒ READY，Failed ⇒ BROKEN），标记的使命已经完成却没有被清掉；
+ * 3. 没有任何 `dshVersion == v` 的实例仍处于 `INSTALLING`（`versionRowStates` 的 installing
+ *    来源之一，不能只靠标记集合）。
+ *
+ * 第 2 条为什么不能用 `NOT_INSTALLED`：那是"还没开始/被取消"的状态，标记可能正当。
+ *
+ * ## 已知的极小窗口（如实记录，不假装没有）
+ *
+ * [DshDownloadViewModel.installVersion] 先写标记、再调 `installer.install()`，而后者要到
+ * `gate.tryAcquire` 之后才写 `state=INSTALLING`。若这中间恰好有一条**别的实例**的进度事件到达，
+ * 而目标实例又恰好 READY/BROKEN 且同版本（只有"同版本重装"会这样），本条会把这个刚写上的标记
+ * 清掉。后果有界：`install()` 紧接着写的 `INSTALLING` 会在 `versionRowStates` 里重新给出
+ * "安装中"，界面不会出现"按钮可点 → 连点 → 并发 npm"的错态；窗口是几条语句的量级。
+ *
+ * @param current 当前的"安装中"标记集合
+ * @param instances 实例列表（权威状态来源）
+ * @param inFlightVersions 安装器在途任务的目标版本集合
+ * @return 应当从标记里移除的版本（`current` 的子集）
+ */
+fun staleInstallingMarkers(
+    current: Set<String>,
+    instances: List<DshInstance>,
+    inFlightVersions: Set<String>
+): Set<String> {
+    if (current.isEmpty()) return emptySet()
+    return current.filterTo(mutableSetOf()) { version ->
+        version !in inFlightVersions &&
+            instances.any {
+                it.dshVersion == version &&
+                    (it.state == DshInstance.State.READY || it.state == DshInstance.State.BROKEN)
+            } &&
+            instances.none {
+                it.dshVersion == version && it.state == DshInstance.State.INSTALLING
+            }
+    }
+}
+
+/**
  * 下载页的粘合层：拉 registry 版本列表 → 结合已安装版本 → 输出可渲染的列表项。
  *
  * ## 本次加固（对应审查发现的问题）
@@ -148,7 +210,14 @@ class DshDownloadViewModel(
                 .collect { p -> onProgress(p) }
         }
         // 实例列表变化（安装完成/删除）→ 重建角标
-        scope.launch { DshInstances.instances.collect { rebuild() } }
+        // ★ r31-s02-conc-05：顺带做一次标记自愈 —— 终态事件可能被合帧丢掉，而实例状态的变化
+        //   （INSTALLING → READY/BROKEN）是**必然发生**的另一路信号，用它兜住"标记永久残留"。
+        scope.launch {
+            DshInstances.instances.collect {
+                healInstallingMarkers()
+                rebuild()
+            }
+        }
     }
 
     /**
@@ -171,8 +240,42 @@ class DshDownloadViewModel(
         if (p != null) {
             _installingVersions.value = reconcileInstalling(_installingVersions.value, p)
         }
+        // ★ r31-s02-conc-05：事件迁移之后再做一次**权威事实自愈**。
+        //   `progress` 是 StateFlow（合帧），并行安装时 A 的终态会被 B 的日志行覆盖，
+        //   于是 reconcileInstalling 永远收不到 Done(vA)。这一步不看事件、只看
+        //   DshInstances 的状态 + 安装器在途表，所以终态被覆盖面多少次都能收敛。
+        healInstallingMarkers()
         // ★ rebuild() 仍在 when 之外（原行为）：Log 事件也会触发重建（性能问题，登记为遗留，不在本轮改）
         rebuild()
+    }
+
+    /**
+     * 按权威事实修正"安装中"标记（r31-s02-conc-05）。
+     *
+     * 两处调用：每条进度事件之后（[onProgress]），以及每次实例列表变化（安装完成/被取消/删除都会
+     * 改状态）—— 后者是**不使用本页**也必须成立的路径：用户可能从实例页发起安装，本页只是没被
+     * 销毁。判据见纯函数 [staleInstallingMarkers]。
+     *
+     * 只在集合真的变小时才写 `_installingVersions.value`：这是个公开 StateFlow，无变化也写会
+     * 让每条 Log 事件都白推一轮 UI 重组（StateFlow 的结构相等抑制能挡住相等的值，但构造新 Set
+     * 再比较本身就是白做）。
+     */
+    internal fun healInstallingMarkers() {
+        val current = _installingVersions.value
+        if (current.isEmpty()) return
+        // 在途目标版本：只看**确实还在跑**的实例。statusOf 在终态收尾时会被清掉（N7），
+        // 所以这里读到的是"此刻还在途"的那批，正是判据要的。
+        val inFlight = DshInstances.instances.value
+            .filter { installer.isInstalling(it.id) }
+            .mapNotNull { it.dshVersion ?: installer.statusOf(it.id)?.version }
+            .toSet()
+        val stale = staleInstallingMarkers(current, DshInstances.instances.value, inFlight)
+        if (stale.isEmpty()) return
+        _installingVersions.value = current - stale
+        DshLogBus.append(
+            "[download] cleared stale installing marker(s) ${stale.joinToString(", ")} " +
+                "(terminal progress was coalesced away; state/version is authoritative)"
+        )
     }
 
     /**

@@ -176,6 +176,15 @@ public abstract class ObservableListBase<E> extends AbstractList<E>  implements 
         return setAll(Arrays.asList(elements));
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * This base class leaves {@code setAll} unsupported: it is shared by read-only implementations
+     * (derived views such as {@code SortedList}/{@code FilteredList}, unmodifiable wrappers) where
+     * replacing the whole content is meaningless. Modifiable subclasses must override it -
+     * {@code ModifiableObservableListBase} already does. Hence the {@code UnsupportedOperationException}
+     * declared on {@link ObservableList#setAll(Collection)}.
+     */
     @Override
     public boolean setAll(Collection<? extends E> col) {
         throw new UnsupportedOperationException();

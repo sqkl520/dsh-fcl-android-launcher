@@ -11,8 +11,12 @@ import com.tungsten.fclcore.fakefx.collections.ObservableList;
 public abstract class IntegerBinding extends IntegerExpression implements
         NumberBinding {
 
-    private int value;
-    private boolean valid = false;
+    // R31/slice-14-concurrency-01: get() publishes the cached value through the "valid" flag
+    // (write value, then write valid=true). Neither field was volatile, so another thread could
+    // observe valid==true together with a stale value. Making both volatile turns that pair into
+    // a proper release/acquire pair without changing single-threaded behaviour.
+    private volatile int value;
+    private volatile boolean valid = false;
     private BindingHelperObserver observer;
     private ExpressionHelper<Number> helper = null;
 
@@ -55,7 +59,12 @@ public abstract class IntegerBinding extends IntegerExpression implements
                 observer = new BindingHelperObserver(this);
             }
             for (final Observable dep : dependencies) {
-                dep.addListener(observer);
+                // R31/s16-eh-04: a null element used to throw here after `observer` had been
+                // created and earlier dependencies already registered, leaving a half-bound binding
+                // that no unbind() can undo. MapBinding/ListBinding/SetBinding already guard this.
+                if (dep != null) {
+                    dep.addListener(observer);
+                }
             }
         }
     }
@@ -69,7 +78,11 @@ public abstract class IntegerBinding extends IntegerExpression implements
     protected final void unbind(Observable... dependencies) {
         if (observer != null) {
             for (final Observable dep : dependencies) {
-                dep.removeListener(observer);
+                // R31/s16-eh-05: same null guard as bind(); a null element used to throw before
+                // `observer = null`, so the observer stayed registered and could never be removed.
+                if (dep != null) {
+                    dep.removeListener(observer);
+                }
             }
             observer = null;
         }

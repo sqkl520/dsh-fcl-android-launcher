@@ -165,7 +165,7 @@ public abstract class FloatPropertyBase extends FloatProperty {
         }
 
 
-        if (!newObservable.equals(observable)) {
+        if (newObservable != observable) {
             unbind();
             observable = newObservable;
             if (listener == null) {

@@ -33,10 +33,13 @@ import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
 import com.tungsten.fcllibrary.component.theme.ThemeEngine
 import com.tungsten.fcllibrary.component.view.FCLTextView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 「实例」tab（外壳首页）。
@@ -344,6 +347,15 @@ private class InstanceListPage(
 
     /** 这一帧横幅是否显示（[observeState] 同时用它压掉空态文案） */
     private var manifestBannerShown = false
+
+    /**
+     * 「重试」等一次写盘异步结果的上限（r31-224 / C-06-01）。
+     *
+     * 写的是几 KB 的 `instances.json`：正常在毫秒级完成。**不能**用 `Long.MAX_VALUE`
+     * 之类的"无限等"：那会在写队列被一次大安装拖住时让 toast 永远不来，等于又回到
+     * "点了没有任何反馈"那个原始缺陷。3 秒足够区分"写成功"与"写不动"。
+     */
+    private val manifestRetryTimeoutMs = 3_000L
 
     /**
      * task_area 的 top 现在挂在哪：true = 挂在横幅下面（横幅显示中），false = 挂父容器顶。
@@ -663,18 +675,39 @@ private class InstanceListPage(
      * 真失败时 toast 把"重启 App"这条出路说出来 —— 否则用户会对着一成不变的横幅反复点。
      *
      * 成功路径不需要在这里改 UI：两个位都是 StateFlow，清位会推一帧，横幅自己消失。
+     *
+     * ★ r31-224 / C-06-01：**两条支路的"成败"来源必须分开**。
+     *   `retryManifestLoad()` 返回的确实是成败（同步读一次清单）。
+     *   而 `saveAsync()` 返回的按它自己的 KDoc 只是"**这次调用有没有被同步拒绝**"
+     *   （`true = 已排队`），真正的成败是**异步**写到 `manifestWriteFailed` 上的。
+     *   改前这里把两者当成同一件事，于是"写失败重试"支路上 `ok` 恒为 true ——
+     *   该支路的前提就是 `manifestLoadFailed == false`，而 `saveAsync()` 只在它为 true 时返回 false。
+     *   结果：写盘再一次失败时用户点「重试」**看不到任何新反馈**，横幅一动不动。
+     *   现在写失败支路改为**观察那一次的异步结果**（超时仍失败才提示），并且文案说的是"写"。
      */
     private fun onManifestRetry() {
-        val loadFailed = DshInstances.manifestLoadFailed.value
-        val ok = if (loadFailed) {
-            DshInstances.retryManifestLoad()
-        } else {
-            // 写失败：重新排队一次写盘。saveAsync 返回"是否被接受"（读失败时它仍会拒）。
-            DshInstances.saveAsync()
+        val plan = manifestRetryPlan(DshInstances.manifestLoadFailed.value)
+        if (plan == ManifestRetryPlan.RELOAD) {
+            if (!DshInstances.retryManifestLoad()) showManifestRetryFailure(plan)
+            return
         }
-        if (!ok) {
-            Toast.makeText(context, R.string.dsh_manifest_retry_failed, Toast.LENGTH_LONG).show()
+        // 写失败：重新排队一次写盘，然后**等这一次的异步结果**。
+        // saveAsync() 的 false 只有一个成因（按它的 KDoc）：清单读取失败 ⇒ 同步拒绝、连排队都没发生。
+        // 所以这条早期返回必须用**读**的说法 —— 用 plan（此刻还是 REWRITE）去取文案会说"写失败"，
+        // 而这一刻磁盘根本没被碰过。这一层正是本条缺陷的同族形态：语义不同的两个返回值不能共用一句话。
+        if (!DshInstances.saveAsync()) {
+            showManifestRetryFailure(ManifestRetryPlan.RELOAD)
+            return
         }
+        scope.launch {
+            if (!awaitManifestWriteResult(DshInstances.manifestWriteFailed, manifestRetryTimeoutMs)) {
+                showManifestRetryFailure(plan)
+            }
+        }
+    }
+
+    private fun showManifestRetryFailure(plan: ManifestRetryPlan) {
+        Toast.makeText(context, manifestRetryFailureText(plan), Toast.LENGTH_LONG).show()
     }
 
     private fun observeState() {
@@ -1149,3 +1182,58 @@ private fun DshTask.titleText(context: Context): String {
         base
     }
 }
+
+/**
+ * 等一次「写清单」的**异步**结果（r31-224 / C-06-01）。
+ *
+ * `DshInstances.saveAsync()` 的 Boolean 按它自己的 KDoc 只表示"这次调用有没有被同步拒绝"
+ * （`true = 已排队`），写盘的成败是异步写到 `manifestWriteFailed` 上的（写成功置 false、
+ * 失败置 true）。改前横幅的「重试」把这个 Boolean 当成"重试是否成功"，于是写失败支路上
+ * 提示永远不可达 —— 因为那条支路的前提是 `manifestLoadFailed == false`，而 `saveAsync()`
+ * 只在它为 true 时返回 false。
+ *
+ * @return `true` = 在 [timeoutMs] 内看到 `false`（写成功）；`false` = 一直没看到
+ *   （写仍失败，或压根没跑完）。**先取当前值**再订阅：协程真正开跑时那次写可能已经完成了，
+ *   只订阅后续发射会把"已经成功"误判成超时。
+ *
+ * 写成顶层**挂起**函数：不碰任何 View/Context，JVM 单测可用 `runBlocking` + 一条真正的
+ * `MutableStateFlow` 直接钉住它（先例：`joinTaskTitle` / `isRowBusy` 同为顶层函数）。
+ */
+suspend fun awaitManifestWriteResult(
+    writeFailed: StateFlow<Boolean>,
+    timeoutMs: Long
+): Boolean = withTimeoutOrNull(timeoutMs) {
+    writeFailed.first { !it }
+    true
+} ?: false
+
+/**
+ * 横幅「重试」的两条支路（r31-224 / `C-06-01`）。
+ *
+ * 分支判据就是**失败位本身**，与 [com.dsh.core.DshInstances.saveAsync] 的同步拒绝条件无关：
+ * 改前的写法是"先算一个 ok、再按 ok 决定提示"，于是两条语义不同的返回值（`retryManifestLoad`
+ * 的成败 / `saveAsync` 的"是否已排队"）被拼进同一个变量，其中一支的提示因此不可达。
+ * 现在先把**该走哪条路**（纯数据）定下来，再由 [manifestRetryFailureText] 决定那条路失败时说什么。
+ */
+enum class ManifestRetryPlan { RELOAD, REWRITE }
+
+fun manifestRetryPlan(loadFailed: Boolean): ManifestRetryPlan =
+    if (loadFailed) ManifestRetryPlan.RELOAD else ManifestRetryPlan.REWRITE
+
+/**
+ * 重试**失败**时该说哪句话（r31-224 / `C-06-01`）。
+ *
+ * 这是本条缺陷最直接的落点：改前两条支路共用 `dsh_manifest_retry_failed`（"仍然**读不到**，
+ * 请重启 App"），而写失败支路的前提恰恰是"清单读得动"—— 即使用户真的看到过那条 toast，
+ * 它说的也是一件假事。现在按支路分开：
+ * - `RELOAD` 失败 = 清单还是读不出来（`dsh_manifest_retry_failed` 的原文成立）；
+ * - `REWRITE` 失败 = 读得动、写不下去，用横幅自己那条写失败文案（`dsh_manifest_write_failed`），
+ *   与用户此刻看到的横幅是同一句话，不会出现"横幅说写不进、toast 说读不到"。
+ *
+ * 返回资源 id 而不是字符串：本函数不碰 Context，JVM 单测可直接调两个分支。
+ */
+fun manifestRetryFailureText(plan: ManifestRetryPlan): Int =
+    when (plan) {
+        ManifestRetryPlan.RELOAD -> R.string.dsh_manifest_retry_failed
+        ManifestRetryPlan.REWRITE -> R.string.dsh_manifest_write_failed
+    }

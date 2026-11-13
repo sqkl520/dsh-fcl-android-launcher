@@ -29,6 +29,40 @@ class ProotProcessExecutor(
     companion object {
         /** 看门狗超时后的约定退出码（调用方拿它翻译成\"安装超时\"等可读文案） */
         const val TIMEOUT_EXIT_CODE = -2
+
+        /**
+         * ★ round31 / slice-04 eh-01：安全投递一行给 `onLine` —— **回调抛异常不许穿出去**。
+         *
+         * [run] 的返回类型是 `Int`，而预检失败行与顶层 catch 过去裸调 `onLine`：回调一抛，异常就从
+         * `run()` 穿出（finally 只做登记表清理后继续上抛），`: Int` 契约当场作废。同函数内另外三处
+         * （读循环 / 收口诊断 / `onPidResolved`）都包了 `runCatching` —— "回调可能抛"是本文件已知前提。
+         *
+         * @return true = 回调抛了异常（调用方据此决定是否补诊断；预检/失败路径不补 —— 它们本来就在打诊断）
+         */
+        @JvmStatic
+        fun notifyLine(onLine: (String) -> Unit, line: String): Boolean =
+            runCatching { onLine(line) }.isFailure
+
+        /**
+         * ★ eh-01：顶层 catch 的诊断文案。`InterruptedException.message` 通常是 **null**，
+         * 旧写法会打出 `[proot] 执行失败: null`（看不出失败类别）—— message 缺失时回落成异常类名。
+         */
+        @JvmStatic
+        fun describeRunFailure(e: Exception): String =
+            "[proot] 执行失败: " + (e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.name)
+
+        /**
+         * ★ eh-01：`run()` 顶层 catch 的唯一出口 —— ①`InterruptedException` **恢复中断标志**
+         * （旧实现当普通异常吞掉，调用方的取消信号就此丢失）②安全投递诊断（回调再抛也不穿出）
+         * ③恒返回 `-1`（失败码口径**不变**：调用方只区分 0/非0 与 [TIMEOUT_EXIT_CODE]）。
+         */
+        @JvmStatic
+        fun reportRunFailure(e: Exception, onLine: (String) -> Unit): Int {
+            // 顺序：先恢复标志（即便后面回调抛异常也不能丢），再投递诊断（notifyLine 自身不抛）
+            if (e is InterruptedException) Thread.currentThread().interrupt()
+            notifyLine(onLine, describeRunFailure(e))
+            return -1
+        }
     }
 
     override fun run(
@@ -63,7 +97,8 @@ class ProotProcessExecutor(
     ): Int {
         val pre = ProotCommand.preflight(context, rootfsDir, script)
         if (!pre.ok) {
-            onLine("[proot] 预检失败: ${pre.reason}")
+            // ★ eh-01：过去裸调 onLine —— 回调一抛就从 run() 穿出，`: Int` 契约作废。
+            notifyLine(onLine, "[proot] 预检失败: ${pre.reason}")
             return -1
         }
         val spec = ProotCommand.build(
@@ -140,8 +175,8 @@ class ProotProcessExecutor(
             watchdog?.interrupt()
             if (timedOut.get()) TIMEOUT_EXIT_CODE else code
         } catch (e: Exception) {
-            onLine("[proot] 执行失败: ${e.message}")
-            -1
+            // ★ eh-01：恢复中断标志 + 安全投递诊断 + message 为 null 时不打裸 null（详见 Companion）。
+            reportRunFailure(e, onLine)
         } finally {
             // ★ 原来只在正常路径清理 actives：读输出时抛异常（例如进程被外部杀掉、管道断裂）
             // 会在 actives 里永久留下一条死进程记录（后续 destroyActive 遍历它纯属空转）。
@@ -151,8 +186,13 @@ class ProotProcessExecutor(
             if (p != null) {
                 // 只清已退出的（见 [ProotTermination.shouldReapOnFinally]）：还活着的要留在表里，
                 // 否则后续 destroyActive 再也找不到它去杀，那才是真正的孤儿 npm。
-                val alive = runCatching { p.isAlive }.getOrDefault(false)
-                if (ProotTermination.shouldReapOnFinally(alive)) {
+                //
+                // ★ round31 / slice-04 eh-02：判据改走 [ProotTermination.shouldReapAfterRun]。
+                //   旧写法先用 `runCatching { p.isAlive }.getOrDefault(false)` 折成一个 Boolean 再交给
+                //   [ProotTermination.shouldReapOnFinally]：读不到存活 ⇒ `false`（= 已退出）⇒ 摘表 ⇒
+                //   destroyActive 永久失联。那是 fail-open，与上面三行注释声明的安全方向相反：
+                //   **无法确定存活**必须归到"可能还活着"那一侧。
+                if (ProotTermination.shouldReapAfterRun(p)) {
                     synchronized(this) { actives.removeAll { it.process === p } }
                 }
             }
@@ -168,18 +208,35 @@ class ProotProcessExecutor(
      * 日志里还会出现"取消了但还在装"的怪象。现在按 tag 记录**所有**在跑的子进程。
      */
     fun destroyActive(tag: String? = null) {
-        runCatching {
-            val snapshot = synchronized(this) { actives.toList() }
-            snapshot.forEach { a ->
-                // tag 过滤语义不变（见 [ProotTermination.tagMatches]）：传 null 杀全部，传 instanceId 只杀它。
-                if (ProotTermination.tagMatches(tag, a.tag)) terminate(a)
+        // 取快照本身也保住"destroyActive 永不抛出"（旧实现里它在 runCatching 范围内）。
+        val snapshot = runCatching { synchronized(this) { actives.toList() } }.getOrElse { e ->
+            runCatching { DshLogBus.append("[proot] destroyActive: snapshot failed: ${e.message}") }
+            return
+        }
+        // ★ round31 / slice-04 eh-05：异常边界从"整轮循环之外"挪到"每条进程之内"。
+        //   旧实现是一个 runCatching 罩住整个 forEach：第 N 条 terminate 抛错时 forEach 立即中止，
+        //   **第 N+1 条及之后一条都不会被终止** —— "取消全部"退化成"取消了一部分"，而用户侧看到的是"已取消"。
+        //   现在每条各自兜底、循环照常走完（见 [ProotTermination.forEachIsolated]）。
+        //   ⚠️ [terminate] 的抛点：`ProcessUtil.cmdline` / `canSendQuitSignal` 实测都不抛
+        //   （前者内部 runCatching 折 null、后者是纯布尔），但同函数末尾的
+        //   `Thread { … }.apply { …; start() }` **不在**任何 runCatching 内 —— 资源耗尽时
+        //   `start()` 抛 `OutOfMemoryError` 就是一条真实路径。故遍历器捕 `Throwable`（非 `Exception`）。
+        ProotTermination.forEachIsolated(
+            items = snapshot,
+            onItemFailure = { a, e ->
+                // fix12（C-11 留痕）的延续：异常仍被吞（取消是 best-effort，**不返回结论** ——
+                // "返回时进程是否已死"在这里是未知，给出取值就是伪造结论）。但归因必须带 pid 与 tag：
+                // 旧的一行 `destroyActive failed` 无法定位是哪条炸的、哪几条被跳过。
+                runCatching {
+                    DshLogBus.append(
+                        "[proot] destroyActive: terminate failed for pid=${a.pid} " +
+                            "tag=${a.tag ?: "<none>"}: ${e.message}; continuing with remaining processes"
+                    )
+                }
             }
-        }.onFailure { e ->
-            // ★ fix12（C-11 留痕）：旧实现整段静默 —— 取消安装时若这里抛了，日志里一个字都没有，
-            //   用户只看到"取消了"而 npm 还在写盘。控制流不变（异常仍被吞：取消是 best-effort），
-            //   只补一条可归因的诊断（E3 的 C-11 反证：**只留痕、不返回结论**，因为 terminate
-            //   是非阻塞的，"返回时进程是否已死"在这里是未知，给出取值就是伪造结论）。
-            DshLogBus.append("[proot] destroyActive failed: ${e.message}")
+        ) { a ->
+            // tag 过滤语义不变（见 [ProotTermination.tagMatches]）：传 null 杀全部，传 instanceId 只杀它。
+            if (ProotTermination.tagMatches(tag, a.tag)) terminate(a)
         }
     }
 
@@ -324,6 +381,54 @@ object ProotTermination {
      */
     @JvmStatic
     fun shouldReapOnFinally(stillAlive: Boolean): Boolean = !stillAlive
+
+    /**
+     * ★ round31 / slice-04 eh-02：`run()` 的 finally 该不该把这条进程从登记表摘掉。
+     *
+     * 与 [shouldReapOnFinally] 的区别只在一件事：**读不到存活状态时怎么办**。
+     * 旧实现是 `shouldReapOnFinally(runCatching { p.isAlive }.getOrDefault(false))` —— `isAlive`
+     * 一抛异常，默认值 `false` 就表示"已退出"，于是摘表；此后 [ProotProcessExecutor.destroyActive]
+     * 再也找不到这条进程。那是 fail-open，方向与 finally 处注释声明的策略（"还活着必须留在表里"）
+     * 相反：**无法确定存活**应归到"可能还活着"这一侧。
+     *
+     * ⚠️ 这条**不是** C-13（`kill` 升级路径的 `getOrDefault(false)`，E3 已显式否决"默认改 true"
+     *    并推迟本轮）。两者判据不同：那边是"宽限后是否还要强杀"（默认 false = 不强杀的保守侧），
+     *    这边是"要不要把进程从**唯一能杀它的登记表**里摘掉"（默认 false 即摘表 = 永久失联，
+     *    没有任何下游能补）。故本条独立成立，且不触碰 C-13。
+     *
+     * @param probe 存活探针（默认就是 `Process.isAlive`）；做成参数便于单测喂"会抛的探针"。
+     * @return true = 确知已退出（可以摘表）；false = 还活着**或无法确定**（必须留着）
+     */
+    @JvmStatic
+    fun shouldReapAfterRun(process: Process, probe: (Process) -> Boolean = { p -> p.isAlive }): Boolean =
+        runCatching { probe(process) }.getOrDefault(true).not()
+
+    /**
+     * ★ round31 / slice-04 eh-05：**每条一个异常边界**的遍历器（异常仍被吞，只是不再连带放弃其余项）。
+     *
+     * 旧实现在 `destroyActive` 把 `runCatching` 罩在整轮 `forEach` 之外：第 N 项抛错 → 第 N+1 项起
+     * 全被跳过。对"取消全部"来说那就是退化成"取消了一部分"。
+     *
+     * 捕 `Throwable` 而不是 `Exception`：与 `runCatching` 的口径一致（它捕 Throwable），保住
+     * "destroyActive 永不抛出"这条既有契约 —— 极端资源耗尽时 `Thread.start()` 会抛 `OutOfMemoryError`，
+     * 那也只该让**这一条**没杀掉，不该让后面的全都逃掉。
+     *
+     * @param onItemFailure 归因回调；**它自己也被包一层** —— "为失败加的诊断"不许成为新的崩溃点。
+     */
+    @JvmStatic
+    fun <T> forEachIsolated(
+        items: List<T>,
+        onItemFailure: (T, Throwable) -> Unit,
+        action: (T) -> Unit
+    ) {
+        for (item in items) {
+            try {
+                action(item)
+            } catch (t: Throwable) {
+                runCatching { onItemFailure(item, t) }
+            }
+        }
+    }
 
     /** 首个信号 + 宽限后仍存活，才升级到 destroyForcibly()。 */
     @JvmStatic
@@ -721,16 +826,74 @@ object ProotRunner {
 
         fun isAlive(): Boolean = runCatching { process.isAlive }.getOrDefault(false)
 
-        /** 优雅停止：TERM → 等 5s → KILL */
+        /**
+         * 优雅停止：TERM → 等 [graceMillis] → KILL。
+         *
+         * ★ round31 / slice-04 eh-03：本条只修**两件事**，语义与返回值都不动（仍是 best-effort、
+         *   仍返回 `Unit`、仍不承诺"返回时已死"）：
+         *
+         * 1) 入口早退判据从 `!isAlive()` 改成"**确知已死**才 return"。旧写法复用 [isAlive] 的
+         *    `getOrDefault(false)` —— 读状态一抛就当成"已退出"，于是**连 `destroy()` 都不发**，
+         *    整段 teardown 被静默跳过（fail-open）。判据改走 [isAliveTriState]：`false` 才早退，
+         *    `null`（读不到）= 照常尝试杀。
+         * 2) 三处失败不再零诊断：`destroy()` / `waitFor` / `destroyForcibly()` 任一失败都往全局日志
+         *    留一行带 pid 的英文诊断。对照 [ProotProcessExecutor.terminate]（fix12 已按同一口径跟改，
+         *    见那里的 `destroy() failed` / `sendSignal(SIGQUIT) failed`），本函数是同一缺陷类在
+         *    本文件里**尚未**跟改的最后一处。
+         *
+         * 注意：`waitFor(...)` 返回 `false`（宽限超时）**不是异常**，不记日志 —— 那是正常升级路径，
+         * 由下面的 `destroyForcibly()` 接手。
+         */
         suspend fun terminate(graceMillis: Long = 5000) = withContext(Dispatchers.IO) {
-            if (!isAlive()) return@withContext
-            runCatching { process.destroy() }
+            // null = 读不到存活状态 ⇒ 不确定，照常走 teardown（宁可多发一次信号，也不要漏杀）
+            if (isAliveTriState() == false) return@withContext
+            runCatching { process.destroy() }.onFailure { e ->
+                logTerminateFailure("destroy()", e)
+            }
             val exited = runCatching { process.waitFor(graceMillis, TimeUnit.MILLISECONDS) }
+                .onFailure { e -> logTerminateFailure("waitFor($graceMillis ms)", e) }
                 .getOrDefault(false)
-            if (!exited && isAlive()) {
-                runCatching { process.destroyForcibly() }
+            // 三态判据同入口：读不到存活 ≠ 已退出 ⇒ 该发的强杀照发
+            // （旧写法 `!exited && isAlive()` 在"读不到"时得到 false，导致**漏强杀**）
+            if (!exited && isAliveTriState() != false) {
+                runCatching { process.destroyForcibly() }.onFailure { e ->
+                    logTerminateFailure("destroyForcibly()", e)
+                }
             }
         }
+
+        /**
+         * 存活三态（eh-03 的判据载体）：`true` = 活着、`false` = **确知**已退出、`null` = 读不到。
+         *
+         * 为什么必须与 [isAlive] 分开：`isAlive` 的契约是"拿不准就当死"（给"能否复用现有 run"之类的
+         * 判据用，见 DshRuntime 的 `canJoinExistingRunLocked`）；而停止路径的方向相反 —— 拿不准应当
+         * **继续尝试终止**，否则 teardown 会被静默跳过。两个方向都对，只是不能共用一个函数。
+         */
+        private fun isAliveTriState(): Boolean? = runCatching { process.isAlive }.getOrNull()
+
+        /** 终止链上的一处失败：带 pid 留一行（pid 未知时写 `<unknown>`，免得日志出现空白归因）。 */
+        private fun logTerminateFailure(op: String, e: Throwable) {
+            // 诊断自身不许抛（否则"为失败加的诊断"反而把调用方带崩）
+            runCatching {
+                val pid = safePid()
+                DshLogBus.append(
+                    "[proot] handle.terminate: $op failed for pid=" +
+                        (if (pid > 0) pid.toString() else "<unknown>") + ": ${e.message}"
+                )
+            }
+        }
+
+        /**
+         * 诊断用的 pid，**取不到返回 -1**：走 [pid] 那三条路径（反射 → children 差集 → /proc 全扫），
+         * 而不是直接调 `process.pid()`。
+         *
+         * 为什么必须走 [pid] 而不是反射：`java.lang.Process.pid()` 是 Java 9+ 的 API，android.jar 里有
+         * （编译期假象），真机运行期 `getMethod("pid")` 抛 `NoSuchMethodException` —— 若这里只靠反射，
+         * 真机上归因永远是 `<unknown>`，等于没归因。而 [pid] 已经为此做了两层 /proc 兜底，且成功值
+         * 带缓存（启动路径早已调过一次），失败时也只在内部 runCatching 里静默折 -1 —— 绝不因为
+         * "打日志"把终止路径弄出新失败点。
+         */
+        private fun safePid(): Long = runCatching { pid() }.getOrDefault(-1L)
     }
 
     /**

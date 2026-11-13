@@ -73,8 +73,17 @@ abstract class LazyObjectBinding<T> extends ObjectBinding<T> {
              * #get again to make this binding valid.
              */
 
-            get(); // make binding valid as source wasn't tracked until now
-            wasObserved = true;
+            // R31/slice-34-dc-02: get() runs computeValue(), whose mapper is supplied by the caller
+            // and may throw. Previously the throw left subscription != null while wasObserved stayed
+            // false: updateSubscriptionAfterRemove() is gated on wasObserved, so the subscription was
+            // never unsubscribed, and the next addListener subscribed to the same source a second
+            // time. Resetting wasObserved in a finally keeps the pair (wasObserved, subscription)
+            // in lockstep regardless of whether get() succeeds.
+            try {
+                get(); // make binding valid as source wasn't tracked until now
+            } finally {
+                wasObserved = true;
+            }
         }
     }
 

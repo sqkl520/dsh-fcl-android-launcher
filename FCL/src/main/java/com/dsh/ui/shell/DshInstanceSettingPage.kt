@@ -100,8 +100,21 @@ class DshInstanceSettingPage(
      */
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** 主题变化时重绘分割线（FCL 同款做法） */
-    private val themeInvalidate = Runnable { binding.settingList.invalidate() }
+    /**
+     * 主题变化时重绘分割线（FCL 同款做法）。
+     *
+     * ★ r31-224 / C-06-02：同时**重绑整个行清单**。动作行的文字色由绑定期按 `dangerous` 算出
+     *   （普通色来自主题 autoTint / 危险色来自 `@color/dsh_log_error`，后者有 values-night 一份），
+     *   而亮暗切换不重建 Activity（外壳 configChanges 含 uiMode）—— 不重绑的话，切到暗色后
+     *   危险行仍压着亮色那一套深红（与 `DshInstanceAdapter` 对 errorText 的处理同一条理由）。
+     *   走 `notifyDataSetChanged` 而不是给每颗按钮挂独立主题回调：FCLButton 构造时已在这个
+     *   View 上注册过自己的 refreshTheme，再注册会顶掉它；而重绑发生在本次刷新循环之后，
+     *   顺序是确定的。
+     */
+    private val themeInvalidate = Runnable {
+        binding.settingList.invalidate()
+        adapter.notifyDataSetChanged()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -439,7 +452,13 @@ class DshInstanceSettingPage(
         ),
         DshInstanceSettingAdapter.Row.Action(
             R.string.dsh_action_delete, R.string.dsh_settings_desc_delete,
-            R.string.dsh_action_delete, DshInstanceSettingAdapter.Tag.DELETE
+            R.string.dsh_action_delete, DshInstanceSettingAdapter.Tag.DELETE,
+            // ★ r31-224 / C-06-02：**唯一**该传 dangerous 的一行。改前这里走默认 false，
+            //   而绑定路径当时也根本不读这个参数 —— 名实两张皮。现在两边都接上了：
+            //   删除按钮的文字用 R.color.dsh_log_error（与「重装」这类可逆动作区分开）。
+            //   判据走 [isDangerousActionTag] 而不是字面 true：维护段"哪些动作不可撤销"
+            //   是一条可以被单测钉住的规则，以后新增动作时也不会漏传。
+            dangerous = isDangerousActionTag(DshInstanceSettingAdapter.Tag.DELETE)
         ),
     )
 
@@ -639,9 +658,23 @@ class DshInstanceSettingPage(
                 val guestInstancePath = "${ProotCommand.GUEST_ROOT}/instances/${i.id}"
                 val normalized = resolveHomeRootfs(guestInstancePath, trimmed)
                 when {
-                    // 被清洗规则拒了（含 .. / . 或非绝对路径）—— 归一化结果等于默认值。
-                    normalized == guestInstancePath && trimmed != guestInstancePath ->
+                    // ★ R31/BL-241：**拒绝原因必须分开说**。
+                    //   旧实现所有拒绝共用 `dsh_home_must_be_absolute`（"必须以 / 开头"），
+                    //   而 `/opt/dsh/../etc` 明明是绝对路径 —— 用户按提示改成 `/opt/dsh/xxx`
+                    //   仍然被拒（因为还有 `..`），永远学不到真正的原因，陷入死循环。
+                    //
+                    // ★ R31/BL-239：`/` 单独拦。它虽然是合法绝对路径、能通过 resolveHomeRootfs，
+                    //   但 `hostPathForGuestDir` 会判 OutsideGuestRoot（"/" 不在 "/opt/dsh" 下）
+                    //   ⇒ 运行期既不建目录、也不打日志、也不告警 —— 用户把启动目录设成 rootfs 根，
+                    //   界面上看不出任何异常。这里提前拦住，别让它静默存进去。
+                    normalized == "/" ->
+                        toast(context.getString(R.string.dsh_home_not_guest_root))
+                    // 非绝对路径（不以 / 开头）—— 这时"必须以 / 开头"是对的
+                    !trimmed.startsWith("/") ->
                         toast(context.getString(R.string.dsh_home_must_be_absolute))
+                    // 绝对路径但含 . 或 .. —— 换一条说得清的文案
+                    normalized == guestInstancePath && trimmed != guestInstancePath ->
+                        toast(context.getString(R.string.dsh_home_no_dot_segments))
                     else -> {
                         DshInstances.updateConfig(i.id, homeDir = normalized)
                         reload()
@@ -1098,3 +1131,14 @@ fun parsePortInput(text: String): Int? {
     val port = trimmed.toIntOrNull() ?: return null
     return if (port in 0..65535) port else null
 }
+
+/**
+ * 维护段里哪些动作**不可撤销**（r31-224 / C-06-02）。
+ *
+ * 目前只有 [DshInstanceSettingAdapter.Tag.DELETE]：删掉实例目录连 `home/`（会话、凭据）
+ * 一起没，而「重装」是可逆的（同一个版本再装一遍即可）。这不是"随手写的常量表"，
+ * 而是 `Row.Action.dangerous` 的**唯一判据来源** —— 单测直接钉这两条事实
+ * （DELETE 为真、其余维护动作为假），比在构造点写字面 `true` 更难被后续改动悄悄改坏。
+ */
+fun isDangerousActionTag(tag: DshInstanceSettingAdapter.Tag): Boolean =
+    tag == DshInstanceSettingAdapter.Tag.DELETE

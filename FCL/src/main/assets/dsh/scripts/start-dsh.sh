@@ -344,10 +344,22 @@ while : ; do
       echo "[start-dsh] previous attempt (last 8 lines):" >&2
       tail -8 "$LOGFILE" >&2 2>/dev/null || true
       : > "$LOGFILE"
+      # ★ 日志被截断，读取游标必须跟着归零（r31-s01-logic-03）：OFFSET 是 $LOGFILE 的字节游标，
+      #   不归零则 flush_new 的 `size > OFFSET` 在重试日志重新长到旧长度之前恒假 —— 这段时间
+      #   一行都不转发；一旦超过又从旧坐标切起，首行整行丢失、后半从词中间开始。
+      #   全脚本只有 :213 复位过它（脚本初始化，一次），截断点必须自己复位。
+      OFFSET=0
       PATCH_USED=0
       node --expose-internals "$BIN_JS" web --no-open --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &
       NODE_PID=$!
-      : > "$NODE_PID_FILE" 2>/dev/null || true
+      # ★ 重试换到了**新的**子进程，pid 文件必须跟着换成新 pid（原来这里只清空，而首次写入在
+      #   下面的 READY 循环**之前**、只执行一次 ⇒ 重试成功后 pid 文件恒为 0 字节，宿主按 pid
+      #   精确终止失效，node 变孤儿、端口一直被占）。写法与首次启动保持一致。
+      if printf '%s %s\n' "$NODE_PID" "$PORT" > "$NODE_PID_FILE" 2>/dev/null; then
+        echo "[start-dsh] node pid: $NODE_PID"
+      else
+        echo "[start-dsh] WARN: cannot write node pid file $NODE_PID_FILE (a leftover node process is possible on stop)" >&2
+      fi
       continue
     fi
     # 端口被占是"看起来莫名其妙的 node-exit code=1"最常见的原因（node 日志里必有 EADDRINUSE）。

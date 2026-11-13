@@ -462,6 +462,94 @@ private fun platformFsyncDir(dir: File) {
 }
 
 /**
+ * [applyRepairPlans] 的结果：新的列表 + 本次真的改了几条 + 因"快照之后被并发改写"而丢弃的 id。
+ *
+ * `changed` 由本函数自己数出来（而不是靠调用方在 `_instances.update {}` 的 lambda 里置标志）：
+ * `MutableStateFlow.update` 的 lambda 在并发冲突时会**重试**，lambda 里的副作用会被执行多次，
+ * 于是"改过 / 没改过"这种判断放在 lambda 里会让一次被中止的尝试污染最终结论。
+ * 调用方（[DshInstances.repair]）对重试的处理是"以最后一次（被 CAS 接受的那次）结果为准"：
+ * 被中止的尝试从未写进内存，所以拿它的结论去写盘才是错的。
+ */
+data class RepairApplyResult(
+    val instances: List<DshInstance>,
+    val changed: Boolean,
+    /** 计划被丢弃的实例 id（快照之后 state/dshVersion 被别人改过 —— 见 [applyRepairPlans]） */
+    val skipped: List<String>
+)
+
+/**
+ * repair 的**写回**半步（纯函数，JVM 直测）：把 [planned] 的裁决落到 [current] 上，并做**期望前态校验**。
+ *
+ * ## 为什么需要"期望前态"（r31-s02-conc-01，HIGH）
+ *
+ * `repair()` 跑在 IO 线程（`DshAppScope.scope.launch { repair() }`），它的输入是"快照时刻"的
+ * `_instances.value` + 磁盘事实；而**并发方没有任何共同锁**：
+ * `DshInstaller.install()` 在**调用线程**写 `markState(… INSTALLING …)`，装完再写 `READY`。
+ * 旧写法（写回时只用 `current.state == plan.state` 与**当前**项比较、`else` 分支无条件
+ * `copy(state = plan.state, …)`）于是有这条路径：
+ *
+ * ```
+ * repair 在 :832 读到快照 {A: NOT_INSTALLED}  →  :845 裁决 planned[A] = NOT_INSTALLED
+ *          （此时 A 的树确实还不完整，裁决本身是对的）
+ * install 线程：markState(A, INSTALLING) → … → markState(A, READY, "0.2.0")
+ * repair 写回：当前项 READY ≠ plan.state NOT_INSTALLED ⇒ else 分支
+ *          ⇒ copy(state = NOT_INSTALLED) + saveAsync() ⇒ 磁盘上变成"未安装"
+ * ```
+ *
+ * 用户看到"未安装"卡片 + 安装按钮，而磁盘上的树是完整的 —— 最自然的动作是**重下 500MB 覆盖好树**。
+ *
+ * 修法：`planned` 的每条裁决都附上它**基于的那份快照项**（[baseline]）。写回时只有
+ * "当前项与快照项在 repair 会写的两个字段（`state` / `dshVersion`）上仍然相同"才允许落裁决；
+ * 否则说明快照之后有人写过它，本次裁决的**前提**已经不成立 —— 丢弃它，保留并发写入的新状态。
+ *
+ * 为什么比的是 [baseline] 而不是"当前项 vs plan 结论"：后者只能回答"要不要改"，回答不了
+ * "该不该改" —— 前提（磁盘事实 + 内存状态）一旦被并发改写，结论再"不同"也不能落。
+ *
+ * 为什么只比 `state` / `dshVersion`：这两个正是 repair 会写的字段（`lastError`/`updatedAt` 是
+ * 附带）。比 `updatedAt` 会让"另一个人只改了名字"也把本次裁决丢掉 —— 那是过修（rename 与 repair
+ * 撞上是常态，而 repair 的结论与名字无关）。反过来，只改 `lastError` 的并发写不会被本判据放行
+ * 到"覆盖它"的路上：`lastError` 在 plan 里只会被**保留**（`inst.lastError`，取的是当前项）。
+ *
+ * @param current 写回时刻的列表（`_instances.update {}` 的入参，可能已被并发修改过）
+ * @param planned id → 裁决（只含 keepAsIs=false 的实例）
+ * @param baseline id → 裁决所基于的**快照项**
+ * @param now 时间戳（显式传入，保证纯函数可重复）
+ */
+fun applyRepairPlans(
+    current: List<DshInstance>,
+    planned: Map<String, RepairPlan>,
+    baseline: Map<String, DshInstance>,
+    now: Long
+): RepairApplyResult {
+    if (planned.isEmpty()) return RepairApplyResult(current, changed = false, skipped = emptyList())
+    var changed = false
+    val skipped = mutableListOf<String>()
+    val next = current.map { cur ->
+        val plan = planned[cur.id] ?: return@map cur // 期间新建的 / keepAsIs 的：不动它
+        val base = baseline[cur.id]
+        if (base == null || base.state != cur.state || base.dshVersion != cur.dshVersion) {
+            // 快照之后被改过（并发 markState / update / 收编…）：裁决的前提已不成立，丢弃。
+            skipped += cur.id
+            return@map cur
+        }
+        if (cur.state == plan.state && (plan.version == null || cur.dshVersion == plan.version)) {
+            return@map cur // 已经是目标状态（且版本相符）：不产生无谓的写盘
+        }
+        changed = true
+        cur.copy(
+            state = plan.state,
+            // 树完整/命中预装 → 用磁盘真实版本；否则 plan.version == null ⇒ 保留
+            // "目标版本"（安装开始时写入），这样卡片能显示"本来要装什么"，
+            // 也才能被"同版本重试"复用（修 E1-6 的重试目标漂移）。
+            dshVersion = plan.version ?: cur.dshVersion,
+            lastError = if (plan.state == DshInstance.State.READY) null else cur.lastError,
+            updatedAt = now
+        )
+    }
+    return RepairApplyResult(next, changed, skipped)
+}
+
+/**
  * dsh 实例的仓库单例，仿 [com.tungsten.fcl.setting.Profiles]：
  * - 用 StateFlow 暴露实例列表与当前选中项，UI 层订阅即可自动刷新
  * - 增删改统一走本对象的方法，内部负责持久化到 [DshPaths.INSTANCES_MANIFEST]
@@ -507,6 +595,28 @@ object DshInstances {
      */
     private val createLock = Any()
 
+    /**
+     * r31-s02-conc-02（G2-a）：**收编的临界区锁** —— `adoptOrphanInstanceDirs` 的"读快照 →
+     * 算孤儿 → 追加写回"必须整体串行。
+     *
+     * 缺陷：`loadFrom` 有两条并发入口（`init()` 的 IO 协程 `:589-591` + UI 直调
+     * [retryManifestLoad]），两者各自基于 `_instances.value` 快照算孤儿目录，再
+     * `_instances.update { it + recovered }` 追加 —— 追加式且不去重，于是同一 id 出现两份
+     * （`List` 不是 `Set`：`byId`/`firstOrNull` 只看第一份，`updateConfig` 的 `map` 会改两份）。
+     *
+     * 为什么用独立 `Any()` 而不是 [createLock] / [writeMutex]：
+     * - [writeMutex] 是 `kotlinx.coroutines` 的挂起锁，而本函数是普通同步函数，拿不到挂起上下文；
+     * - [createLock] 的语义是"id 生成 + 目录占位"，与本路径无关（混用只会造出不必要的争用）。
+     * 临界区内只有两类动作：内存的"快照 → 追加"，和 [rebuildMissingInstances] 里的
+     * `isDirectory` + `listFiles()`（**目录项枚举，不读任何文件内容**，与 loadFrom 本来就要读
+     * 清单文件同一量级）。没有网络/内容 IO，阻塞窗口在毫秒以内。
+     *
+     * 锁序：只有"`init()` 的对象监视器 → [adoptLock]"这一个方向（`init` 是 `@Synchronized`，
+     * 其调用链 `load → loadFrom → adopt` 持锁进入本锁）；反向没有任何路径持有 [adoptLock]
+     * 再去取对象监视器 —— 不存在成环。
+     */
+    private val adoptLock = Any()
+
     /** [delete] 等实例离开 Starting/Running/Stopping 的上限 —— 与 [DshRuntime.stopAndWait] 的默认预算一致 */
     private const val DELETE_WAIT_TIMEOUT_MS = 8_000L
 
@@ -541,6 +651,27 @@ object DshInstances {
     val deleting: StateFlow<Set<String>> = _deleting.asStateFlow()
 
     /**
+     * 删除事务的**待提交记录**（id → 实例）及其临界区。
+     *
+     * ★ r31-s02-conc-03（G2-b）：`delete()` 的事务前提是"清单写盘成功才删目录；写失败就把实例
+     *   插回内存"（见 [delete] 的 fix12 注释），但内存摘除发生在**它自己的同步写盘之前** —— 中间还
+     *   隔着 cancel + [DshRuntime.stopIf] + 最长 [DELETE_WAIT_TIMEOUT_MS] 的轮询。这段时间里任何别的
+     *   改动触发的 [saveAsync] 都会把"已摘除"的内存成功写到盘上；于是 delete 自己的写一旦失败，
+     *   回滚后**磁盘清单已不含该实例**：下次冷启它从清单消失、目录还在，被
+     *   [adoptOrphanInstanceDirs] 收编成 `name = id` 的 NOT_INSTALLED 空壳（用户丢掉名称/版本/端口）。
+     *
+     * 修法（不改事务顺序、不改 UI 观感、不改 [delete] 的返回值语义）：摘内存时把实例登记进本表；
+     * 落盘快照 [manifestSnapshot] 会把**尚未提交**的这些记录补回去 —— 并发的写因此永远不会替 delete
+     * 提前提交一次删除。delete 自己的写成功后从这里移除（提交），写失败则随内存回滚一起移除。
+     * 于是无论并发写怎样交错，磁盘在"回滚"发生的那一刻都仍含该实例。
+     *
+     * 锁序：只有"[pendingDeleteLock] → 无其他锁"这一个方向；持锁期间只做内存读写
+     * （`_instances` 的取快照 / 更新），**不做任何磁盘 IO**，所以不会把 UI 线程的 delete 同步段拖住。
+     */
+    private val pendingDeleteLock = Any()
+    private val pendingDeletes = LinkedHashMap<String, DshInstance>()
+
+    /**
      * 清单**读取**失败（拒写中）。UI 横幅读它。
      *
      * ★ 为什么读失败要拒写（Round 25 §2.3 / E2-C-04）：读失败时内存里的事实是"空的"
@@ -562,8 +693,16 @@ object DshInstances {
      * ★ 为什么需要它：拒写期间用户仍能新建/改名/删除（界面层不禁用），这些改动只活在内存里。
      *   若"重试读取"直接整份替换 `_instances`，这些改动会被**无声冲掉**；
      *   所以重试只在计数为 0 时才允许覆盖内存（E2-N-5）。
+     *
+     * ★ r31-s02-conc-04：必须是**原子**类型，不能是裸 `Int`。
+     *   写方跨线程（UI 线程的 create/update/updateConfig/markState/delete/select，加 IO 线程的
+     *   [repair]），读方也在 IO 线程（[loadFrom] 的 `replaced` 与 [retryManifestLoad] 的守卫）
+     *   —— 裸 `Int` 的 `++` 是读-改-写（并发时丢计数），且没有任何 happens-before（读方可能看到
+     *   陈旧值）。两者都会让 `replaced` 判成 true，于是 `_instances.value = parsed.instances`
+     *   整份覆盖，把读失败窗口里用户的新建/改名**无声冲掉**（E2-N-5 的原始缺陷）。
+     *   `AtomicInteger` 同时给"不丢计数"与"读得到最新值"两条，语义与原来的纯计数一致。
      */
-    private var mutationsWhileLoadFailed = 0
+    private val mutationsWhileLoadFailed = AtomicInteger(0)
 
     /**
      * 目录 fsync 的注入点（测试用）。null = 走平台实现 [platformFsyncDir]。
@@ -599,15 +738,18 @@ object DshInstances {
         _selectedId.value = null
         _manifestLoadFailed.value = false
         _manifestWriteFailed.value = false
-        mutationsWhileLoadFailed = 0
+        mutationsWhileLoadFailed.set(0)
         // 墓碑也要清：否则上一条用例留下的 id 会让下一条的收养扫描静默跳过同名目录，
         // 症状是"测试单独跑绿、整批跑红"这种最难查的一类。
         tombstonedInstanceIds.value = emptySet()
+        // ★ r31-s02-conc-03：待删记录同理 —— 它的作用是"把还没提交的删除补回写快照"，
+        //   漏清会让**下一条**用例的写盘凭空多出一个实例（同样是"单跑绿、整批红"的形状）。
+        synchronized(pendingDeleteLock) { pendingDeletes.clear() }
     }
 
     /** 读失败期间每改一次内存调一次（调用方先确认 [manifestLoadFailed] 为真） */
     private fun countMutationWhileLoadFailed() {
-        if (_manifestLoadFailed.value) mutationsWhileLoadFailed++
+        if (_manifestLoadFailed.value) mutationsWhileLoadFailed.incrementAndGet()
     }
 
     val selected: DshInstance?
@@ -772,6 +914,10 @@ object DshInstances {
         // 被重试，把文件 IO 放在里面（旧实现）会有两个坏处：① 同样的 readText 被重复执行；
         // ② 在原子更新的重试循环里持有 IO 时间。现在只把结果带进去做纯内存替换。
         val planned = HashMap<String, RepairPlan>()
+        // ★ r31-s02-conc-01：裁决必须连同它**基于的那份快照项**一起带走 —— 写回时用它做
+        //   "期望前态"校验（见 [applyRepairPlans]）。只留 plan 的话，"该不该落这个结论"
+        //   这个问题在写回时已经无从回答（快照项被 GC 掉了）。
+        val baseline = HashMap<String, DshInstance>()
         // 预装 dsh 的事实：**循环外只读一次**（它是所有实例共享的底座，每个实例各读一遍纯属浪费 IO）。
         // 判定顺序与 `effectiveDshDir` 的解析顺序同口径 —— 见 [planRepair] 序 2/序 3。
         val pre = readInstallFacts(File(DshPaths.ROOTFS_DIR, DshPaths.PREINSTALLED_DSH_REL))
@@ -793,29 +939,24 @@ object DshInstances {
                 return@forEach
             }
             planned[inst.id] = plan
+            baseline[inst.id] = inst
         }
 
-        var changed = false
+        // ★ r31-s02-conc-01：写回走 [applyRepairPlans]（纯函数，带期望前态校验），不再在
+        //   `_instances.update {}` 的 lambda 里用 `changed = true` 记录副作用 —— 那个 lambda
+        //   在并发冲突时会被重试，一次被中止的尝试也会把 changed 置真。
+        var applied = RepairApplyResult(emptyList(), changed = false, skipped = emptyList())
         _instances.update { list ->
-            list.map { inst ->
-                val plan = planned[inst.id] ?: return@map inst // 期间新建的 / keepAsIs 的：不动它
-                if (inst.state == plan.state && (plan.version == null || inst.dshVersion == plan.version)) {
-                    inst
-                } else {
-                    changed = true
-                    inst.copy(
-                        state = plan.state,
-                        // 树完整/命中预装 → 用磁盘真实版本；否则 plan.version == null ⇒ 保留
-                        // "目标版本"（安装开始时写入），这样卡片能显示"本来要装什么"，
-                        // 也才能被"同版本重试"复用（修 E1-6 的重试目标漂移）。
-                        dshVersion = plan.version ?: inst.dshVersion,
-                        lastError = if (plan.state == DshInstance.State.READY) null else inst.lastError,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                }
-            }
+            applied = applyRepairPlans(list, planned, baseline, System.currentTimeMillis())
+            applied.instances
         }
-        if (changed) {
+        applied.skipped.forEach { id ->
+            DshLogBus.append(
+                "[instances] $id: repair verdict dropped (state/version changed after the snapshot; " +
+                    "keeping the newer in-memory value)"
+            )
+        }
+        if (applied.changed) {
             // ★ R3b-B4（fix12 收尾）：repair 也是**改内存**的路径，必须计入"读失败窗口内的改动"，
             //   否则重试读成功时会把它整份覆盖（`_instances.value = parsed.instances`），
             //   用户看到的"已按磁盘校准"会在一秒后变回磁盘上的旧结论。
@@ -906,7 +1047,7 @@ object DshInstances {
      *
      * @param onFinished 目录删完后回调（主线程/IO 线程不定，调用方自行切线程）。
      *                   写盘失败/拒绝时以 `false` 回调（且什么都没删）。
-     * @return false = 拒绝（清单读取失败中），**什么都没做**（内存没摘、目录没删）。
+     * @return false = 拒绝（清单读取失败中 / 同一 id 的删除已在途），**什么都没做**且已用 `false` 回调。
      *         true = 已受理（真正的成败走 [onFinished]）。
      */
     fun delete(id: String, onFinished: ((Boolean) -> Unit)? = null): Boolean {
@@ -920,10 +1061,21 @@ object DshInstances {
             return false
         }
         val inst = byId(id)
+        // 同一 id 的删除已在途：不重开第二个事务。两个事务会让**后者**的写盘替前者提交删除，
+        // 前者的写再失败就回到"内存有、盘上没有"的原缺陷（比"没删掉"更糟）。
+        // ★ fix-r31-104：旧写法 `return true` 却**永不回调**，与 KDoc"true = 已受理、成败走
+        //   [onFinished]"矛盾；改为明确拒绝（回调 true 也不行 —— 那等于替没开始的删除宣布结局）。
+        if (synchronized(pendingDeleteLock) { pendingDeletes.containsKey(id) }) {
+            onFinished?.invoke(false)
+            return false
+        }
         // 记住原位置：写盘失败回滚时按原位放回去，别把用户熟悉的排序打乱。
         val removedIndex = _instances.value.indexOfFirst { it.id == id }
         val wasSelected = _selectedId.value == id
-        _instances.update { list -> list.filterNot { it.id == id } }
+        // ★ r31-s02-conc-03（G2-b）：摘内存与"待删登记"必须同一临界区（见 [pendingDeletes]）。
+        //   旧写法只摘内存 —— 下面的同步写盘要等进程离场之后才发生，这段窗口里任何别的改动
+        //   触发的 [saveAsync] 都会把这次摘除提前提交到盘上。
+        inst?.let { holdPendingDelete(id, it) } ?: _instances.update { list -> list.filterNot { it.id == id } }
         if (wasSelected) _selectedId.value = _instances.value.firstOrNull()?.id
         _deleting.update { it + id }
         // 只有"确实改了内存"才计改动（读失败期间的删除会被上面的闸门直接拒掉，走不到这里）。
@@ -1034,9 +1186,13 @@ object DshInstances {
             //   写盘必须同步等结果（writeMutex 内 writeNow），不能用 saveAsync 那种 fire-and-forget
             //   —— 旧实现正是"异步写 + 无条件删"，写失败时实例在下次冷启原样复活、点进去是空目录。
             val manifestWritten = writeMutex.withLock {
-                runCatching { writeNow() }.fold(
+                runCatching { writeNow(excludeId = id) }.fold(
                     onSuccess = {
                         _manifestWriteFailed.value = false
+                        // ★ r31-s02-conc-03：提交必须**在本临界区之内**。放到 withLock 之后会留一个
+                        //   窗口：排队等锁的 saveAsync 可能在"本次写已成功"与"撤销待删登记"之间拿到锁，
+                        //   把待删记录重新补回快照并落盘 —— 那就变成"界面说删了、盘上还在"，冷启复活。
+                        commitPendingDelete(id)
                         true
                     },
                     onFailure = { e ->
@@ -1056,21 +1212,25 @@ object DshInstances {
                 //   无脑插回就会得到"同一 id 两份"，`_instances` 是 List 不是 Set，
                 //   `byId`/`firstOrNull` 只取第一份，`updateConfig` 的 map 却会同时改两份。
                 //   所以插回前先查：已经在列表里（说明重读已经把它放回来了）就不重复插。
-                _instances.update { list ->
-                    if (list.any { it.id == id }) list
-                    else {
-                        val back = mutableListOf<DshInstance>()
-                        var inserted = false
-                        val at = removedIndex.coerceIn(0, list.size)
-                        list.forEachIndexed { i, it ->
-                            if (!inserted && i == at) {
-                                inst?.let { back += it }
-                                inserted = true
+                // ★ r31-s02-conc-03：撤销待删登记必须与回滚**同一临界区**，且要先回到内存再撤销
+                //   （反了会露出一个"内存和待删表里都没有它"的窗口，那一刻的并发写照样会丢记录）。
+                rollbackPendingDelete(id) {
+                    _instances.update { list ->
+                        if (list.any { it.id == id }) list
+                        else {
+                            val back = mutableListOf<DshInstance>()
+                            var inserted = false
+                            val at = removedIndex.coerceIn(0, list.size)
+                            list.forEachIndexed { i, it ->
+                                if (!inserted && i == at) {
+                                    inst?.let { back += it }
+                                    inserted = true
+                                }
+                                back += it
                             }
-                            back += it
+                            if (!inserted && inst != null) back += inst
+                            back
                         }
-                        if (!inserted && inst != null) back += inst
-                        back
                     }
                 }
                 if (wasSelected) _selectedId.value = id
@@ -1081,6 +1241,9 @@ object DshInstances {
                 onFinished?.invoke(false)
                 return@launch
             }
+            // ★ r31-s02-conc-03：清单已落盘 = 删除**已提交**，待删登记已在上面那次写的临界区内撤销。
+            //   之后任何写都不会再把该实例补回快照（否则删目录失败留下墓碑时，并发的 saveAsync
+            //   会把它写回盘上 —— 与下面 R3b-B3-6 的墓碑语义正好相反）。
             val ok = runCatching { DshPaths.instanceDir(id).deleteRecursively() }.getOrDefault(false)
             // ★ R3b-B3-6（fix12 收尾）：目录删不干净时留下墓碑。
             //   实例记录已经从清单里摘掉，但残留目录会让下次冷启的 adoptOrphanInstanceDirs
@@ -1479,7 +1642,7 @@ object DshInstances {
                 if (parsed.dropped > 0) {
                     backupDroppedManifest(f, parsed.dropped)
                 }
-                val replaced = mutationsWhileLoadFailed == 0
+                val replaced = mutationsWhileLoadFailed.get() == 0
                 if (replaced) {
                     // 只有"本次会话在读失败期间没有改动"时才允许整份替换内存 —— 否则会把用户
                     // 在拒写窗口里新建/改名/删除的实例**无声冲掉**（它们本来就没落盘，冲掉即丢）。
@@ -1487,7 +1650,7 @@ object DshInstances {
                 } else {
                     DshLogBus.append(
                         "[instances] manifest is readable again, but this session has " +
-                            "$mutationsWhileLoadFailed unsaved change(s); keeping the in-memory list"
+                            "${mutationsWhileLoadFailed.get()} unsaved change(s); keeping the in-memory list"
                     )
                 }
                 // E2-N-2：**无论清单空不空**都跑一次收编。旧实现只在"清单为空"时跑，于是
@@ -1516,7 +1679,7 @@ object DshInstances {
     /** 所有"读成功"出口的统一收尾：清拒写位 + 清改动计数（E2 §3.3 清位规则 A）。 */
     private fun markManifestLoadSucceeded() {
         _manifestLoadFailed.value = false
-        mutationsWhileLoadFailed = 0
+        mutationsWhileLoadFailed.set(0)
     }
 
     /**
@@ -1584,13 +1747,21 @@ object DshInstances {
      */
     private fun adoptOrphanInstanceDirs() {
         if (!DshPaths.isLoaded) return // 路径系统未就绪（如 JVM 单测）：没有可扫的目录
-        // ★ R3b-B3-6：跳过墓碑 —— 那些是"删除已生效但目录没删干净"的残留，收养它等于复活。
-        val known = _instances.value.mapTo(HashSet()) { it.id }
-        known += tombstonedInstanceIds.value
-        val recovered = rebuildMissingInstances(File(DshPaths.INSTANCES_DIR), known)
+        // ★ r31-s02-conc-02：**快照 → 算孤儿 → 追加写回**三步必须整体串行（锁的论证见 [adoptLock]）。
+        //   否则 init() 的 IO 协程与 UI 直调的 retryManifestLoad 各自按自己的 `_instances.value`
+        //   快照算出同一批孤儿，而 `it + recovered` 是追加式写回、不去重 —— 同一 id 会出现两份。
+        val recovered = synchronized(adoptLock) {
+            // ★ R3b-B3-6：跳过墓碑 —— 那些是"删除已生效但目录没删干净"的残留，收养它等于复活。
+            val known = _instances.value.mapTo(HashSet()) { it.id }
+            known += tombstonedInstanceIds.value
+            val found = rebuildMissingInstances(File(DshPaths.INSTANCES_DIR), known)
+            if (found.isNotEmpty()) {
+                _instances.update { it + found }
+                if (_selectedId.value == null) _selectedId.value = found.first().id
+            }
+            found
+        }
         if (recovered.isEmpty()) return
-        _instances.update { it + recovered }
-        if (_selectedId.value == null) _selectedId.value = recovered.first().id
         // ★ 这行 saveAsync 只在"读成功"的出口被执行（loadFrom 的每个出口都先清拒写位再调本函数），
         //   所以它不会被自己刚恢复出来的"拒写"拦住 —— 顺序见 loadFrom 各出口的注释。
         saveAsync()
@@ -1733,13 +1904,13 @@ object DshInstances {
             _manifestLoadFailed.value = true
             return false
         }
-        if (mutationsWhileLoadFailed > 0) {
+        if (mutationsWhileLoadFailed.get() > 0) {
             // ★ 覆盖内存会把这些改动无声冲掉，而它们本来就没落盘 —— 所以这里**不吞掉**这个位，
             //   而是明确保留拒写：让用户看见横幅（"本次会话的改动不会保存"）比假装恢复更诚实。
             //   （顺带纠正 §2.3 规则 4 的括号措辞：这是"保留拒写 + 日志"，不是"重新置位"。）
             DshLogBus.append(
                 "[instances] manifest is readable, but this session has " +
-                    "$mutationsWhileLoadFailed unsaved change(s); keeping the in-memory list " +
+                    "${mutationsWhileLoadFailed.get()} unsaved change(s); keeping the in-memory list " +
                     "and write protection"
             )
             return false
@@ -1751,9 +1922,60 @@ object DshInstances {
         return true
     }
 
-    /** 同步写（测试用；生产路径请用 [saveAsync]） */
-    internal fun writeNow() {
-        writeManifest(manifestFile(), gson.toJson(Manifest(_instances.value, _selectedId.value)))
+    /** 同步写（测试用；生产路径请用 [saveAsync]）。[excludeId] 见 [manifestSnapshot]。 */
+    internal fun writeNow(excludeId: String? = null) {
+        writeManifest(manifestFile(), gson.toJson(Manifest(manifestSnapshot(excludeId), _selectedId.value)))
+    }
+
+    /**
+     * 写盘快照：`_instances` **加上**尚未提交的待删记录（[pendingDeletes]）。
+     *
+     * ★ r31-s02-conc-03：这样任何一次并发写（[saveAsync] / [delete] 自己的写）都不会"替还在等
+     *   进程离场的 delete 提前提交一次删除"，磁盘在回滚那一刻仍含该实例。
+     * 同一 id 已在内存里时用待删记录**替换**它（而不是跳过）：内存里那份可能是收编出来的空壳，
+     * 而待删记录才是要保住名称/版本/端口的那一份。
+     *
+     * @param excludeId 正在提交删除的那个 id（这次写就是它自己的落盘，必须把它落下）。
+     */
+    private fun manifestSnapshot(excludeId: String? = null): List<DshInstance> {
+        synchronized(pendingDeleteLock) {
+            // ★ fix-r31-103：读取必须与下面的判断/合并在**同一临界区** —— 放在锁外会与
+            //   [rollbackPendingDelete]（锁内先 restore 再撤销登记）交错，读到"实例只在待删表里"的
+            //   旧值、锁内见表已空就直接返回它，把清单写成不含该实例（conc-03 的形态，窗口缩到两次取锁之间）。
+            val current = _instances.value
+            if (pendingDeletes.isEmpty()) return current
+            val out = current.toMutableList()
+            pendingDeletes.values.forEach { pending ->
+                val at = out.indexOfFirst { it.id == pending.id }
+                when {
+                    pending.id == excludeId -> if (at >= 0) out.removeAt(at)
+                    at >= 0 -> out[at] = pending
+                    else -> out += pending
+                }
+            }
+            return out
+        }
+    }
+
+    /** 摘内存 + 登记待删：两步在同一临界区（中间漏一次写就会丢掉该实例）。 */
+    private fun holdPendingDelete(id: String, inst: DshInstance) {
+        synchronized(pendingDeleteLock) {
+            _instances.update { list -> list.filterNot { it.id == id } }
+            pendingDeletes[id] = inst
+        }
+    }
+
+    /** 删除已提交（清单里确实没有它了）：此后任何写都不再把它补回来。 */
+    private fun commitPendingDelete(id: String) {
+        synchronized(pendingDeleteLock) { pendingDeletes.remove(id) }
+    }
+
+    /** 回滚：实例先回到内存、再撤销待删登记（顺序反了会有一个"两边都没有它"的窗口）。 */
+    private fun rollbackPendingDelete(id: String, restore: () -> Unit) {
+        synchronized(pendingDeleteLock) {
+            restore()
+            pendingDeletes.remove(id)
+        }
     }
 
     /**

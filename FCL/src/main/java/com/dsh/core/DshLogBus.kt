@@ -563,7 +563,25 @@ object DshLogBus {
      *   最怕的就是新路径忘了脱敏，把 token 写进 instance-*.log）。
      *   顺带保证同一行在两条流里是**同一个字符串**（含同一个时间戳），对不上号就没法排障。
      */
-    private fun stamp(line: String): String = "${timeFormatter().format(Date())}  ${sanitize(line)}"
+    private fun stamp(line: String): String =
+        "${timeFormatter().format(Date())}  ${escapeLineBreaks(sanitize(line))}"
+
+    /**
+     * ★ F4（R31 / `slice-03-security-F4`）：把行内换行折成可见的 `\n` / `\r` **字面量**。
+     *
+     * 为什么必须在 [stamp]（唯一加工口）做、且不能用"删掉"：落盘是
+     * `joinToString("\n", postfix = "\n")`（[appendToFile]），**行边界由 `\n` 决定**。一条被采信的
+     * 进程输出里带 `\n` 时，原样入库会让它变成多条独立行、各自带自己的时间戳 —— 伪造行随后被
+     * [com.dsh.core.DshRuntime] 的失败归因当真（`recentLogTail` 的 `reason=port-in-use` /
+     * `EADDRINUSE` 判定、[looksLikeSeccompTrouble] 的 seccomp/ptrace 判定）。折成字面量而不是删掉：
+     * 排障时要能看出"这行原本带换行"，删掉会静默改变内容。
+     *
+     * ⚠️ 与 `R31/BL-238`（[rotateIfTooBig] 的按字节裁剪）无交集：本函数只处理**字符串内容**，
+     *   不涉及文件字节/轮转/`fileIoLock`。
+     */
+    private fun escapeLineBreaks(line: String): String =
+        if (line.indexOf('\n') < 0 && line.indexOf('\r') < 0) line
+        else line.replace("\r\n", "\\n").replace('\r', ' ').replace("\n", "\\n")
 
     // --- K27：级别判定（口径迁自 DshLogsUI）-----------------------------------
 
@@ -1031,7 +1049,7 @@ object DshLogBus {
     }
 
     /**
-     * 超过 [FILE_MAX_BYTES] 时只保留尾部一半（按字符切，并丢掉可能被切断的首行）。
+     * 超过 [FILE_MAX_BYTES] 时只保留尾部一半（**按字节**切，并丢掉可能被切断的首行）。
      *
      * K11: serialized on [fileIoLock] (the file-IO monitor), **not** the producer [lock], so a
      * rotation never blocks append()/appendFor(). [appendToFile] already holds [fileIoLock] when it
@@ -1040,19 +1058,43 @@ object DshLogBus {
      *
      * ★ BL-075：读失败不再静默 —— 记进 [lastFileWriteError] 后返回（文件保持超限，下次落盘
      *   再试轮转），而不是无声无息地让文件一直超限。
+     *
+     * ## ★ R31/BL-238：判据与裁剪必须同一个口径（都是字节）
+     *
+     * 旧实现用 `f.length()`（**字节**）判断超限，却用 `text.takeLast(keep)`（**UTF-16 字符**）裁剪。
+     * 本项目的日志主体是中文（`[runtime] 启动 dsh …`），一个汉字 UTF-8 占 3 字节：
+     * 保留 524288 **字符** 写出去是 **1.5 MiB**，仍然超过 1 MiB 上限。
+     *
+     * 更糟的是旧实现的第一个分支 `if (text.length <= keep) text`：
+     * 文件若 1.4 MiB 但只有 47 万汉字（字符数 < keep），会**原样写回，一个字都不裁**。
+     *
+     * 后果不是"文件大一点"：轮转后仍 > 1 MiB ⇒ 下一次 flush 又触发全量 read+write，
+     * 而 flush 间隔 200ms、整段都在 `fileIoLock` 内，**所有实例的日志共用这一把锁**。
+     *
+     * 现有测试 `rotateTruncatesOversizedFileToTail` 全程用 `"line-$n"` 纯 ASCII，
+     * 1 字符 = 1 字节，两个口径恰好相等，把这个 bug 掩盖了。
      */
     private fun rotateIfTooBig(f: File) {
         if (f.length() <= FILE_MAX_BYTES) return
         synchronized(fileIoLock) {
             if (f.length() <= FILE_MAX_BYTES) return
-            val keep = (FILE_MAX_BYTES / 2).toInt()
-            val text = runCatching { f.readText() }.getOrElse { e ->
+            val keepBytes = (FILE_MAX_BYTES / 2).toInt()
+            val bytes = runCatching { f.readBytes() }.getOrElse { e ->
                 lastFileWriteError = "log file rotate failed: ${f.absolutePath} " +
                     "(${e.javaClass.simpleName}${e.message?.let { ": $it" } ?: ""})"
                 return
             }
-            val tail = if (text.length <= keep) text else text.takeLast(keep).substringAfter('\n', "")
-            f.writeText(tail)
+            // 按**字节**取尾部。从 keepBytes 处对齐到一个 UTF-8 字符的起始字节
+            // （continuation byte 形如 10xxxxxx），否则会切出半个汉字。
+            var start = (bytes.size - keepBytes).coerceAtLeast(0)
+            while (start < bytes.size && (bytes[start].toInt() and 0xC0) == 0x80) start++
+            var tail = if (start == 0) bytes else bytes.copyOfRange(start, bytes.size)
+            // 丢掉可能被切断的首行：从第一个 '\n' 之后开始（全是中文且无换行时保留原样）
+            val newline = tail.indexOf('\n'.code.toByte())
+            if (newline >= 0 && newline + 1 < tail.size) {
+                tail = tail.copyOfRange(newline + 1, tail.size)
+            }
+            f.writeBytes(tail)
         }
     }
 

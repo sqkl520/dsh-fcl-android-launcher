@@ -65,6 +65,21 @@ final class ListChangeBuilder<E> {
         } // If found, no need to do another update
     }
 
+    /**
+     * R31/F-37-01: {@link #nextPermutation} rebuilds {@code addRemoveChanges} with
+     * {@code SubChange.removed == null} (the rebuild only fills it in when it finds a matching
+     * removal). {@link #nextRemove} normalises the *last* sub-change before appending; this helper
+     * does the same for the arbitrary neighbour that {@link #insertRemoved} merges into, so that
+     * every {@code removed.add(...)} below has a list to add to. An empty list merges exactly like
+     * a null one did.
+     */
+    private static <E> List<E> removedListOf(SubChange<E> change) {
+        if (change.removed == null) {
+            change.removed = new ArrayList<E>();
+        }
+        return change.removed;
+    }
+
     private void insertRemoved(int pos, final E removed) {
         int idx = findSubChange(pos, addRemoveChanges);
         if (idx < 0) { // Not found
@@ -72,12 +87,12 @@ final class ListChangeBuilder<E> {
             SubChange<E> change;
 
             if (idx > 0 && (change = addRemoveChanges.get(idx - 1)).to == pos) {
-                change.removed.add(removed);
+                removedListOf(change).add(removed);
                 --idx; // Idx index will be used as a starting point for update
             } else if (idx < addRemoveChanges.size() && (change = addRemoveChanges.get(idx)).from == pos + 1) {
                 change.from--;
                 change.to--;
-                change.removed.add(0, removed);
+                removedListOf(change).add(0, removed);
             } else {
                 ArrayList<E> removedList = new ArrayList<E>();
                 removedList.add(removed);
@@ -131,11 +146,16 @@ final class ListChangeBuilder<E> {
             SubChange<E> cur = list.get(i);
             if (prev.to == cur.from) {
                 prev.to = cur.to;
+                // R31/F-37-01: the outer test tolerates a null side, but the addAll below did not —
+                // merging a null `cur.removed` into a non-null `prev.removed` threw NPE. Only merge
+                // when there is actually something to merge.
                 if (prev.removed != null || cur.removed != null) {
                     if (prev.removed == null) {
                         prev.removed = new ArrayList<E>();
                     }
-                    prev.removed.addAll(cur.removed);
+                    if (cur.removed != null) {
+                        prev.removed.addAll(cur.removed);
+                    }
                 }
                 list.set(i, null);
                 ++removed;
@@ -173,6 +193,15 @@ final class ListChangeBuilder<E> {
 
         final SubChange<E> last = addRemoveChanges.isEmpty() ? null
                 : addRemoveChanges.get(addRemoveChanges.size() - 1);
+
+        // R31/F-37-01: nextPermutation() rebuilds addRemoveChanges and creates SubChanges with a
+        // null `removed` list (only filled in when the rebuild finds a matching removal). Appending
+        // to `last.removed` below therefore NPE'd whenever a nextRemove landed adjacent to such a
+        // rebuilt addition in the same change block. Normalise to an empty list first; an empty
+        // list merges exactly like a null one did.
+        if (last != null && last.removed == null) {
+            last.removed = new ArrayList<E>();
+        }
 
         if (last != null && last.to == idx) {
             last.removed.add(removed);

@@ -17,9 +17,10 @@ public class MappedBinding<S, T> extends LazyObjectBinding<T> {
 
     @Override
     protected T computeValue() {
-        S value = source.getValue();
-
-        return value == null ? null : mapper.apply(value);
+        // R31/slice-34-dc-03: a Function must be applied to every source value, null included.
+        // Short-circuiting on null silently skips the mapper's own null handling (see also
+        // util/fakefx/BindingMapping.MappedBinding, which never short-circuits).
+        return mapper.apply(source.getValue());
     }
 
     @Override

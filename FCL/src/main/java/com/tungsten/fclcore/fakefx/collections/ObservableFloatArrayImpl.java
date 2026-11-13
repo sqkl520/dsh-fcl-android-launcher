@@ -91,7 +91,12 @@ public final class ObservableFloatArrayImpl extends ObservableArrayBase<Observab
                 fireChange(sizeChanged, 0, size);
             }
         } else {
-            size = 0;
+            // R31/s38-dc-02: `size = 0` used to run before src.copyTo(...). copyTo() dispatches on
+            // the ObservableFloatArray interface, so it can throw; when it did, size stayed 0
+            // forever, the old contents were partly overwritten and fireChange() never ran — the
+            // observable length was lost with no notification. Keeping the old size until the copy
+            // succeeds means a failure leaves the length intact. Nothing between here and the copy
+            // depends on size (ensureCapacity only looks at array.length).
             ensureCapacity(length);
             src.copyTo(srcIndex, array, 0, length);
             size = length;

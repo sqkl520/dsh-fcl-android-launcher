@@ -201,7 +201,21 @@ public abstract class ListExpressionHelper<E> extends ExpressionHelperBase {
 
         @Override
         protected void fireValueChangedEvent(Change<? extends E> change) {
-            listener.changed(observable, currentValue, currentValue);
+            // R31/slice-34-dc-04: the element-level path used to hand the *same* field value in as
+            // both oldValue and newValue, so ChangeListener saw old == new on every element change
+            // and currentValue stayed at the baseline captured when the helper was created. Refresh
+            // the baseline first (as the no-arg overload above already does), then report the
+            // refreshed instance as the new value and the previous baseline as the old one.
+            final ObservableList<E> oldValue = currentValue;
+            try {
+                currentValue = observable.getValue();
+            } catch (Exception e) {
+                // Same policy as slice-33-err-02: an unreadable baseline is treated as unknown
+                // (null) rather than silently keeping a stale value, and the failure is reported.
+                currentValue = null;
+                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), e);
+            }
+            listener.changed(observable, oldValue, currentValue);
         }
     }
 
@@ -532,8 +546,19 @@ public abstract class ListExpressionHelper<E> extends ExpressionHelperBase {
 
         @Override
         protected void fireValueChangedEvent(final Change<? extends E> change) {
+            // R31/slice-34-dc-04: same defect as SingleChange above — notifyListeners() reads the
+            // *field* currentValue as both the old and the new value, so an element-level change
+            // reported old == new and left the baseline stale. Refresh before notifying; the
+            // previous baseline becomes oldValue, the refreshed instance becomes the new value.
+            final ObservableList<E> oldValue = currentValue;
+            try {
+                currentValue = observable.getValue();
+            } catch (Exception e) {
+                currentValue = null;
+                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), e);
+            }
             final Change<E> mappedChange = (listChangeSize == 0)? null : new SourceAdapterChange<>(observable, change);
-            notifyListeners(currentValue, mappedChange, false);
+            notifyListeners(oldValue, mappedChange, false);
         }
 
         private void notifyListeners(ObservableList<E> oldValue, Change<E> change, boolean noChange) {

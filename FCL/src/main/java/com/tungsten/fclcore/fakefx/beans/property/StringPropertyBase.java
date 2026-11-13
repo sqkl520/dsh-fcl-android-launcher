@@ -128,7 +128,7 @@ public abstract class StringPropertyBase extends StringProperty {
         if (newObservable == null) {
             throw new NullPointerException("Cannot bind to null");
         }
-        if (!newObservable.equals(observable)) {
+        if (newObservable != observable) {
             unbind();
             observable = newObservable;
             if (listener == null) {

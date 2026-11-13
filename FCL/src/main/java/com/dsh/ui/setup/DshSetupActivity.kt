@@ -617,14 +617,19 @@ class DshSetupActivity : FCLActivity() {
                         ).show()
                         return@launch
                     }
+                    // ★ r31-224 / slice-05-dc-f3：删磁盘工件与复位"已完成"标记必须**同一处**发生 ——
+                    //   拆成两行先后调用的话，"删了没复位"这个缺陷形态会在下次改动里原样回来。
+                    //   见 [invalidatePreparedEnvironment]（它就是这条规则本身，单测直接钉）。
                     withContext(Dispatchers.IO) {
-                        runCatching { File(DshPaths.ROOTFS_DIR, "version").delete() }
-                        runCatching { File(DshPaths.SCRIPTS_DIR, "version").delete() }
-                        // 清掉上次解压留下的半成品/备份目录，让"重新开始"从干净状态重跑。
-                        // （.tmp/.old 的可回滚 rename 替换语义与 .old 删除时序仍归 extractRootfs/T-B2，
-                        //  这里只扫"遗留目录"，不介入那条替换逻辑。）
-                        runCatching { File("${DshPaths.ROOTFS_DIR}.tmp").deleteRecursively() }
-                        runCatching { File("${DshPaths.ROOTFS_DIR}.old").deleteRecursively() }
+                        invalidatePreparedEnvironment(this@DshSetupActivity) {
+                            runCatching { File(DshPaths.ROOTFS_DIR, "version").delete() }
+                            runCatching { File(DshPaths.SCRIPTS_DIR, "version").delete() }
+                            // 清掉上次解压留下的半成品/备份目录，让"重新开始"从干净状态重跑。
+                            // （.tmp/.old 的可回滚 rename 替换语义与 .old 删除时序仍归 extractRootfs/T-B2，
+                            //  这里只扫"遗留目录"，不介入那条替换逻辑。）
+                            runCatching { File("${DshPaths.ROOTFS_DIR}.tmp").deleteRecursively() }
+                            runCatching { File("${DshPaths.ROOTFS_DIR}.old").deleteRecursively() }
+                        }
                     }
                     // BL-069：forceExtract 强制重解压 —— 不能退回 beginPrepare() 的无参形态：
                     // version 文件被删 + 布局仍完好时，增量判定可能仍跳过 rootfs 重解
@@ -731,8 +736,7 @@ class DshSetupActivity : FCLActivity() {
     }
 
     private fun markCompleted() {
-        getSharedPreferences("launcher", MODE_PRIVATE)
-            .edit().putBoolean(KEY_SETUP_DONE, true).apply()
+        setCompleted(this, true)
     }
 
     /**
@@ -860,13 +864,50 @@ class DshSetupActivity : FCLActivity() {
     companion object {
         private const val OWNER_SETUP = "setup"
         private const val LOG_TAIL = 4000
-        private const val KEY_SETUP_DONE = "dsh_setup_completed"
 
-        /** 本机是否完成过一次运行环境准备（首启门禁） */
+        /** 本机是否完成过一次运行环境准备（首启门禁）—— 实现见 [DshSetupState]。 */
         @JvmStatic
-        fun isCompleted(context: Context): Boolean =
-            context.getSharedPreferences("launcher", Context.MODE_PRIVATE)
-                .getBoolean(KEY_SETUP_DONE, false)
+        fun isCompleted(context: Context): Boolean = DshSetupState.isCompleted(context)
+
+        /**
+         * 写「本机是否完成过一次运行环境准备」（r31-224 / `slice-05-dc-f3`）。
+         *
+         * 实现落在**顶层 object** [DshSetupState] 而不是这里：本类是 Activity，
+         * JVM 单测 harness 没有 androidx（`run-tests.sh:244` 的 `CP`），连 `Class.forName`
+         * 都会炸在 `AppCompatActivity` 父类链上 —— 写在 companion 里等于把"标记读写"
+         * 这条纯逻辑锁在不可测的位置。
+         */
+        @JvmStatic
+        fun setCompleted(context: Context, completed: Boolean) =
+            DshSetupState.setCompleted(context, completed)
+    }
+}
+
+/**
+ * 「本机是否完成过一次运行环境准备」这一格的读写（r31-224 / `slice-05-dc-f3`）。
+ *
+ * ## 为什么单独抽成 object
+ * 1. **可测**：准备页是 `Activity`，本仓 harness 里连类加载都会炸在 androidx 父类链上
+ *    （先验：`R31StartupChainTest` 的自述）。标记读写本身只依赖 `Context.getSharedPreferences`，
+ *    抽到顶层 object 后可以用一个只认这条链的 Context 直接钉住。
+ * 2. **单一入口**：`isCompleted` / `setCompleted` 与 `KEY_*` 常量放在一起，"怎么算完成"
+ *    只有一处定义。改前只有一个"置真"写点，零个"置假"写点 —— 正是缺陷成立的位置。
+ *
+ * ## 写用 `apply()`
+ * 值必须**立刻**在内存里生效（同进程内 `isCompleted` 马上要读它），但不值得为一次几字节的
+ * 落盘阻塞调用线程。
+ */
+object DshSetupState {
+    private const val PREFS_NAME = "launcher"
+    private const val KEY_SETUP_DONE = "dsh_setup_completed"
+
+    fun isCompleted(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_SETUP_DONE, false)
+
+    fun setCompleted(context: Context, completed: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_SETUP_DONE, completed).apply()
     }
 }
 
@@ -931,3 +972,30 @@ fun setupStepStateRes(
  */
 fun setupStepStateOverwritable(currentRes: Int?): Boolean =
     currentRes == null || currentRes == R.string.dsh_setup_state_waiting
+
+/**
+ * 「重新开始」的**原子语义**：删掉磁盘上的就绪证据，并把持久化的"已完成"标记一起置回 false
+ * （r31-224 / `slice-05-dc-f3`）。
+ *
+ * ## 缺陷本体
+ * `restartFromScratch` 此前删了 `rootfs/version` / `scripts/version` / `.tmp` / `.old`，
+ * 却**从不**复位 `KEY_SETUP_DONE`（全仓只有一处置真写、零处置假写）。于是从删除那一刻到
+ * 重解压真正成功之前，"持久化的已完成"与"磁盘事实"是两个互相矛盾的答案；而解压是**分钟级**
+ * 任务，期间用户切走 / 进程被系统杀掉是常态 —— 下次冷启去问 `isCompleted()` 的那条路
+ * （`SplashActivity.checkScriptsOutdated` 与 `enterDsh`）就会按"已完成"放行。
+ *
+ * ## 为什么做成"一个函数同时管两件事"
+ * 这条缺陷的形态就是**两个动作被写在了两个地方**（而且后者漏了）。把它收成一个"先删证据、
+ * 再置假"的入口之后，"删了没复位"不再是一种可能写出来的代码形状 —— 而单测可以拿一个
+ * 只认 `getSharedPreferences` 的 Context 直接钉住"删之后标记必须为 false"。
+ *
+ * 顺序是**先删磁盘、后置标记**：反过来会留一个"标记已假、磁盘还有证据"的窗口 ——
+ * 那是安全的一侧，但仍会与"用户没真的重启过环境"的事实不符；而本方向最坏只是
+ * "磁盘已空、标记还暂时为真"，紧接着下一句就被纠正，窗口在同一个线程内。
+ *
+ * @param deleteEvidence 删磁盘工件的动作（生产路径上全是 `runCatching`，单测里可以是任意 lambda）
+ */
+fun invalidatePreparedEnvironment(context: Context, deleteEvidence: () -> Unit) {
+    deleteEvidence()
+    DshSetupState.setCompleted(context, false)
+}

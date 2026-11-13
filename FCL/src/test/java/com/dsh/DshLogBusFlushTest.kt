@@ -165,6 +165,72 @@ class DshLogBusFlushTest {
         }
     }
 
+    // --- R31/BL-238：中文日志轮转（字符 vs 字节口径不一致）------------------
+
+    /**
+     * **中文日志轮转后必须仍然 ≤ 1 MiB。**
+     *
+     * ## 为什么这条必须存在
+     *
+     * `rotateIfTooBig`（`DshLogBus.kt:1044-1057`）的两个口径不一致：
+     * - 判断用 `f.length()` —— **字节**
+     * - 裁剪用 `text.takeLast(keep)` —— **UTF-16 字符**
+     *
+     * 中文字符占 3 字节（UTF-8），而 `keep = FILE_MAX_BYTES / 2 = 524288` 字符。
+     * 于是"保留 524288 字符"写出去是 **1.5 MiB**，超过 1 MiB 上限。
+     *
+     * 更糟的是第一个分支：`if (text.length <= keep) text` ——
+     * 文件若 1.4 MiB 但只有 47 万汉字（字符数 < keep），会**原样写回，一个字都不裁**。
+     *
+     * ## 为什么现有测试没抓到
+     *
+     * `rotateTruncatesOversizedFileToTail` 全程用 `"line-$n"` 纯 ASCII，
+     * 1 字符 = 1 字节，两个口径恰好相等，掩盖了不一致。
+     *
+     * ## 后果（不只"文件大一点"）
+     *
+     * 轮转后仍 > 1 MiB ⇒ 下一次 flush 又触发全量 read(1.5M)+write(1.5M)，
+     * 而 flush 间隔是 200ms（`FLUSH_INTERVAL_MS`）⇒ 稳态每 200ms 约 3 MiB 读写。
+     * 且整个读写都在 `fileIoLock` 内，**所有实例的日志共用这一把锁**。
+     */
+    @Test
+    fun rotateKeepsFileUnderLimitForChineseLog() {
+        // ★ R31/BL-238 已修（rotateIfTooBig 改成按字节裁剪）。
+        //   这条测试从"已知缺陷锚点"转为**正常回归守卫** —— 它现在必须绿。
+        //   保留原来的 gating 只为兼容：设 DSH_RUN_KNOWN_BUGS 时行为不变。
+        val dir = Files.createTempDirectory("dsh-rotate-cjk").toFile()
+        try {
+            val f = File(dir, "instance-rotate-cjk.log")
+            // 纯中文行：每行 "第N次运行时错误提示信息" ≈ 13 字符 ≈ 39 字节
+            val sb = StringBuilder()
+            var n = 0
+            while (sb.length <= 1_000_000) {
+                sb.append("第").append(n++).append("次运行时错误提示信息\n")
+            }
+            f.writeText(sb.toString())
+            assertTrue(
+                "前置：文件需超过 1MB（实际 ${f.length()} 字节）",
+                f.length() > 1L * 1024 * 1024
+            )
+            val newest = "第${n - 1}次运行时错误提示信息"
+
+            DshLogBus.rotateFileForTest(f)
+
+            assertTrue(
+                "轮转后必须 ≤ 1 MiB（实际 ${f.length()} 字节）。" +
+                    "若失败：说明 rotateIfTooBig 用字符数裁剪、却用字节数判断 —— " +
+                    "中文 3 字节/字符，保留 524288 字符 = 1.5 MiB。",
+                f.length() <= 1L * 1024 * 1024
+            )
+            assertTrue("轮转后仍需有内容", f.length() > 0)
+            val tail = f.readText()
+            assertTrue("应保留最新的行", tail.contains(newest))
+            assertFalse("最老的行应被裁掉", tail.contains("第0次运行时错误提示信息"))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     // --- BL-079：多路 flush 并发时落盘行序单调 ------------------------------
 
     /**

@@ -11,8 +11,12 @@ import com.tungsten.fclcore.fakefx.collections.ObservableList;
 public abstract class FloatBinding extends FloatExpression implements
         NumberBinding {
 
-    private float value;
-    private boolean valid;
+    // R31/pat-12: same publication fix as IntegerBinding (see the comment there). get() writes
+    // `value` and then publishes it through `valid`; without volatile a reader can observe
+    // valid == true together with a stale value, and a spin loop on isValid() can hoist the load
+    // and never terminate. Kept textually identical across the whole binding family.
+    private volatile float value;
+    private volatile boolean valid;
     private BindingHelperObserver observer;
     private ExpressionHelper<Number> helper = null;
 
@@ -55,7 +59,12 @@ public abstract class FloatBinding extends FloatExpression implements
                 observer = new BindingHelperObserver(this);
             }
             for (final Observable dep : dependencies) {
-                dep.addListener(observer);
+                // R31/s16-eh-04: a null element used to throw here after `observer` had been
+                // created and earlier dependencies already registered, leaving a half-bound binding
+                // that no unbind() can undo. MapBinding/ListBinding/SetBinding already guard this.
+                if (dep != null) {
+                    dep.addListener(observer);
+                }
             }
         }
     }
@@ -69,7 +78,11 @@ public abstract class FloatBinding extends FloatExpression implements
     protected final void unbind(Observable... dependencies) {
         if (observer != null) {
             for (final Observable dep : dependencies) {
-                dep.removeListener(observer);
+                // R31/s16-eh-05: same null guard as bind(); a null element used to throw before
+                // `observer = null`, so the observer stayed registered and could never be removed.
+                if (dep != null) {
+                    dep.removeListener(observer);
+                }
             }
             observer = null;
         }

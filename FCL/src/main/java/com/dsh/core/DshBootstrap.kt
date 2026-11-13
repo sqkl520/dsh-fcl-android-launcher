@@ -535,8 +535,17 @@ object DshBootstrap {
             fail(emit, e.message ?: e.toString())
         } finally {
             _busy.value = false
+            // ★ r31-s02-conc-06（LOW）：**清归属者必须在放互斥之前**。旧顺序是
+            //   `busyGuard.set(false)` → `busyOwner.set(null)`，两句之间另一线程可以在 `:393`
+            //   CAS 成功、在 `:410` 写入自己的 owner，随后被**上一个任务**（本线程）清成 null：
+            //   - `:395` 的 `cur == owner` 幂等判据失效 → 同入口重复点击不再是"重放最新进度"，
+            //     而是 `Failed(dsh_bootstrap_busy)`；
+            //   - `currentOwner()` 在长达数分钟的解压全程返回 null（排障时唯一能对上日志的标识没了）。
+            //   持锁期间 owner 必然是本次任务写的，所以"先清再放"没有清到别人的窗口。
+            //   仍用 compareAndSet(本次 owner, null)：万一将来有人改了所有权协议，这里也不会
+            //   误清一个更新的任务 —— 清不掉就留着，它本来就是对的。
+            busyOwner.compareAndSet(owner, null)
             busyGuard.set(false)
-            busyOwner.set(null)
         }
     }
 

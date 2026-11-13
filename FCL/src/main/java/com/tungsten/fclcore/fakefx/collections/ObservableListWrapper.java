@@ -119,61 +119,82 @@ public class ObservableListWrapper<E> extends ModifiableObservableListBase<E> im
                 elementObserver.detachListener(get(i));
             }
         }
-        if (hasListeners()) {
+        // Captured once: beginChange()/endChange() must be paired, so the decision whether a change
+        // block was opened cannot be re-evaluated in the finally clause.
+        final boolean changing = hasListeners();
+        if (changing) {
             beginChange();
-            nextRemove(0, this);
         }
-        backingList.clear();
-        ++modCount;
-        if (hasListeners()) {
-            endChange();
+        try {
+            if (changing) {
+                nextRemove(0, this);
+            }
+            backingList.clear();
+            ++modCount;
+        } finally {
+            if (changing) {
+                endChange();
+            }
         }
     }
 
     @Override
     public void remove(int fromIndex, int toIndex) {
         beginChange();
-        for (int i = fromIndex; i < toIndex; ++i) {
-            remove(fromIndex);
+        try {
+            for (int i = fromIndex; i < toIndex; ++i) {
+                remove(fromIndex);
+            }
+        } finally {
+            endChange();
         }
-        endChange();
     }
 
     @Override
     public boolean removeAll(Collection<?> c) {
-        beginChange();
+        // Sized BEFORE beginChange(): a null `c` must throw without opening a change block
+        // (a stuck changeLock==1 silently swallows every later notification).
         BitSet bs = new BitSet(c.size());
-        for (int i = 0; i < size(); ++i) {
-            if (c.contains(get(i))) {
-                bs.set(i);
+        beginChange();
+        try {
+            for (int i = 0; i < size(); ++i) {
+                if (c.contains(get(i))) {
+                    bs.set(i);
+                }
             }
-        }
-        if (!bs.isEmpty()) {
-            int cur = size();
-            while ((cur = bs.previousSetBit(cur - 1)) >= 0) {
-                remove(cur);
+            if (!bs.isEmpty()) {
+                int cur = size();
+                while ((cur = bs.previousSetBit(cur - 1)) >= 0) {
+                    remove(cur);
+                }
             }
+        } finally {
+            endChange();
         }
-        endChange();
         return !bs.isEmpty();
     }
 
     @Override
     public boolean retainAll(Collection<?> c) {
-        beginChange();
+        // Sized BEFORE beginChange(): a null `c` must throw without opening a change block
+        // (a stuck changeLock==1 silently swallows every later notification).
         BitSet bs = new BitSet(c.size());
-        for (int i = 0; i < size(); ++i) {
-            if (!c.contains(get(i))) {
-                bs.set(i);
+        beginChange();
+        try {
+            for (int i = 0; i < size(); ++i) {
+                if (!c.contains(get(i))) {
+                    bs.set(i);
+                }
             }
-        }
-        if (!bs.isEmpty()) {
-            int cur = size();
-            while ((cur = bs.previousSetBit(cur - 1)) >= 0) {
-                remove(cur);
+            if (!bs.isEmpty()) {
+                int cur = size();
+                while ((cur = bs.previousSetBit(cur - 1)) >= 0) {
+                    remove(cur);
+                }
             }
+        } finally {
+            endChange();
         }
-        endChange();
         return !bs.isEmpty();
     }
 

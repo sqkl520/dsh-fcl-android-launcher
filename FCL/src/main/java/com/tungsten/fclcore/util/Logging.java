@@ -53,7 +53,29 @@ public final class Logging {
         return message;
     }
 
-    public static void start(Path logFolder) {
+    /**
+     * 启动日志：内存流 + 控制台 + （尽力而为的）文件流。
+     *
+     * ★ R31 / s10-eh-06：本方法原先返回 {@code void}，`FileHandler` 创建失败只
+     *   {@code System.err.println} 一句。Android 上 {@code System.err} 仅进 logcat 环形缓冲，
+     *   **进程崩溃重启后取不回** —— 而"崩了要取证"正是要文件日志的时刻
+     *   （见 FCLPath 里 [M-02] 记录的原始事故）。调用方因此无法判断磁盘日志是否真的可用，
+     *   带着"以为有日志"的状态继续启动。
+     *
+     * 现在把结果**返回**给调用方：null = 磁盘日志可用；非 null = 不可用的原因（已含路径与异常类）。
+     * 返回值是唯一的判断依据 —— 失败原因也会打一份到 {@code System.err}（此时 LOG 还一个 handler
+     * 都没有，且 {@code setUseParentHandlers(false)} 已关掉父级，写 LOG 等于丢进黑洞），
+     * 但**调用方不得依赖 stderr**：那正是本缺陷原来的形态。
+     *
+     * **不抛异常**：本方法在 `FCLApp.onCreate` / `SplashActivity` 冷启动路径上，
+     * 抛 = 闪退循环（SplashActivity 版本更糟：抛 = 停在启动页）。
+     * 所以除了 IOException，还要挡住 `logFolder == null`（`Files.isRegularFile(null)` 抛 NPE，
+     * 而 {@code catch (IOException)} 接不住）和路径非法时的 `InvalidPathException`/`SecurityException`。
+     *
+     * @param logFolder 日志目录；null 或不可创建时降级为"仅内存/控制台日志"
+     * @return 磁盘日志不可用的原因；可写时为 null
+     */
+    public static String start(Path logFolder) {
         LOG.setLevel(Level.ALL);
         LOG.setUseParentHandlers(false);
         LOG.setFilter(record -> {
@@ -62,18 +84,28 @@ public final class Logging {
         });
 
         DefaultFormatter formatter = new DefaultFormatter();
-        try {
-            if (Files.isRegularFile(logFolder))
-                Files.delete(logFolder);
+        String fileFailure = null;
+        if (logFolder == null) {
+            // FCLPath.LOG_DIR 是可空静态字段（loadPaths 失败分支里就是 null）；这里不能让它 NPE
+            fileFailure = "log folder is null; file logging disabled";
+        } else {
+            try {
+                if (Files.isRegularFile(logFolder))
+                    Files.delete(logFolder);
 
-            Files.createDirectories(logFolder);
-            FileHandler fileHandler = new FileHandler(logFolder.resolve("fcl.log").toAbsolutePath().toString());
-            fileHandler.setLevel(Level.FINEST);
-            fileHandler.setFormatter(formatter);
-            fileHandler.setEncoding("UTF-8");
-            LOG.addHandler(fileHandler);
-        } catch (IOException e) {
-            System.err.println("Unable to create fcl.log\n" + StringUtils.getStackTrace(e));
+                Files.createDirectories(logFolder);
+                FileHandler fileHandler = new FileHandler(logFolder.resolve("fcl.log").toAbsolutePath().toString());
+                fileHandler.setLevel(Level.FINEST);
+                fileHandler.setFormatter(formatter);
+                fileHandler.setEncoding("UTF-8");
+                LOG.addHandler(fileHandler);
+            } catch (IOException | RuntimeException e) {
+                // RuntimeException 一并接住：InvalidPathException / SecurityException 都不是
+                // IOException，原先会直接穿出本方法（冷启动路径上抛 = 闪退）。
+                fileFailure = "unable to create " + logFolder.resolve("fcl.log").toAbsolutePath()
+                        + " (" + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage()) + ")";
+                System.err.println("Unable to create fcl.log\n" + StringUtils.getStackTrace(e));
+            }
         }
 
         ConsoleHandler consoleHandler = new ConsoleHandler();
@@ -95,6 +127,10 @@ public final class Logging {
         }
         streamHandler.setLevel(Level.ALL);
         LOG.addHandler(streamHandler);
+
+        // 返回给调用方的是"磁盘日志可用吗"，不是"start 跑完了吗" —— 内存/控制台 handler
+        // 上面已经挂好（磁盘失败不影响它们），但调用方要判断的恰恰是磁盘那一份。
+        return fileFailure;
     }
 
     public static void initForTest() {

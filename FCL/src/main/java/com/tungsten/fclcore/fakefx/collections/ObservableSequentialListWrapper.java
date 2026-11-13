@@ -75,6 +75,14 @@ public final class ObservableSequentialListWrapper<E> extends ModifiableObservab
 
             private final ListIterator<E> backingIt = backingList.listIterator(index);
             private E lastReturned;
+            /**
+             * Index of {@code lastReturned}, captured at the moment {@code next()}/{@code previous()}
+             * returned it. {@code previousIndex()} cannot be used inside {@code remove()}/{@code set()}:
+             * after {@code previous()} the cursor sits BEFORE the returned element, so
+             * {@code previousIndex()} is one less than the element's actual index. This is 0 when
+             * nothing was returned yet -- the backing iterator throws IllegalStateException then.
+             */
+            private int lastReturnedIdx;
 
             @Override
             public boolean hasNext() {
@@ -83,6 +91,7 @@ public final class ObservableSequentialListWrapper<E> extends ModifiableObservab
 
             @Override
             public E next() {
+                lastReturnedIdx = backingIt.nextIndex();
                 return lastReturned = backingIt.next();
             }
 
@@ -93,6 +102,7 @@ public final class ObservableSequentialListWrapper<E> extends ModifiableObservab
 
             @Override
             public E previous() {
+                lastReturnedIdx = backingIt.previousIndex();
                 return lastReturned = backingIt.previous();
             }
 
@@ -109,28 +119,37 @@ public final class ObservableSequentialListWrapper<E> extends ModifiableObservab
             @Override
             public void remove() {
                 beginChange();
-                int idx = previousIndex();
-                backingIt.remove();
-                nextRemove(idx, lastReturned);
-                endChange();
+                try {
+                    int idx = lastReturnedIdx;
+                    backingIt.remove();
+                    nextRemove(idx, lastReturned);
+                } finally {
+                    endChange();
+                }
             }
 
             @Override
             public void set(E e) {
                 beginChange();
-                int idx = previousIndex();
-                backingIt.set(e);
-                nextSet(idx, lastReturned);
-                endChange();
+                try {
+                    int idx = lastReturnedIdx;
+                    backingIt.set(e);
+                    nextSet(idx, lastReturned);
+                } finally {
+                    endChange();
+                }
             }
 
             @Override
             public void add(E e) {
                 beginChange();
-                int idx = nextIndex();
-                backingIt.add(e);
-                nextAdd(idx, idx + 1);
-                endChange();
+                try {
+                    int idx = nextIndex();
+                    backingIt.add(e);
+                    nextAdd(idx, idx + 1);
+                } finally {
+                    endChange();
+                }
             }
         };
     }
@@ -151,8 +170,8 @@ public final class ObservableSequentialListWrapper<E> extends ModifiableObservab
 
     @Override
     public boolean addAll(int index, Collection<? extends E> c) {
+        beginChange();
         try {
-            beginChange();
             boolean modified = false;
             ListIterator<E> e1 = listIterator(index);
             Iterator<? extends E> e2 = c.iterator();
@@ -160,10 +179,11 @@ public final class ObservableSequentialListWrapper<E> extends ModifiableObservab
                 e1.add(e2.next());
                 modified = true;
             }
-            endChange();
             return modified;
         } catch (NoSuchElementException exc) {
             throw new IndexOutOfBoundsException("Index: "+index);
+        } finally {
+            endChange();
         }
     }
 

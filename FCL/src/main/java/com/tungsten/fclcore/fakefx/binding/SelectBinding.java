@@ -50,7 +50,7 @@ public class SelectBinding {
 
         @Override
         public void dispose() {
-            helper.unregisterListener();
+            helper.dispose();
         }
 
         @Override
@@ -97,7 +97,7 @@ public class SelectBinding {
 
         @Override
         public void dispose() {
-            helper.unregisterListener();
+            helper.dispose();
         }
 
         @Override
@@ -147,7 +147,7 @@ public class SelectBinding {
 
         @Override
         public void dispose() {
-            helper.unregisterListener();
+            helper.dispose();
         }
 
         @Override
@@ -197,7 +197,7 @@ public class SelectBinding {
 
         @Override
         public void dispose() {
-            helper.unregisterListener();
+            helper.dispose();
         }
 
         @Override
@@ -247,7 +247,7 @@ public class SelectBinding {
 
         @Override
         public void dispose() {
-            helper.unregisterListener();
+            helper.dispose();
         }
 
         @Override
@@ -297,7 +297,7 @@ public class SelectBinding {
 
         @Override
         public void dispose() {
-            helper.unregisterListener();
+            helper.dispose();
         }
 
         @Override
@@ -347,7 +347,7 @@ public class SelectBinding {
 
         @Override
         public void dispose() {
-            helper.unregisterListener();
+            helper.dispose();
         }
 
         @Override
@@ -386,6 +386,7 @@ public class SelectBinding {
         private final WeakInvalidationListener observer;
 
         private ObservableList<ObservableValue<?>> dependencies;
+        private boolean disposed;
 
         private SelectBindingHelper(Binding<?> binding, ObservableValue<?> firstProperty, String... steps) {
             if (firstProperty == null) {
@@ -488,9 +489,30 @@ public class SelectBinding {
             updateDependencies();
         }
 
+        /**
+         * Releases every listener this helper registered, including the one on the root, and lets
+         * {@link #getDependencies()} converge to an empty list. Idempotent.
+         * <p>
+         * Kept separate from {@code unregisterListener()} on purpose: that one is also used by
+         * {@code onInvalidating()}, which must keep observing the root so the binding can be
+         * recomputed. Removing the root listener there would turn the binding into a dead object.
+         */
+        private void dispose() {
+            if (disposed) {
+                return;
+            }
+            disposed = true;
+            unregisterListener();
+            properties[0].removeListener(observer);
+            updateDependencies();
+        }
+
         private void updateDependencies() {
             if (dependencies != null) {
                 dependencies.clear();
+                if (disposed) {
+                    return;
+                }
                 final int n = properties.length;
                 for (int i = 0; i < n; i++) {
                     if (properties[i] == null) {

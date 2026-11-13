@@ -106,8 +106,31 @@ object DshPaths {
     /** 未初始化时的兜底：返回 false 而不是抛 UninitializedPropertyAccessException */
     fun isUsable(): Boolean = isLoaded && File(ROOT_DIR).isDirectory
 
-    /** 某实例的根目录 */
-    fun instanceDir(instanceId: String): File = File(INSTANCES_DIR, instanceId)
+    /**
+     * ★ F1（R31 / `slice-03-security-F1`）：把 `instanceId` 折成**单个路径分量**。
+     *
+     * 合法 id（`DshInstances.buildId` 的 `inst-<ms>-<seq>-<hex>`）与收编来的目录名**原样返回**
+     * ⇒ `instanceDir` 对它们逐字节恒等，`id ↔ 目录名` 仍是 identity 映射（无需持久化）。
+     * 取「合法路径分量」而不是 id 语法（别改成 `^inst-\d+-\d+-[0-9a-f]+$`）：`File.listFiles()` /
+     * `File.name` 的名字永远非空、不等于 `.`/`..`、不含分隔符，语法白名单会把历史/手工恢复目录名
+     * 挡在门外、静默打断收编（`G2-a` 的假绿）。
+     */
+    fun safeInstanceDirName(instanceId: String): String {
+        val s = instanceId.map { if (it == '/' || it == '\\' || it == '\u0000') '_' else it }.joinToString("")
+        return if (s.isEmpty() || s == "." || s == "..") "_$s" else s
+    }
+
+    /** F1：`instanceId` 是否已是单个合法路径分量（= [safeInstanceDirName] 的恒等点） */
+    fun isSafeInstanceIdComponent(instanceId: String): Boolean = instanceId == safeInstanceDirName(instanceId)
+
+    /**
+     * 某实例的根目录。
+     *
+     * ★ F1（R31）：`File(parent, child)` **不解析也不拒绝** `..`，原样拼接时含 `../` 的 id 在操作
+     *   系统层面会越出 [INSTANCES_DIR]（本文件其余 7 个实例作用域路径全由本函数派生）。合法分量
+     *   **行为完全不变**；越界形态折回本目录内且**不抛异常** —— 清单被手工改坏时让界面还能打开。
+     */
+    fun instanceDir(instanceId: String): File = File(INSTANCES_DIR, safeInstanceDirName(instanceId))
 
     /** 某实例的 DSH_HOME（会话/配置/cookie 都在这，重装 dsh 也不丢） */
     fun instanceHome(instanceId: String): File = File(instanceDir(instanceId), "home")

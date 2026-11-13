@@ -279,7 +279,14 @@ public class ObservableMapWrapper<K, V> implements ObservableMap<K, V>{
 
         @Override
         public boolean remove(Object o) {
-            return ObservableMapWrapper.this.remove(o) != null;
+            // `ObservableMapWrapper.remove` returns the old VALUE, which is null both when the key
+            // was absent and when the key was mapped to null. Set.remove must report whether the
+            // KEY was present, so it cannot be derived from that return value; ask the map.
+            if (!backingMap.containsKey(o)) {
+                return false;
+            }
+            ObservableMapWrapper.this.remove(o);
+            return true;
         }
 
         @Override
@@ -586,7 +593,10 @@ public class ObservableMapWrapper<K, V> implements ObservableMap<K, V>{
         @SuppressWarnings("unchecked")
         public <T> T[] toArray(T[] a) {
             T[] array = backingMap.entrySet().toArray(a);
-            for (int i = 0; i < array.length; ++i) {
+            // Bounded by size(), not array.length: Collection.toArray(T[]) requires the slot right
+            // after the last element to stay null. Looping to array.length wrapped those sentinel
+            // slots in an ObservableEntry around null, so the first getKey() on them threw NPE.
+            for (int i = 0, n = backingMap.size(); i < n; ++i) {
                 array[i] = (T) new ObservableEntry((Entry<K, V>)array[i]);
             }
             return array;

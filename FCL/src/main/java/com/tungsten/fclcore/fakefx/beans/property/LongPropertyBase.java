@@ -155,7 +155,7 @@ public abstract class LongPropertyBase extends LongProperty {
             };
         }
 
-        if (!newObservable.equals(observable)) {
+        if (newObservable != observable) {
             unbind();
             observable = newObservable;
             if (listener == null) {

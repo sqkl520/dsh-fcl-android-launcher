@@ -337,6 +337,8 @@ Version %1$s</string>
     <string name="dsh_settings_desc_home">Where dsh starts in the picker (takes effect after restart). Do not pick the home folder of this instance as your workspace - it holds your API key</string>
     <string name="dsh_home_default_value">%1$s (default)</string>
     <string name="dsh_home_must_be_absolute">Must be an absolute path inside the runtime (starting with /)</string>
+    <string name="dsh_home_no_dot_segments">The path must not contain . or .. segments (use the full path shown below the field)</string>
+    <string name="dsh_home_not_guest_root">Cannot use / — that is the runtime root, not a workspace. Pick a subdirectory such as /opt/dsh/instances/...</string>
     <string name="dsh_settings_row_key">API key</string>
     <string name="dsh_settings_row_key_status">Key status</string>
     <string name="dsh_settings_row_version">Installed dsh</string>
@@ -421,7 +423,7 @@ Version %1$s</string>
          这比白屏更难诊断，所以文案必须把"能看≠能用"这件事说破。
          %1$s = 具体缺失的 API（例如 "Promise.withResolvers (needs 119+)"），
          由运行期真探测得出，不是照版本号猜的。 -->
-    <string name="dsh_webview_compat_message_missing">This device\'s WebView is missing APIs that dsh requires: %1$s. dsh will open and look normal, but it will not actually work — choosing a workspace, sending messages and opening settings all silently fail with no error message. The reliable fix is to tap "Copy link" and open that address in an up-to-date browser (Chrome, Edge, Firefox…). Updating Android System WebView in your app store also works if your phone allows it. Continuing in this app will not make those features work.</string>
+    <string name="dsh_webview_compat_message_missing">This device\'s WebView is missing APIs that dsh requires: %1$s. dsh will open and look normal, but it will not actually work — choosing a workspace, sending messages and opening settings all silently fail with no error message. The recommended fix is to tap "Open in browser" — it also copies the link, so if the browser says authentication is required, long-press the address bar and paste. If you already have Chrome, Edge or Firefox, you can tap "Copy link" and paste it yourself instead. Updating Android System WebView in your app store also works if your phone allows it. Continuing in this app will not make those features work.</string>
     <!-- BL-185：版本串读不出（厂商非标格式）时单独一套文案，把"复制链接"作为第一推荐。
          BL-206：正文不再重复"无法识别版本"（那是标题的话），改为直接陈述读到的原文 ——
          标题 + 正文各说一遍同一件事，会让用户以为框里有两处独立的判断。 -->
@@ -482,4 +484,7 @@ Version %1$s</string>
     <string name="dsh_reinstall_confirm_message">Reinstall %1$s? Dependencies will be downloaded again. If the instance is running, it will be stopped first.</string>
     <!-- R18：改名/改端口在实例运行中修改后的提示（改动需重启才生效） -->
     <string name="dsh_restart_to_apply">Takes effect after restarting the instance</string>
+
+    <!-- R31/BL-229：状态面板上的「去浏览器」按钮（仅链接已复制面板显示） -->
+    <string name="dsh_webview_open_in_browser">Open in browser</string>
 </resources>

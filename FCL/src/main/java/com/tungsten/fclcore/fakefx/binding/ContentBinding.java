@@ -12,10 +12,15 @@ import java.lang.ref.WeakReference;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  */
 public class ContentBinding {
+
+    /** Same JUL logger as {@code com.tungsten.fclcore.util.Logging.LOG} (see BidirectionalBinding). */
+    private static final Logger LOG = Logger.getLogger("FCL");
 
     private static void checkParameters(Object property1, Object property2) {
         if ((property1 == null) || (property2 == null)) {
@@ -85,18 +90,29 @@ public class ContentBinding {
             if (list == null) {
                 change.getList().removeListener(this);
             } else {
-                while (change.next()) {
-                    if (change.wasPermutated()) {
-                        list.subList(change.getFrom(), change.getTo()).clear();
-                        list.addAll(change.getFrom(), change.getList().subList(change.getFrom(), change.getTo()));
-                    } else {
-                        if (change.wasRemoved()) {
-                            list.subList(change.getFrom(), change.getFrom() + change.getRemovedSize()).clear();
-                        }
-                        if (change.wasAdded()) {
-                            list.addAll(change.getFrom(), change.getAddedSubList());
+                // R31/slice-33-err-04: the clear()/addAll() pair below has no rollback path, so a failure
+                // leaves the mirror half-applied. Report it with the target list identity, then let it propagate
+                // unchanged (callers rely on the existing propagation; this must not swallow anything).
+                try {
+                    while (change.next()) {
+                        if (change.wasPermutated()) {
+                            list.subList(change.getFrom(), change.getTo()).clear();
+                            list.addAll(change.getFrom(), change.getList().subList(change.getFrom(), change.getTo()));
+                        } else {
+                            if (change.wasRemoved()) {
+                                list.subList(change.getFrom(), change.getFrom() + change.getRemovedSize()).clear();
+                            }
+                            if (change.wasAdded()) {
+                                list.addAll(change.getFrom(), change.getAddedSubList());
+                            }
                         }
                     }
+                } catch (RuntimeException e) {
+                    // Target-list identity only: calling size() here could itself throw and replace
+                    // the original failure with a secondary one.
+                    LOG.log(Level.WARNING, "Exception while mirroring a list change onto "
+                            + list.getClass().getName(), e);
+                    throw e;
                 }
             }
         }

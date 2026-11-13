@@ -97,6 +97,13 @@ public abstract class StringProperty extends ReadOnlyStringProperty implements
         if ((name != null) && (!name.equals(""))) {
             result.append("name: ").append(name).append(", ");
         }
+        // R31/r31-s24-contract-01: StringPropertyBase.toString() inserts "bound, " when the property
+        // is bound, but this implementation did not — so a JavaBeanStringProperty (which extends this
+        // class and does not override toString) rendered a different shape for the same state.
+        // Only the bound segment is added; the unbound shape stays byte-identical.
+        if (isBound()) {
+            result.append("bound, ");
+        }
         result.append("value: ").append(get()).append("]");
         return result.toString();
     }

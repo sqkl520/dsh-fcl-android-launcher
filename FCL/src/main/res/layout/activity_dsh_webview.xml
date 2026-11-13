@@ -96,6 +96,21 @@
                 android:text="@string/dsh_action_retry"
                 app:ripple="true" />
 
+            <!-- R31/BL-229：**去浏览器**。
+                 只在"链接已复制"面板（GateResume.DeferredPanel）显示，其它状态面板默认 GONE。
+                 为什么需要它：门禁文案首推「复制链接」，但复制完原本只剩「重试/日志/停止」——
+                 用户复制成功了却没有任何指向浏览器的出口，只能自己回桌面找浏览器。
+                 这一支把"复制成功 → 打开浏览器"补成一条完整路径。 -->
+            <com.tungsten.fcllibrary.component.view.FCLButton
+                android:id="@+id/btn_browser"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:minWidth="0dp"
+                android:text="@string/dsh_webview_open_in_browser"
+                android:visibility="gone"
+                app:ripple="true" />
+
             <com.tungsten.fcllibrary.component.view.FCLButton
                 android:id="@+id/btn_logs"
                 android:layout_width="wrap_content"

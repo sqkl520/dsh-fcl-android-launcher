@@ -22,7 +22,9 @@ public class SortHelper {
             a = list.toArray(a);
         } catch (ArrayStoreException e) {
             // this means this is not comparable (used without generics)
-            throw new ClassCastException();
+            ClassCastException cce = new ClassCastException("List element is not Comparable");
+            cce.initCause(e);
+            throw cce;
         }
         int[] result = sort(a);
         ListIterator<T> i = list.listIterator();
@@ -51,12 +53,15 @@ public class SortHelper {
     public <T> int[] sort(T[] a, Comparator<? super T> c) {
         T[] aux = (T[]) a.clone();
         int[] result = initPermutation(a.length);
-        if (c==null)
-            mergeSort(aux, a, 0, a.length, 0);
-        else
-            mergeSort(aux, a, 0, a.length, 0, c);
-        reversePermutation = null;
-        permutation = null;
+        try {
+            if (c==null)
+                mergeSort(aux, a, 0, a.length, 0);
+            else
+                mergeSort(aux, a, 0, a.length, 0, c);
+        } finally {
+            reversePermutation = null;
+            permutation = null;
+        }
         return result;
     }
 
@@ -65,12 +70,15 @@ public class SortHelper {
         rangeCheck(a.length, fromIndex, toIndex);
         T[] aux = (T[])copyOfRange(a, fromIndex, toIndex);
         int[] result = initPermutation(a.length);
-        if (c==null)
-            mergeSort(aux, a, fromIndex, toIndex, -fromIndex);
-        else
-            mergeSort(aux, a, fromIndex, toIndex, -fromIndex, c);
-        reversePermutation = null;
-        permutation = null;
+        try {
+            if (c==null)
+                mergeSort(aux, a, fromIndex, toIndex, -fromIndex);
+            else
+                mergeSort(aux, a, fromIndex, toIndex, -fromIndex, c);
+        } finally {
+            reversePermutation = null;
+            permutation = null;
+        }
         return Arrays.copyOfRange(result, fromIndex, toIndex);
     }
 
@@ -78,9 +86,12 @@ public class SortHelper {
         rangeCheck(a.length, fromIndex, toIndex);
         int[] aux = (int[])copyOfRange(a, fromIndex, toIndex);
         int[] result = initPermutation(a.length);
-        mergeSort(aux, a, fromIndex, toIndex, -fromIndex);
-        reversePermutation = null;
-        permutation = null;
+        try {
+            mergeSort(aux, a, fromIndex, toIndex, -fromIndex);
+        } finally {
+            reversePermutation = null;
+            permutation = null;
+        }
         return Arrays.copyOfRange(result, fromIndex, toIndex);
     }
 

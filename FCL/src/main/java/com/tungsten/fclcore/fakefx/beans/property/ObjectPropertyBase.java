@@ -131,7 +131,7 @@ public abstract class ObjectPropertyBase<T> extends ObjectProperty<T> {
             throw new NullPointerException("Cannot bind to null");
         }
 
-        if (!newObservable.equals(this.observable)) {
+        if (newObservable != this.observable) {
             unbind();
             observable = newObservable;
             if (listener == null) {

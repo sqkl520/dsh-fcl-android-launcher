@@ -30,9 +30,15 @@ set -eu
 # promised in the header comment. `$?` is read first thing, before anything else can clobber it.
 # No other trap exists in this script (verified: only `trap` mentions are the stage-key docs);
 # the trap is thus registered here once and never overwritten.
+# ★ REPORTED（r31-s01-logic-04）：trap 是**补网**，不是**复述**。脚本 5 处显式失败出口各自
+#   已经打印了具名 `[setup] FAILED reason=<真实原因>`，若 trap 再无条件追加一条
+#   `reason=unexpected-exit`，宿主（DshInstaller:1089 收全部 `[setup] FAILED` 行 →
+#   :814 takeLast(3) 拼接）会看到两条，且机器可读的 reason 被换成与真实原因矛盾的值。
+#   故每次具名上报后置位本标志，trap 只在「本次退出还没有任何 FAILED 行」时才补。
+REPORTED=0
 _on_exit() {
   rc=$?
-  if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -ne 0 ] && [ "${REPORTED:-0}" -eq 0 ]; then
     echo "[setup] FAILED reason=unexpected-exit code=$rc" >&2
   fi
 }
@@ -122,14 +128,14 @@ else
   fi
 
   if ! node_ok; then
-    echo "[setup] FAILED reason=node-version node=$(node -v 2>/dev/null || echo none) required=^22.19||>=24" >&2
+    REPORTED=1; echo "[setup] FAILED reason=node-version node=$(node -v 2>/dev/null || echo none) required=^22.19||>=24" >&2
     exit 1
   fi
   echo "[setup] Node OK: $(node -v)"
 fi
 
 if ! npm_ok; then
-  echo "[setup] FAILED reason=npm-missing" >&2
+  REPORTED=1; echo "[setup] FAILED reason=npm-missing" >&2
   exit 1
 fi
 
@@ -192,7 +198,7 @@ verify_tree() {
   return 0
 }
 if ! verify_tree; then
-  echo "[setup] FAILED reason=verify-version" >&2
+  REPORTED=1; echo "[setup] FAILED reason=verify-version" >&2
   exit 1
 fi
 
@@ -218,7 +224,7 @@ if ! smoke; then
   # （门②"树损坏特征"判据本轮明确不做：ERR_MODULE_NOT_FOUND 在非损坏场景也会出现，
   #   误判会少一次自愈。）
   if ! command -v timeout >/dev/null 2>&1; then
-    echo "[setup] FAILED reason=smoke-env detail=timeout-missing" >&2
+    REPORTED=1; echo "[setup] FAILED reason=smoke-env detail=timeout-missing" >&2
     exit 1
   fi
   # 第一趟冒烟失败 → 清树重装（自愈）。
@@ -234,7 +240,7 @@ if ! smoke; then
     # （如 `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…/js-yaml.mjs'`）随 FAILED 行进摘要。
     SMOKE_ERR="$(printf '%s\n' "$SMOKE_OUT" | grep -m1 -E 'Error|error' || true)"
     [ -n "$SMOKE_ERR" ] || SMOKE_ERR="$(printf '%s\n' "$SMOKE_OUT" | head -1)"
-    echo "[setup] FAILED reason=smoke-test detail=$(printf '%s' "$SMOKE_ERR" | head -c 200)" >&2
+    REPORTED=1; echo "[setup] FAILED reason=smoke-test detail=$(printf '%s' "$SMOKE_ERR" | head -c 200)" >&2
     exit 1
   fi
 fi

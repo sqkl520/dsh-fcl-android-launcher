@@ -15,12 +15,23 @@ public class ConvertUtils {
 
     public static int dip2px(Context context, float dpValue) {
         float scare = context.getResources().getDisplayMetrics().density;
-        return (int) (dpValue * scare + 0.5f);
+        return roundToInt(dpValue * scare);
     }
 
     public static int px2dip(Context context, float pxValue) {
         float scare = context.getResources().getDisplayMetrics().density;
-        return (int) (pxValue / scare + 0.5f);
+        return roundToInt(pxValue / scare);
+    }
+
+    /**
+     * 四舍五入到 int，负数按绝对值四舍五入（half away from zero）。
+     *
+     * @implNote 原来两个方向都写 `(int) (v + 0.5f)`；`(int)` 向零截断，`+0.5f` 只在正数域等价于
+     * 四舍五入，负数域把结果朝 +∞ 推（`dip2px(2.0, -3)` 得 -5 而非 -6）。正数分支逐位保持原式，
+     * 故现存调用点行为不变。见 round31 / slice-11-dc-f5。
+     */
+    private static int roundToInt(float value) {
+        return value < 0 ? -(int) (-value + 0.5f) : (int) (value + 0.5f);
     }
 
     public static float d2r(final float n) {

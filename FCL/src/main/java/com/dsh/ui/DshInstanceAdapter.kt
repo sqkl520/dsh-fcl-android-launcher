@@ -174,6 +174,15 @@ class DshInstanceAdapter(
         if (idx >= 0) out += idx
     }
 
+    /**
+     * 实例**此刻**该用的体积键；实例已不在列表里 → `null`（`slice-05-dc-f2`）。
+     *
+     * 读 `items` 而不读 `onBindViewHolder` 的 `inst`：异步回调判"这次读数还有没有意义"时，
+     * 唯一可信的当前事实是 Adapter 手上这一份最新提交，绑定当时的快照早就过期了。
+     */
+    private fun currentSizeKeyOf(id: String): String? =
+        items.firstOrNull { it.id == id }?.let { volumeCacheKey(it.id, it.dshVersion, it.state) }
+
     /** 安装状态变化：只刷新受影响的行。
      *
      *  ★ BL-120 / V4b 方案 A2：带 **payload** 通知。无 payload 的 change 在 DefaultItemAnimator
@@ -547,10 +556,15 @@ class DshInstanceAdapter(
         //   所以安装期既不显示、也**不写 sizeCache**（写了就把安装中那个 31B 留在表里）：
         //   状态转 READY 后键变化、自然重算真实体积。占位用 "-"，与配置页 webUiText
         //   无值时的口径一致（不用"计算中体积" —— 那不是"正在算"，而是"此阶段无从可算"）。
-        if (inst.state == DshInstance.State.INSTALLING) {
+        // ★ r31-224 / slice-05-dc-f2：键与"该作废哪些旧键"由**同一个**决策函数给出 ——
+        //   进入 INSTALLING 就作废本实例的全部旧体积键：同版本重装后键会逐字回到 `id:V:READY`，
+        //   不清就让"重装前那个数字"永久钉在卡片上（本文件此前零 clear/remove 点）。
+        val sizePlan = sizeCachePlan(inst.id, inst.dshVersion, inst.state, sizeCache.keys)
+        sizePlan.keysToEvict.forEach { sizeCache.remove(it) }
+        val sizeKey = sizePlan.key
+        if (sizeKey == null) {
             b.size.text = "-"
         } else {
-            val sizeKey = "${inst.id}:${inst.dshVersion}:${inst.state}"
             val cachedSize = sizeCache[sizeKey]
             if (cachedSize != null) {
                 b.size.text = DshPaths.formatSize(cachedSize)
@@ -558,9 +572,14 @@ class DshInstanceAdapter(
                 b.size.text = ctx.getString(R.string.dsh_size_calculating)
                 if (sizePending.add(sizeKey)) {
                     DshInstances.diskUsageAsync(inst.id) { bytes ->
-                        sizeCache[sizeKey] = bytes
-                        sizePending.remove(sizeKey)
                         mainHandler.post {
+                            // ★ 回调**只能写回"仍是该实例当前键"的那一格**：测量在 IO 线程异步跑，
+                            //   跑完时状态可能已翻页（安装开始/结束、换版本、实例被删）——
+                            //   无条件落表正是"安装期中间值被永久钉住"的那条渠道。
+                            if (sizeCacheEntryUsable(sizeKey, currentSizeKeyOf(inst.id))) {
+                                sizeCache[sizeKey] = bytes
+                            }
+                            sizePending.remove(sizeKey)
                             val idx = items.indexOfFirst { it.id == inst.id }
                             if (idx >= 0) notifyItemChanged(idx)
                         }
@@ -721,3 +740,71 @@ fun isRowBusy(
  */
 fun computeNewIds(current: List<String>, seen: Set<String>): Set<String> =
     current.filterNot { it in seen }.toSet()
+
+/**
+ * 体积缓存键（r31-224 / `slice-05-dc-f2`）。`null` = 这一档**不该显示体积**（安装期）。
+ *
+ * 键必须同时含 id / 版本 / 状态三段：只按 id 缓存会在换版本或状态翻转后仍拿旧数字；
+ * 只按 `id:state` 会在换版本后拿到上一版的体积。前导 `"$id:"` 前缀是给
+ * [sizeCachePlan] 的作废判据用的 —— 两者必须同源，改一处就要改另一处。
+ */
+fun volumeCacheKey(id: String, dshVersion: String?, state: DshInstance.State): String =
+    "$id:${dshVersion}:${state}"
+
+/**
+ * 绑定时的体积缓存决策：这一档用哪个键 + **要作废哪些旧键**。
+ *
+ * ## 为什么要作废旧键（缺陷本体）
+ * 键里的三段在实例生命周期内**可以原封不动地回到旧值**：同版本重装是
+ * `READY → INSTALLING → READY`，版本号不变（`markState` 在 `version == null` 时保留旧值），
+ * 于是重装结束那一帧的键与重装**前**逐字相同 —— 缓存命中旧值、`diskUsageAsync` 不再调度，
+ * 卡片上的体积永远停在重装前的数字，且没有任何入口能让它刷新（全文件无 clear/remove）。
+ * 所以**观察到 `INSTALLING` 时就作废本实例的全部旧键**：安装期正是"目录正在被 npm 重写、
+ * 任何已测数字都已失真"的那个时刻，作废它不会丢掉任何还有效的信息。
+ *
+ * ## 为什么**只在** INSTALLING 作废
+ * 无差别地每次绑定都清，等于把缓存整个废掉 —— 卡片每次重绑都要 walk 一遍 300MB 目录，
+ * 正是本文件那句"绝不每次绑定都去 walk 300MB 目录"要防的事。非安装态没有任何磁盘变化，
+ * 已测的数字仍然有效。
+ *
+ * 作废范围**只按 `id:` 前缀**，不碰别的实例的条目 —— 删掉一个实例不该让全表失效。
+ *
+ * 纯函数（入参是"键快照"，不碰缓存本身），JVM 单测可直接调（先例见 [isRowBusy]）。
+ */
+fun sizeCachePlan(
+    id: String,
+    dshVersion: String?,
+    state: DshInstance.State,
+    cachedKeys: Collection<String>
+): SizeCachePlan = SizeCachePlan(
+    key = if (state == DshInstance.State.INSTALLING) null
+    else volumeCacheKey(id, dshVersion, state),
+    keysToEvict = if (state == DshInstance.State.INSTALLING) sizeCacheKeysToEvict(id, cachedKeys)
+    else emptySet()
+)
+
+/** [sizeCachePlan] 的结论：用哪个键（null = 不显示）、作废哪些键。 */
+data class SizeCachePlan(val key: String?, val keysToEvict: Set<String>)
+
+/**
+ * 该实例名下的全部缓存键。
+ *
+ * 前缀必须带 `:` 终止符：实例 id 之间可以是前缀关系（`i1` / `i10`），
+ * 只按 `id` 匹配会让 `i1` 的作废动作把 `i10` 的条目一起删掉 —— 而 `i10` 的绑定不会因此
+ * 重新测量（它自己的键仍不在表里，但那一帧已经过去了），卡片上的体积就永久停在"计算中"。
+ */
+fun sizeCacheKeysToEvict(id: String, cachedKeys: Collection<String>): Set<String> =
+    cachedKeys.filter { it.startsWith("$id:") }.toSet()
+
+/**
+ * 异步测量结果能不能写进缓存（`slice-05-dc-f2` 的第二个渠道）。
+ *
+ * 测量跑在 IO 线程（`DshInstances.diskUsageAsync`），回调落回主线程时实例的状态**可能已经翻页**：
+ * 请求键与"此刻该用的键"不同、或实例已被删掉（`currentKey == null`），这次读数就不属于任何
+ * 还在屏上的条目 —— 写进去只会把"安装期间测到的中间值"永久钉在某个键上。
+ *
+ * 与 [sizeCachePlan] 不同，这里**不做状态补齐**：请求键是回调自己带回来的，它要么仍然有效，
+ * 要么就该丢弃；不存在"改写到新键"这种正确做法（旧读数对新状态没有意义）。
+ */
+fun sizeCacheEntryUsable(requestKey: String, currentKey: String?): Boolean =
+    currentKey != null && requestKey == currentKey

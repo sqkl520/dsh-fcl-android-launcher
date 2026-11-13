@@ -180,8 +180,66 @@ public class FXCollections {
         return new SynchronizedObservableList<E>(list);
     }
 
-    private static ObservableList EMPTY_OBSERVABLE_LIST = new EmptyObservableList();
+    /**
+     * Process-wide singleton returned by {@link #emptyObservableList()}.
+     *
+     * <p>Raw on purpose: the factory returns it as {@code ObservableList<E>} for any {@code E}
+     * through {@code @SuppressWarnings("unchecked")}, and parametrising the field would only add
+     * a cast at the return site with no runtime benefit. {@code final} because
+     * {@code emptyObservableList()} documents a shared instance - letting the field be
+     * reassigned would silently invalidate that contract for every existing holder.
+     */
+    private static final ObservableList EMPTY_OBSERVABLE_LIST = new EmptyObservableList();
 
+    /**
+     * Returns the process-wide shared empty {@link ObservableList}.
+     *
+     * <p>Every call returns the <b>same instance</b>: it is a singleton, not a fresh view.
+     * {@code emptyObservableList() == emptyObservableList()} is {@code true}, and anything that
+     * compares empty dependency lists by identity relies on that.
+     *
+     * <p>The declared return type is {@code ObservableList<E>} - a writable interface (it
+     * extends {@code java.util.List} and adds six write methods) - but the returned object only
+     * rejects part of them. In detail:
+     *
+     * <ul>
+     *   <li><b>Throws {@link UnsupportedOperationException} (overridden):</b>
+     *       {@code addAll(E...)}, {@code setAll(E...)}, {@code setAll(Collection)},
+     *       {@code removeAll(E...)}, {@code retainAll(E...)},
+     *       {@code remove(int from, int to)}.</li>
+     *   <li><b>Throws {@link UnsupportedOperationException} through the base class:</b>
+     *       {@code add(E)}, {@code add(int, E)}, {@code addAll(Collection)},
+     *       {@code addAll(int, Collection)}, {@code set(int, E)}, {@code remove(int)},
+     *       {@code listIterator().add(E)} - the size is always 0, so these always reach a code
+     *       path that cannot work.</li>
+     *   <li><b>Returns normally (silent) - this is the gap:</b> {@code clear()},
+     *       {@code addAll(Collection)} with an empty collection, {@code addAll(int, Collection)}
+     *       with an empty collection, {@code remove(Object)}, {@code removeAll(Collection)},
+     *       {@code retainAll(Collection)}, {@code removeIf(...)}, {@code sort(Comparator)},
+     *       {@code replaceAll(operator)}, {@code subList(0, 0).clear()}, and draining an
+     *       iterator and then calling {@code remove()}.</li>
+     * </ul>
+     *
+     * <p>Measured on JDK 17.0.20.1. Every row is asserted by {@code R31EmptyListContractTest},
+     * so a behaviour change fails that test. One row differs from
+     * {@link ImmutableObservableList}: {@code iterator().remove()} without a preceding
+     * {@code next()} throws {@link UnsupportedOperationException} here, because this class
+     * overrides {@code iterator()} with a hand-written iterator, while
+     * {@code ImmutableObservableList} inherits {@code AbstractList.Itr} and throws
+     * {@link IllegalStateException}. The two classes are separate implementations and must not
+     * be merged blindly.
+     *
+     * <p>Because the instance is shared process-wide, a write that silently no-ops for one
+     * caller is not observable to any other holder - which is exactly why these cases are
+     * documented instead of being left to be discovered. Making all of them throw was rejected
+     * (see {@link ImmutableObservableList}); a caller that needs a hard rejection guarantee
+     * should wrap the result in {@link #unmodifiableObservableList(ObservableList)}, keeping in
+     * mind that wrapper has the same six-method gap.
+     *
+     * @param <E> the element type, unconstrained - the list is always empty
+     * @return the shared empty list, never {@code null}; do not write to it
+     * @see ImmutableObservableList
+     */
     @SuppressWarnings("unchecked")
     public static<E> ObservableList<E> emptyObservableList() {
         return EMPTY_OBSERVABLE_LIST;

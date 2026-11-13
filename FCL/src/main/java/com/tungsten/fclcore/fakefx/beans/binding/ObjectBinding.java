@@ -11,8 +11,15 @@ import com.tungsten.fclcore.fakefx.collections.ObservableList;
 public abstract class ObjectBinding<T> extends ObjectExpression<T> implements
         Binding<T> {
 
-    private T value;
-    private boolean valid = false;
+    // R31/pat-12: same publication fix as IntegerBinding (see the comment there). get() writes
+    // `value` and then publishes it through `valid`; without volatile a reader can observe
+    // valid == true together with a stale value, and a spin loop on isValid() can hoist the load
+    // and never terminate. Kept textually identical across the whole binding family.
+    // Note this class also writes `value = null` from invalidate() under a check-then-act on
+    // `valid`; volatile makes that write visible to readers but does not make the pair atomic
+    // (it never was, single-threaded semantics are unchanged).
+    private volatile T value;
+    private volatile boolean valid = false;
     private BindingHelperObserver observer;
     private ExpressionHelper<T> helper = null;
 
@@ -55,7 +62,12 @@ public abstract class ObjectBinding<T> extends ObjectExpression<T> implements
                 observer = new BindingHelperObserver(this);
             }
             for (final Observable dep : dependencies) {
-                dep.addListener(observer);
+                // R31/s16-eh-04: a null element used to throw here after `observer` had been
+                // created and earlier dependencies already registered, leaving a half-bound binding
+                // that no unbind() can undo. MapBinding/ListBinding/SetBinding already guard this.
+                if (dep != null) {
+                    dep.addListener(observer);
+                }
             }
         }
     }
@@ -69,7 +81,11 @@ public abstract class ObjectBinding<T> extends ObjectExpression<T> implements
     protected final void unbind(Observable... dependencies) {
         if (observer != null) {
             for (final Observable dep : dependencies) {
-                dep.removeListener(observer);
+                // R31/s16-eh-05: same null guard as bind(); a null element used to throw before
+                // `observer = null`, so the observer stayed registered and could never be removed.
+                if (dep != null) {
+                    dep.removeListener(observer);
+                }
             }
             observer = null;
         }

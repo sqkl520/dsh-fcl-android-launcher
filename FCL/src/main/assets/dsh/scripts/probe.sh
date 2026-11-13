@@ -33,8 +33,11 @@ NARB_DISABLE_NATIVE_CACHE="${NARB_DISABLE_NATIVE_CACHE:-1}"
 export NARB_DISABLE_NATIVE_CACHE
 
 # 前置：rootfs 布局
-if [ ! -x /bin/sh ] && [ ! -x /usr/bin/env ]; then
-  echo "dsh-probe: rootfs-layout = FAIL (no /bin/sh or /usr/bin/env found)"
+# ★ 必须是「任一缺失即失败」（||）。写成 && 时左子句 `[ ! -x /bin/sh ]` 恒假（本脚本正是由
+#   rootfs 内的 /bin/sh 解释执行，执行到这里它必然存在可执行），&& 短路 ⇒ exit 2 永不触发，
+#   /usr/bin/env 缺失会被静默放过并打印 rootfs-layout = ok（r31-s01-logic-01）。
+if [ ! -x /bin/sh ] || [ ! -x /usr/bin/env ]; then
+  echo "dsh-probe: rootfs-layout = FAIL (missing /bin/sh or /usr/bin/env)"
   exit 2
 fi
 echo "dsh-probe: rootfs-layout = ok ($(uname -s 2>/dev/null || echo unknown) $(uname -m 2>/dev/null || echo unknown))"
@@ -112,12 +115,16 @@ try {
 }
 
 // 6) 预装 dsh
+// ★ 附注必须区分两种成因（r31-s01-logic-06）：bin.js 真缺失 vs bin.js 在但 package.json
+//   读不到（解析失败/无 version 都归这里）。拿 dshVer 的真假去代理「文件是否存在」会打印出
+//   `ok (bin.js missing)`——状态 ok、附注却说文件不存在，直接误导排查。
 const binJs = preDir + '/node_modules/@deepseek-ai/dsh/lib/bin.js';
+const binOk = fs.existsSync(binJs);
 let dshVer = '';
 try {
   dshVer = JSON.parse(fs.readFileSync(preDir + '/node_modules/@deepseek-ai/dsh/package.json', 'utf8')).version;
-} catch (e) { /* 读不到就只报 FAIL */ }
-reportCritical('dsh.preinstalled', fs.existsSync(binJs), dshVer ? ('v' + dshVer) : 'bin.js missing');
+} catch (e) { /* 读不到就只报 version unreadable */ }
+reportCritical('dsh.preinstalled', binOk, binOk ? (dshVer ? 'v' + dshVer : 'version unreadable') : 'bin.js missing');
 
 // 7) 原生模块 dlopen（插件扩展的前提）
 const candidates = [

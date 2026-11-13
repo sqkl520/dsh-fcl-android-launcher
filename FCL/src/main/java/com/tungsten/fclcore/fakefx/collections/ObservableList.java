@@ -33,17 +33,29 @@ public interface ObservableList<E> extends List<E>, Observable {
 
     /**
      * Clears the ObservableList and adds all the elements passed as var-args.
+     * <p>
+     * This is an optional operation: it is supported by the modifiable implementations returned by
+     * {@code FXCollections.observableList(...)} (through {@code ModifiableObservableListBase}), and
+     * rejected by read-only implementations - derived views such as {@code SortedList} /
+     * {@code FilteredList}, unmodifiable wrappers, and the immutable/empty/singleton lists.
+     * The {@code @return} contract below therefore only applies to implementations that support it.
+     *
      * @param elements the elements to set
      * @return true (as specified by Collection.add(E))
      * @throws NullPointerException if the specified arguments contain one or more null elements
+     * @throws UnsupportedOperationException if this list does not support the {@code setAll} operation
      */
     public boolean setAll(E... elements);
 
     /**
      * Clears the ObservableList and adds all elements from the collection.
+     * <p>
+     * Optional operation, with the same support split as {@link #setAll(Object[])}.
+     *
      * @param col the collection with elements that will be added to this observableArrayList
      * @return true (as specified by Collection.add(E))
      * @throws NullPointerException if the specified collection contains one or more null elements
+     * @throws UnsupportedOperationException if this list does not support the {@code setAll} operation
      */
     public boolean setAll(Collection<? extends E> col);
 

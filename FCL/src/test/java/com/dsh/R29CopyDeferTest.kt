@@ -51,15 +51,17 @@ class R29CopyDeferTest {
         assertTrue("DeferredPanel 分支体切出来是空的 —— 切片上界选错了，先看主源码的写法", b.trim().isNotEmpty())
 
         assertTrue(
-            "DeferredPanel 分支必须同步调用 showError( —— 否则门禁框已 dismiss、状态面板已收起，" +
-                "整屏无控件（BL-197 的空白页复发）。实际分支体：$b",
-            b.contains("showError(")
+            "DeferredPanel 分支必须同步摆出「已复制」面板 —— 否则门禁框已 dismiss、状态面板已收起，" +
+                "整屏无控件（BL-197 的空白页复发）。R31/BL-229 起通过 showCopiedPanel() 摆，" +
+                "它内部调 showError 并额外显示「去浏览器」按钮。实际分支体：$b",
+            b.contains("showCopiedPanel(") || b.contains("showError(")
         )
         assertTrue(
-            "DeferredPanel 分支必须显示 dsh_webview_gate_copied —— 用户刚点完「复制链接」，" +
-                "面板得明确说「链接已复制」，不能复用「暂未打开 dsh 界面」（BL-206：错误归因更糟）。" +
-                "实际分支体：$b",
-            b.contains("dsh_webview_gate_copied")
+            "DeferredPanel 分支必须落到「链接已复制」这一档（不能复用「暂未打开 dsh 界面」——" +
+                "BL-206：错误归因更糟）。R31/BL-229 起文案与按钮都在 showCopiedPanel() 里，" +
+                "分支里见不到 dsh_webview_gate_copied 字面量是正常的；此时改由下面那条" +
+                "showCopiedPanel 契约测试来钉。实际分支体：$b",
+            b.contains("showCopiedPanel(") || b.contains("dsh_webview_gate_copied")
         )
         assertTrue(
             "DeferredPanel 分支必须置 gateCopied = true —— 否则复制后 Home 往返/切回浏览器回来，" +
@@ -395,4 +397,65 @@ class R29CopyDeferTest {
         }
         return null
     }
+
+    /**
+     * R31/BL-229：「已复制」面板必须真的带着「去浏览器」出口。
+     *
+     * ## 这条测的是什么
+     *
+     * 门禁文案首推「复制链接」，用户照做后原本只剩「重试 / 日志 / 停止」——
+     * 没有任何指向浏览器的入口，用户得自己回桌面找浏览器、长按地址栏粘贴。
+     * 而本机（WebView 114）每次打开界面都要走这一遍。
+     *
+     * 修法是把这件事抽成 showCopiedPanel()：调 showError（摆基础面板）
+     * + 额外显示 btn_browser。这条测试钉住这个组合不被改回去。
+     */
+    @Test
+    fun copiedPanelExposesBrowserButton() {
+        // ★ 不用 `?: fail(...)`：本仓的 JUnit 桩里 fail() 返回 Unit 而非 Nothing，
+        //   Kotlin 会把整个表达式推成 Any?，后面 body.contains 全部编译失败。
+        val found = functionBody(mainSourceText(), "private fun showCopiedPanel(")
+        if (found == null) {
+            fail("找不到 showCopiedPanel() —— BL-229 的修法被删了，或改了名")
+            return
+        }
+        val body = found
+
+        assertTrue(
+            "showCopiedPanel() 必须调 showError( 摆出基础面板，" +
+                "否则状态面板上是旧的 / 空的文案。实际分支体：" + body,
+            body.contains("showError(")
+        )
+        assertTrue(
+            "showCopiedPanel() 必须落 dsh_webview_gate_copied —— 用户刚复制完，" +
+                "面板得说「链接已复制」。实际分支体：" + body,
+            body.contains("dsh_webview_gate_copied")
+        )
+        assertTrue(
+            "showCopiedPanel() 必须把 btn_browser 显示出来 —— 这是 BL-229 的核心：" +
+                "复制完必须有「去浏览器」出口，否则用户不知道下一步去哪。实际分支体：" + body,
+            body.contains("R.id.btn_browser") && body.contains("View.VISIBLE")
+        )
+        // 递归检查：函数体里 showCopiedPanel( 只该出现 1 次（签名自己那一次）
+        assertFalse(
+            "showCopiedPanel() 不许递归调自己 —— 会 StackOverflow。实际分支体：" + body,
+            body.split("showCopiedPanel(").size - 1 > 1
+        )
+    }
+
+    /** R31/BL-229：其它状态面板必须把 btn_browser 藏起来（与当前状态无关的按钮更让人困惑）。 */
+    @Test
+    fun showErrorHidesBrowserButton() {
+        val found = functionBody(mainSourceText(), "private fun showError(")
+        if (found == null) {
+            fail("找不到 showError()")
+            return
+        }
+        val body = found
+        assertTrue(
+            "showError() 必须把 btn_browser 设为 GONE —— 只有「已复制」面板才显示它。实际分支体：" + body,
+            body.contains("R.id.btn_browser") && body.contains("View.GONE")
+        )
+    }
+
 }

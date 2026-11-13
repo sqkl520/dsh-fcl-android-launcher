@@ -132,17 +132,27 @@ public abstract class ModifiableObservableListBase<E> extends ObservableListBase
     public void add(int index, E element) {
         doAdd(index, element);
         beginChange();
-        nextAdd(index, index + 1);
-        ++modCount;
-        endChange();
+        // R31/s38-dc-01: endChange() was not in a finally, so a throwing nextAdd() left the change
+        // block open forever (changeLock never returns to 0, commit() never fires again). The other
+        // 11 transaction sites in this class already use try/finally; do*() stays outside on purpose
+        // so an invalid index throws before the block is opened.
+        try {
+            nextAdd(index, index + 1);
+            ++modCount;
+        } finally {
+            endChange();
+        }
     }
 
     @Override
     public E set(int index, E element) {
         E old = doSet(index, element);
         beginChange();
-        nextSet(index, old);
-        endChange();
+        try {
+            nextSet(index, old);
+        } finally {
+            endChange();
+        }
         return old;
     }
 
@@ -160,9 +170,12 @@ public abstract class ModifiableObservableListBase<E> extends ObservableListBase
     public E remove(int index) {
         E old = doRemove(index);
         beginChange();
-        nextRemove(index, old);
-        ++modCount;
-        endChange();
+        try {
+            nextRemove(index, old);
+            ++modCount;
+        } finally {
+            endChange();
+        }
         return old;
     }
 

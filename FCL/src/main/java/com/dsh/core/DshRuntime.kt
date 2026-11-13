@@ -551,6 +551,14 @@ object DshRuntime {
      */
     private val staleGenNoted = java.util.concurrent.atomic.AtomicLong(-1L)
 
+    /**
+     * ★ N3（round32）：上一次"候选 URL 全被 host/scheme 门拒绝"提示打过哪个 gen。
+     *
+     * 与 [staleGenNoted] 同样的理由：伪造行可能被大量刷入，逐行都记会让实例日志被
+     * 攻击者可控的内容淹没（既费空间，也把真正有用的行挤掉）。每代只提示一次。
+     */
+    private val rejectedUrlNoted = java.util.concurrent.atomic.AtomicLong(-1L)
+
     // --- 启动 ---------------------------------------------------------------
 
     fun runningInstanceId(): String? = (_state.value as? State.Running)?.instanceId
@@ -1229,11 +1237,14 @@ object DshRuntime {
             //   不一致一律不采信：探活 3xx 只证明"该 URL 的端口上有个 dsh 受理这个 token"，
             //   不证明那个端口属于本实例（判据见 [adoptionPortMatches]）。
             //   ③级候选已按同一端口筛过，这里对它们是幂等的。
-            if (!adoptionPortMatches(candidate, port)) {
-                // URL 明文（含 token）不落日志（沿用本函数既有的写回段纪律）：只记端口差。
+            if (!adoptionCandidateAllowed(candidate, port)) {
+                // URL 明文（含 token）不落日志（沿用本函数既有的写回段纪律）：只记端口差与非回环事实。
+                // ★ F2（R31）：**不打印主机名** —— 被污染候选里的主机串本身就是攻击者可控文本
+                //   （会把伪造行写进日志/界面），只记"不是回环"这一事实。
                 DshLogBus.append(
-                    "[runtime] adopted ${instance.name}: adoption candidate port mismatch " +
-                        "(candidate port ${UrlScanner.portOf(candidate)}, expected $port); candidate rejected"
+                    "[runtime] adopted ${instance.name}: adoption candidate rejected " +
+                        "(port ${UrlScanner.portOf(candidate)} vs expected $port; " +
+                        "loopback=${adoptionHostIsLoopback(candidate)}); candidate rejected"
                 )
                 return false
             }
@@ -2043,9 +2054,28 @@ object DshRuntime {
         //   ③脚本 READY port=<n>（兜底：端口可达但 20s 无 token URL 时脚本报的就绪标记，
         //   以裸 URL 走既有 cookie 路径 —— 应用内 WebView 有持久 cookie，与 loadBestUrl
         //   的无 token 分支同形态）。前两级拿不到 URL 时，用第③级合成 http://127.0.0.1:<port>/。
-        val url = UrlScanner.findAuthenticatedUrl(line)
-            ?: UrlScanner.findMarkerUrl(line)
-            ?: UrlScanner.findMarkerPort(line)?.let { "http://127.0.0.1:$it/" }
+        // ★ N3（round32）：三级候选**逐个过 host 门**，被拒就降级到下一级。
+        //   为什么是"降级"而不是"整体当没有 URL"：
+        //   ③级是本地合成的 `http://127.0.0.1:<port>/`，天然通过 —— 若①②被伪造行占据、
+        //   而同一行又带 `READY port=`，降级能让正常路径继续；没有③级时结果为 null，
+        //   与"这行没有 URL"完全同义，不会把坏值漏下去。
+        //   为什么不整行丢弃：这行仍要进实例日志（排障要看真实输出），只是不参与状态变更。
+        val candidates = listOfNotNull(
+            UrlScanner.findAuthenticatedUrl(line),
+            UrlScanner.findMarkerUrl(line),
+            UrlScanner.findMarkerPort(line)?.let { "http://127.0.0.1:$it/" }
+        )
+        val url = candidates.firstOrNull { webUiUrlAllowed(it) }
+        if (url == null && candidates.isNotEmpty() && rejectedUrlNoted.getAndSet(gen) != gen) {
+            // 每代只记一次：攻击者刷行不应放大日志面。只记"有几个候选被拒"，**不打印主机名**
+            // （打印主机名等于把伪造内容抄进日志，是二次污染）。
+            rejectedUrlNoted.set(gen)
+            DshLogBus.appendFor(
+                instance.id,
+                "[runtime] output contained ${candidates.size} candidate URL(s) rejected by the " +
+                    "loopback/scheme gate (gen=$gen); none written to state"
+            )
+        }
         // 先注册 token（若有）再判世代：旧 run 首次出现的 token 同样要脱敏
         url?.let { UrlScanner.tokenOf(it)?.let { t -> DshLogBus.registerSecret(t) } }
         if (gen != runGen) {
@@ -2569,6 +2599,57 @@ fun adoptionPortMatches(candidate: String?, expectedPort: Int): Boolean {
     return UrlScanner.portOf(candidate) == expectedPort
 }
 
+/**
+ * ★ F2（R31 / `slice-03-security-F2`）：认领候选的**完整**采信判据 = 端口一致 **且** 主机回环。
+ *
+ * 为什么必须有主机这一道：dsh 只绑回环（[DshRuntime] 的 `HOST=127.0.0.1`），而候选的 ③级来源
+ * `dsh-start-*.log` 落在 `TMP_DIR`，`ProotCommand` 把它 `--bind` 成 rootfs 的 `/tmp` ——
+ * **rootfs 内可写**。只比端口时，rootfs 里写一行 `http://<任意主机>:<本实例端口>/?token=x` 就能
+ * 让宿主向该主机发 GET（[Probe.probeTokenUrl]），对方回 3xx 即判 live，随后被写进侧车/pid 文件
+ * 并成为 `state.url`（投毒粘滞）。
+ *
+ * 拦截**必须在网络调用之前**：探活返回 null（异常/超时）会进 tentative 并在无 live 候选时被采用
+ * （[DshRuntime.adoptOrphan] 的 `:1289-1295`），若靠在探活里"让请求失败"来拦，等于把"被拦截"
+ * 翻译成"暂定采信"，比不拦更糟。①pid / ②侧车（`tryCandidate`）与 ③收集端共用本判据，
+ * 免得再出现 BL-176 那种"某一级少一道门"的口径漂移。
+ *
+ * 主机只从 [UrlScanner.hostOf] 取（不回退正则）：解析不出就不采信 —— 正常 dsh 只打印
+ * `127.0.0.1`，正常路径无损。
+ */
+fun adoptionCandidateAllowed(candidate: String?, expectedPort: Int): Boolean =
+    adoptionPortMatches(candidate, expectedPort) && adoptionHostIsLoopback(candidate)
+
+/** F2：候选主机是否回环（单独暴露，供拒绝路径的诊断日志只记"是否回环"而不打印主机名） */
+fun adoptionHostIsLoopback(candidate: String?): Boolean {
+    val host = UrlScanner.hostOf(candidate)?.lowercase() ?: return false
+    return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+}
+
+/**
+ * ★ N3（round32）：一个 URL 是否允许作为**应用内 WebView 的加载目标**。
+ *
+ * 与 [adoptionCandidateAllowed] 的分工：那条是"这段输出能不能被**认领**成孤儿进程的地址"
+ * （额外要求端口匹配），这条是"这个 URL 能不能被**渲染**"。两者的主机判据必须一致 ——
+ * 所以这里直接委托 [adoptionHostIsLoopback]，不重抄 `127.0.0.1`/`localhost`/`::1` 清单。
+ * 抄第二份清单就是下一次口径漂移的种子（`adoptionCandidateAllowed` 的 KDoc 亲口警告过）。
+ *
+ * 为什么需要它：`onProcessLine` 采信的 URL 会一路走到 `DshWebViewActivity.loadUrlChecked`
+ * 的 `webView.loadUrl(url)`。而 `MARKER_URL` 只要求"非空白"、`AUTH_URL` 只要求"像 http(s) URL"，
+ * 两者都不校验主机。rootfs 内任何能写 `/tmp/dsh-start-*.log` 的代码
+ * （`ProotCommand` 把 `<cacheDir>/dsh/tmp` bind 成 rootfs 的 `/tmp`）追加一行
+ * `dsh web: https://evil.example:443/?token=x` 就能把加载目标改走。
+ * http 变体会被 `network_security_config.xml` 的 `cleartextTrafficPermitted=false` 拦下，
+ * 但 **https 变体能真正渲染**，且同一条 URL 还会流到设置页显示与外跳（绕过 App 的 NSC）。
+ *
+ * 只判 host 是不够的 —— `UrlScanner.hasHttpScheme` 拦 scheme，这里拦 host，
+ * 两处各自独立实现：一处被改坏，另一处仍能挡住。
+ */
+fun webUiUrlAllowed(url: String?): Boolean {
+    if (url == null) return false
+    if (!UrlScanner.hasHttpScheme(url)) return false
+    return adoptionHostIsLoopback(url)
+}
+
 /** 端口连通性探测（判断孤儿进程是否还活着、是否已就绪） */
 object Probe {
     fun isPortOpen(port: Int, timeoutMs: Int = 800): Boolean = runCatching {
@@ -2633,10 +2714,36 @@ object UrlScanner {
     private val ANY_URL = Regex("""https?://(?:[\w\-.]+|\d+\.\d+\.\d+\.\d+):(\d+)""")
 
     fun findAuthenticatedUrl(line: String): String? =
-        AUTH_URL.find(line)?.value
+        AUTH_URL.find(line)?.value?.takeIf { hasHttpScheme(it) }
 
     fun findMarkerUrl(line: String): String? =
-        MARKER_URL.find(line)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+        MARKER_URL.find(line)?.groupValues?.getOrNull(1)?.trim()
+            ?.takeIf { it.isNotEmpty() && hasHttpScheme(it) }
+
+    /**
+     * ★ N3（round32）：这个 URL 最终会进 `webView.loadUrl`，所以**必须**限定 scheme。
+     *
+     * 红队实测（JDK 17，逐条跑过正则）：`MARKER_URL` 是 `(?i)READY\s+url=(\S+)`，
+     * 只要求"非空白"，于是下面这些都能被原样采信并送进 `loadUrl`：
+     * - `javascript:alert(1)//?token=x` —— `loadUrl` 会**执行**脚本（同源上下文里）
+     * - `file:///root/home/.credentials.yaml` —— 读取 rootfs 内任意文件
+     * - `data:text/html,<b>x</b>` —— 渲染任意内容
+     * - `intent://evil#Intent;end` —— 交给系统解析，可外跳任意组件
+     *
+     * `AUTH_URL` 自带 `https?://` 前缀，对 http/https **已经是安全的**，但它同样会被
+     * `https://evil.example:443/?token=x` 命中 —— host 门由调用方（`onProcessLine`）负责，
+     * 这里只做 scheme 白名单，两件事分开、各自可测。
+     *
+     * 为什么白名单而不是黑名单：`loadUrl` 接受的 scheme 随 WebView 版本变化，黑名单必然漏。
+     *
+     * ★ N3：改成 `internal` 并更名 `hasHttpScheme`，供顶层 [webUiUrlAllowed] 复用 ——
+     *   与 host 门共用同一份 scheme 判据，避免两处写出不同前缀集合。
+     */
+    internal fun hasHttpScheme(url: String?): Boolean {
+        if (url == null) return false
+        val lower = url.lowercase()
+        return lower.startsWith("http://") || lower.startsWith("https://")
+    }
 
     /** 解析 `READY port=<n>`（>0 才返回；见 [MARKER_PORT]） */
     fun findMarkerPort(line: String): Int? =
@@ -2646,6 +2753,18 @@ object UrlScanner {
         val p = java.net.URI(url).port
         if (p > 0) p else null
     }.getOrNull() ?: ANY_URL.find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+    /**
+     * ★ F2（R31）：取 host（只取 `java.net.URI`，**不回退正则**）。
+     *
+     * 回退正则会重演 `portOf` 的老问题面：解析不出权威段时给出一个"看起来像"的 host 更像
+     * 误采信。这里取严——取不到就是 `null`，由 [adoptionHostIsLoopback] 判 false。
+     * 实测（JDK 17）：`http://my_host:3080/…` 的 `getHost()` 是 null（`_` 非法），
+     * `http://[::1]:3080/…` 是 `[::1]`（**带方括号**），`http://user@127.0.0.1:…` 是 `127.0.0.1`。
+     */
+    fun hostOf(url: String?): String? = runCatching {
+        url?.let { java.net.URI(it).host }
+    }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     fun tokenOf(url: String): String? =
         Regex("""[?&]token=([A-Za-z0-9_\-]+)""").find(url)?.groupValues?.getOrNull(1)
@@ -2782,10 +2901,14 @@ object ProcessUtil {
                             String(buf, 0, n, Charsets.UTF_8)
                         }
                     }
-                    // 逐行扫（与 onProcessLine 同一解析器，口径一致）；端口过滤防跨实例串台
+                    // 逐行扫（与 onProcessLine 同一解析器，口径一致）；端口+回环双重过滤防跨实例
+                    // 串台与 rootfs 内投毒（★ F2 / R31）：`/tmp` 对 rootfs 可写，只比端口时任意主机
+                    // 的候选都能进列表。这里与 `tryCandidate` 共用 [adoptionCandidateAllowed]。
                     text.lineSequence().forEach { line ->
                         UrlScanner.findAuthenticatedUrl(line)?.let { url ->
-                            if (UrlScanner.portOf(url) == expectedPort && out.size < MAX_TOKEN_URL_CANDIDATES) {
+                            if (adoptionCandidateAllowed(url, expectedPort) &&
+                                out.size < MAX_TOKEN_URL_CANDIDATES
+                            ) {
                                 out += url
                             }
                         }

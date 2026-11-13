@@ -69,6 +69,14 @@ public final class Bindings {
                 super.unbind(dependencies);
             }
 
+            /**
+             * Returns an immutable list of the dependencies of this binding.
+             *
+             * <p>With no dependencies this returns {@link FXCollections#emptyObservableList()},
+             * the process-wide shared empty list. Only part of its write methods reject; see
+             * {@link FXCollections#emptyObservableList()} for exactly which ones throw and which
+             * silently do nothing.
+             */
             @Override
             public ObservableList<?> getDependencies() {
                 return  ((dependencies == null) || (dependencies.length == 0))?
@@ -100,6 +108,14 @@ public final class Bindings {
                 super.unbind(dependencies);
             }
 
+            /**
+             * Returns an immutable list of the dependencies of this binding.
+             *
+             * <p>With no dependencies this returns {@link FXCollections#emptyObservableList()},
+             * the process-wide shared empty list. Only part of its write methods reject; see
+             * {@link FXCollections#emptyObservableList()} for exactly which ones throw and which
+             * silently do nothing.
+             */
             @Override
             public ObservableList<?> getDependencies() {
                 return  ((dependencies == null) || (dependencies.length == 0))?
@@ -131,6 +147,14 @@ public final class Bindings {
                 super.unbind(dependencies);
             }
 
+            /**
+             * Returns an immutable list of the dependencies of this binding.
+             *
+             * <p>With no dependencies this returns {@link FXCollections#emptyObservableList()},
+             * the process-wide shared empty list. Only part of its write methods reject; see
+             * {@link FXCollections#emptyObservableList()} for exactly which ones throw and which
+             * silently do nothing.
+             */
             @Override
             public ObservableList<?> getDependencies() {
                 return  ((dependencies == null) || (dependencies.length == 0))?
@@ -3897,7 +3921,11 @@ public final class Bindings {
 
             @Override
             public void dispose() {
-                super.unbind(op);
+                // R31/fix-245: must mirror the bind above. `super.bind(op, key)` registers the
+                // helper observer on BOTH dependencies, so unbinding only `op` left the observer
+                // attached to `key` forever (a permanent leak; `key` is usually long-lived).
+                // `unbind` is varargs, so passing the same pair restores the symmetry.
+                super.unbind(op, key);
             }
 
             @Override

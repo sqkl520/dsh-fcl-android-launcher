@@ -91,7 +91,9 @@ public class ObservableIntegerArrayImpl extends ObservableArrayBase<ObservableIn
                 fireChange(sizeChanged, 0, size);
             }
         } else {
-            size = 0;
+            // R31/s38-dc-02: see ObservableFloatArrayImpl — `size = 0` before src.copyTo(...) turns a
+            // throwing copy into a permanently-zero length with the old contents partly overwritten
+            // and no notification. Keep the old length until the copy succeeds.
             ensureCapacity(length);
             src.copyTo(srcIndex, array, 0, length);
             size = length;

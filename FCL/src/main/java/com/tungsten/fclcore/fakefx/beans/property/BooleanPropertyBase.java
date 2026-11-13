@@ -79,6 +79,25 @@ public abstract class BooleanPropertyBase extends BooleanProperty {
         ExpressionHelper.fireValueChangedEvent(helper);
     }
 
+    /*
+     * The if (valid) gate below is deliberately kept as-is, and it carries two
+     * properties at once:
+     *
+     * 1. Idempotence. Once the value is invalid, further markInvalid() calls are
+     *    no-ops until somebody calls get(), which re-arms valid. This is what keeps
+     *    a single edit from producing duplicate notifications, and it is the reason
+     *    invalidation notifications are coalesced while the value stays unread.
+     * 2. Coalescing. Consecutive set(boolean) calls with no intervening get()
+     *    therefore produce exactly one notification, not one per call. The value is
+     *    not lost - get() always returns the newest one - but the notification count
+     *    is not per-set.
+     *
+     * Both properties are intentional. They are pinned by regression tests that
+     * assert the notification counts for the zero-listener / invalidation-only /
+     * change-listener paths separately. Do not move "valid = false" after
+     * fireValueChangedEvent(), and do not drop the gate: either change would flip
+     * the coalescing guarantee the rest of this family relies on.
+     */
     private void markInvalid() {
         if (valid) {
             valid = false;
@@ -142,7 +161,7 @@ public abstract class BooleanPropertyBase extends BooleanProperty {
         final ObservableBooleanValue newObservable = (rawObservable instanceof ObservableBooleanValue) ? (ObservableBooleanValue) rawObservable
                 : new ValueWrapper(rawObservable);
 
-        if (!newObservable.equals(observable)) {
+        if (newObservable != observable) {
             unbind();
             observable = newObservable;
             if (listener == null) {

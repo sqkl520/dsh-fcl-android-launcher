@@ -35,6 +35,20 @@ public abstract class StringFormatter extends StringBinding {
         return dependencies.toArray(new ObservableValue[dependencies.size()]);
     }
 
+    /**
+     * Forces the format check. The exception must keep propagating to the caller — only the
+     * registration made by the constructor is undone here so it cannot outlive the failed instance.
+     */
+    private static StringFormatter checkFormat(StringFormatter formatter) {
+        try {
+            formatter.get();
+        } catch (RuntimeException | Error ex) {
+            formatter.dispose();
+            throw ex;
+        }
+        return formatter;
+    }
+
     public static StringExpression convert(final ObservableValue<?> observableValue) {
         if (observableValue == null) {
             throw new NullPointerException("ObservableValue must be specified");
@@ -73,7 +87,7 @@ public abstract class StringFormatter extends StringBinding {
         if (args.length == 1) {
             final Object cur = args[0];
             return cur instanceof ObservableValue ? convert((ObservableValue<?>) cur)
-                    : StringConstant.valueOf(cur.toString());
+                    : StringConstant.valueOf(String.valueOf(cur));
         }
         if (extractDependencies(args).length == 0) {
             final StringBuilder builder = new StringBuilder();
@@ -82,14 +96,17 @@ public abstract class StringFormatter extends StringBinding {
             }
             return StringConstant.valueOf(builder.toString());
         }
+        // Snapshot the dependencies once: bind(), unbind() and getDependencies() must all refer to
+        // the same set even if the caller reuses and mutates the array it passed in.
+        final ObservableValue<?>[] dependencies = extractDependencies(args);
         return new StringFormatter() {
             {
-                super.bind(extractDependencies(args));
+                super.bind(dependencies);
             }
 
             @Override
             public void dispose() {
-                super.unbind(extractDependencies(args));
+                super.unbind(dependencies);
             }
 
             @Override
@@ -104,7 +121,7 @@ public abstract class StringFormatter extends StringBinding {
             @Override
             public ObservableList<ObservableValue<?>> getDependencies() {
                 return FXCollections.unmodifiableObservableList(FXCollections
-                        .observableArrayList(extractDependencies(args)));
+                        .observableArrayList(dependencies));
             }
         };
     }
@@ -116,14 +133,16 @@ public abstract class StringFormatter extends StringBinding {
         if (extractDependencies(args).length == 0) {
             return StringConstant.valueOf(String.format(locale, format, args));
         }
+        // Snapshot the dependencies once (see concat).
+        final ObservableValue<?>[] dependencies = extractDependencies(args);
         final StringFormatter formatter = new StringFormatter() {
             {
-                super.bind(extractDependencies(args));
+                super.bind(dependencies);
             }
 
             @Override
             public void dispose() {
-                super.unbind(extractDependencies(args));
+                super.unbind(dependencies);
             }
 
             @Override
@@ -135,12 +154,10 @@ public abstract class StringFormatter extends StringBinding {
             @Override
             public ObservableList<ObservableValue<?>> getDependencies() {
                 return FXCollections.unmodifiableObservableList(FXCollections
-                        .observableArrayList(extractDependencies(args)));
+                        .observableArrayList(dependencies));
             }
         };
-        // Force calculation to check format
-        formatter.get();
-        return formatter;
+        return checkFormat(formatter);
     }
 
     public static StringExpression format(final String format, final Object... args) {
@@ -150,14 +167,16 @@ public abstract class StringFormatter extends StringBinding {
         if (extractDependencies(args).length == 0) {
             return StringConstant.valueOf(String.format(format, args));
         }
+        // Snapshot the dependencies once (see concat).
+        final ObservableValue<?>[] dependencies = extractDependencies(args);
         final StringFormatter formatter = new StringFormatter() {
             {
-                super.bind(extractDependencies(args));
+                super.bind(dependencies);
             }
 
             @Override
             public void dispose() {
-                super.unbind(extractDependencies(args));
+                super.unbind(dependencies);
             }
 
             @Override
@@ -169,11 +188,9 @@ public abstract class StringFormatter extends StringBinding {
             @Override
             public ObservableList<ObservableValue<?>> getDependencies() {
                 return FXCollections.unmodifiableObservableList(FXCollections
-                        .observableArrayList(extractDependencies(args)));
+                        .observableArrayList(dependencies));
             }
         };
-        // Force calculation to check format
-        formatter.get();
-        return formatter;
+        return checkFormat(formatter);
     }
 }

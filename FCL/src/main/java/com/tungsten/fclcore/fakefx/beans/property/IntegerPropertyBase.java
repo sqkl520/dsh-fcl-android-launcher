@@ -164,7 +164,7 @@ public abstract class IntegerPropertyBase extends IntegerProperty {
             };
         }
 
-        if (!newObservable.equals(observable)) {
+        if (newObservable != observable) {
             unbind();
             observable = newObservable;
             if (listener == null) {

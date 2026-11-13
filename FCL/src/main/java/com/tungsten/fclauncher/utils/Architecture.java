@@ -34,13 +34,22 @@ public class Architecture {
      * Tells the device supported architecture.
      * Since mips(/64) has been phased out long ago, is isn't checked here.
      *
-     * @return ARCH_ARM || ARCH_ARM64 || ARCH_X86 || ARCH_86_64
+     * [round31/s10-eh-08] 探测失败必须与"确认是 ARM"可区分：原先非 x86 分支直接落到
+     * `return is64BitsDevice() ? ARCH_ARM64 : ARCH_ARM`，于是"ABI 一个都认不出来"与
+     * "确认是 ARM64"返回同一个值，{@link #UNSUPPORTED_ARCH} 这个专门为失败设计的哨兵
+     * 在本方法出口不可达，调用方失去拒绝执行的机会。
+     *
+     * @return ARCH_ARM || ARCH_ARM64 || ARCH_X86 || ARCH_86_64 || UNSUPPORTED_ARCH（探测失败）
      */
     public static int getDeviceArchitecture() {
         if (isx86Device()) {
             return is64BitsDevice() ? ARCH_X86_64 : ARCH_X86;
         }
-        return is64BitsDevice() ? ARCH_ARM64 : ARCH_ARM;
+        // isArmDevice() 现在对"认不出的 ABI"返回 false（见该方法），这里才能落到哨兵上。
+        if (isArmDevice()) {
+            return is64BitsDevice() ? ARCH_ARM64 : ARCH_ARM;
+        }
+        return UNSUPPORTED_ARCH;
     }
 
     /**
@@ -62,10 +71,26 @@ public class Architecture {
     /**
      * Tell is the device is based on an arm processor.
      * It doesn't tell if the device is 64 or 32 bits.
+     *
+     * [round31/s10-eh-08] 原实现是 `return !isx86Device()` —— 它同时把"x86"与"什么都不认识"
+     * 判成 arm，于是 {@link #archAsInt} 认不出的 ABI（返回 {@link #UNSUPPORTED_ARCH}）会被当成
+     * "确认是 ARM"，{@link #getDeviceArchitecture()} 里那个专门为失败设计的哨兵在出口不可达。
+     *
+     * 现在多要求一条"ABI 列表里真有一项能映射到 ARM"：**唯一**的行为差异就是"认不出的 ABI"
+     * 由 true 变 false。其余情形刻意保持不变（x86 设备 false；arm 设备 true；同时报 arm 与
+     * x86 的多 ABI 设备仍 false —— 与 {@link #getDeviceArchitecture()} 的 x86 优先口径一致，
+     * 见 {@link #isx86Device()} 里 asus zenfone 的注释）。
+     *
      * @return Whether or not the device is arm based.
      */
     public static boolean isArmDevice() {
-        return !isx86Device();
+        if (isx86Device()) return false;
+        String[] ABI = is64BitsDevice() ? Build.SUPPORTED_64_BIT_ABIS : Build.SUPPORTED_32_BIT_ABIS;
+        int comparedArch = is64BitsDevice() ? ARCH_ARM64 : ARCH_ARM;
+        for (String str : ABI) {
+            if (archAsInt(str) == comparedArch) return true;
+        }
+        return false;
     }
 
     /**

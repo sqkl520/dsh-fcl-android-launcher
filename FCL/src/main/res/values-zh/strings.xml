@@ -331,6 +331,8 @@
     <string name="dsh_settings_desc_home">目录选择器的起始位置（重启后生效）；不要把实例的 home 目录选成工作区——那里存着 API Key</string>
     <string name="dsh_home_default_value">%1$s（默认）</string>
     <string name="dsh_home_must_be_absolute">必须是运行环境内的绝对路径（以 / 开头）</string>
+    <string name="dsh_home_no_dot_segments">路径里不能包含 . 或 .. 这样的相对段（请填写输入框下方显示的完整路径）</string>
+    <string name="dsh_home_not_guest_root">不能用 / —— 那是运行环境的根目录，不是工作区。请选一个子目录，例如 /opt/dsh/instances/...</string>
     <string name="dsh_settings_row_key">API Key</string>
     <string name="dsh_settings_row_key_status">连接状态</string>
     <string name="dsh_settings_row_version">已安装 dsh</string>
@@ -402,7 +404,7 @@
          但任何需要后端的操作都是死的（选工作区永远「正在加载」、发不出消息、设置打不开），
          而且没有任何报错，用户只会觉得"卡"/"慢"。这比白屏更难诊断。
          %1$s = 具体缺失的 API（运行期真探测得出，不是照版本号猜的）。 -->
-    <string name="dsh_webview_compat_message_missing">本机 WebView 缺少 dsh 必需的接口：%1$s。dsh 界面会正常打开、看起来没问题，但实际上用不了——选择工作区、发送消息、打开设置都会静默失败，不会有任何报错。可靠的做法是点「复制链接」，把地址粘贴到已更新的浏览器里打开（Chrome、Edge、Firefox 等）。在应用商店更新「Android System WebView」也可能有效（取决于手机是否允许更新）。在这台设备上点「仍要继续」不会让这些功能恢复。</string>
+    <string name="dsh_webview_compat_message_missing">本机 WebView 缺少 dsh 必需的接口：%1$s。dsh 界面会正常打开、看起来没问题，但实际上用不了——选择工作区、发送消息、打开设置都会静默失败，不会有任何报错。推荐做法是点「浏览器」——链接会自动复制一份，浏览器里若提示需要认证，长按地址栏粘贴即可（做一个完整链路）。如果你已装了 Chrome、Edge、Firefox 等，也可以点「复制链接」自己粘贴。在应用商店更新「Android System WebView」也可能有效（取决于手机是否允许更新）。在这台设备上点「仍要继续」不会让这些功能恢复。</string>
     <!-- BL-185：版本串读不出（厂商非标格式）时单独一套文案，把「复制链接」作为第一推荐。
          BL-206：正文不再重复"无法识别版本"（那是标题的话），改为直陈读到的原文 -->
     <string name="dsh_webview_compat_unknown_version">系统报告的 WebView 版本为「%1$s」。为避免白屏，建议直接用「复制链接」在较新浏览器打开，或更新 WebView 后重试。</string>
@@ -457,4 +459,7 @@
     <string name="dsh_reinstall_confirm_message">要重新安装 %1$s 吗？将重新下载依赖。若实例正在运行，会先停止它。</string>
     <!-- R18：改名/改端口在实例运行中修改后的提示（改动需重启才生效） -->
     <string name="dsh_restart_to_apply">重启该实例后生效</string>
+
+    <!-- R31/BL-229：状态面板上的「去浏览器」按钮（仅链接已复制面板显示） -->
+    <string name="dsh_webview_open_in_browser">去浏览器</string>
 </resources>

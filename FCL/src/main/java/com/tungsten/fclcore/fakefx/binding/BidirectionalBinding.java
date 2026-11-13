@@ -16,6 +16,8 @@ import java.lang.ref.WeakReference;
 import java.text.Format;
 import java.text.ParseException;
 import java.util.Objects;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * @implNote Bidirectional bindings are implemented with InvalidationListeners, which are fired once
@@ -26,6 +28,13 @@ import java.util.Objects;
  *           by calling their getter method in all relevant places.
  */
 public abstract class BidirectionalBinding implements InvalidationListener, WeakListener {
+
+    /**
+     * Same JUL logger as {@code com.tungsten.fclcore.util.Logging.LOG}: {@code Logger.getLogger("FCL")}
+     * returns that same instance by name, so warnings land in the launcher log without making this
+     * vendored JavaFX subset depend on the launcher's utility package.
+     */
+    private static final Logger LOG = Logger.getLogger("FCL");
 
     private static void checkParameters(Object property1, Object property2) {
         Objects.requireNonNull(property1, "Both properties must be specified.");
@@ -812,6 +821,9 @@ public abstract class BidirectionalBinding implements InvalidationListener, Weak
                                 property2.setValue(fromString(property1.getValue()));
                                 property2.getValue();
                             } catch (Exception e) {
+                                // R31/slice-33-err-01: upstream reports here; the port had dropped it,
+                                // so a converter failure silently rewrote the property with no trace.
+                                LOG.log(Level.WARNING, "Exception while evaluating binding", e);
                                 property2.setValue(null);
                                 property2.getValue();
                             }
@@ -820,6 +832,8 @@ public abstract class BidirectionalBinding implements InvalidationListener, Weak
                                 property1.setValue(toString(property2.getValue()));
                                 property1.getValue();
                             } catch (Exception e) {
+                                // R31/slice-33-err-01: see the note on the other catch block.
+                                LOG.log(Level.WARNING, "Exception while evaluating binding", e);
                                 property1.setValue("");
                                 property1.getValue();
                             }

@@ -73,16 +73,19 @@ public final class SortedList<E> extends TransformationList<E, E>{
     protected void sourceChanged(Change<? extends E> c) {
         if (elementComparator != null) {
             beginChange();
-            while (c.next()) {
-                if (c.wasPermutated()) {
-                    updatePermutationIndexes(c);
-                } else if (c.wasUpdated()) {
-                    update(c);
-                } else {
-                    addRemove(c);
+            try {
+                while (c.next()) {
+                    if (c.wasPermutated()) {
+                        updatePermutationIndexes(c);
+                    } else if (c.wasUpdated()) {
+                        update(c);
+                    } else {
+                        addRemove(c);
+                    }
                 }
+            } finally {
+                endChange();
             }
-            endChange();
         } else {
             updateUnsorted(c);
             fireChange(new SourceAdapterChange<>(this, c));

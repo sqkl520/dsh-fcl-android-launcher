@@ -111,16 +111,19 @@ public final class FilteredList<E> extends TransformationList<E, E>{
     @Override
     protected void sourceChanged(ListChangeListener.Change<? extends E> c) {
         beginChange();
-        while (c.next()) {
-            if (c.wasPermutated()) {
-                permutate(c);
-            } else if (c.wasUpdated()) {
-                update(c);
-            } else {
-                addRemove(c);
+        try {
+            while (c.next()) {
+                if (c.wasPermutated()) {
+                    permutate(c);
+                } else if (c.wasUpdated()) {
+                    update(c);
+                } else {
+                    addRemove(c);
+                }
             }
+        } finally {
+            endChange();
         }
-        endChange();
     }
 
     /**

@@ -139,7 +139,15 @@ public abstract class ExpressionHelper<T> extends ExpressionHelperBase {
         @Override
         protected void fireValueChangedEvent() {
             final T oldValue = currentValue;
-            currentValue = observable.getValue();
+            // R31/slice-33-err-02: a failed read must neither escape the notification nor leave the
+            // baseline pointing at a value the helper no longer knows is current -> events get suppressed.
+            try {
+                currentValue = observable.getValue();
+            } catch (Exception e) {
+                currentValue = null; // unknown baseline: the next successful read must report a change
+                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), e);
+                return;
+            }
             final boolean changed = (currentValue == null)? (oldValue != null) : !currentValue.equals(oldValue);
             if (changed) {
                 try {
@@ -317,7 +325,15 @@ public abstract class ExpressionHelper<T> extends ExpressionHelperBase {
                 }
                 if (curChangeSize > 0) {
                     final T oldValue = currentValue;
-                    currentValue = observable.getValue();
+                    // R31/slice-33-err-02: same guard as SingleChange — the outer try here has only a
+                    // finally, so a throwing getValue() used to abort every remaining change listener.
+                    try {
+                        currentValue = observable.getValue();
+                    } catch (Exception e) {
+                        currentValue = null;
+                        Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), e);
+                        return;
+                    }
                     final boolean changed = (currentValue == null)? (oldValue != null) : !currentValue.equals(oldValue);
                     if (changed) {
                         for (int i = 0; i < curChangeSize; i++) {

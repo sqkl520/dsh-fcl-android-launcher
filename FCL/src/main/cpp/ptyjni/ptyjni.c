@@ -127,7 +127,12 @@ Java_com_dsh_core_PtyNative_nativeForkPty(
             char errbuf[256];
             int n = snprintf(errbuf, sizeof(errbuf),
                 "execv failed for '%s': %s (errno=%d)\n", cmd, strerror(errno), errno);
-            write(STDERR_FILENO, errbuf, n);
+            /* snprintf returns the length it *would* have written, so a truncated call
+             * yields n >= sizeof(errbuf). Writing n bytes would read past errbuf and leak
+             * adjacent stack bytes to stderr (r31-s01-logic-05). Clamp to what the buffer
+             * actually holds: at most sizeof(errbuf)-1 chars (the NUL is not written). */
+            size_t len = (n < 0) ? 0 : ((size_t) n < sizeof(errbuf) ? (size_t) n : sizeof(errbuf) - 1);
+            write(STDERR_FILENO, errbuf, len);
         }
         _exit(127);
     }

@@ -71,7 +71,7 @@ public abstract class LongProperty extends ReadOnlyLongProperty implements
 
             @Override
             public Object getBean() {
-                return null; // Virtual property, no bean
+                return property; // Virtual property: getBean() follows the host, matching getName() below
             }
 
             @Override
@@ -90,7 +90,7 @@ public abstract class LongProperty extends ReadOnlyLongProperty implements
 
             @Override
             public Object getBean() {
-                return null; // Virtual property, does not exist on a bean
+                return LongProperty.this; // Virtual property: getBean() follows the host, matching getName() below
             }
 
             @Override
