@@ -2261,9 +2261,11 @@ object DshRuntime {
             //   例如另一个 dsh 实例 / 别的应用在同一瞬间 bind 了同一个端口。）
             // ★ 只看本实例的输出：拿全局流判定会把别的实例/别的安装里的 EADDRINUSE 当成本实例的
             //   端口冲突（那会让一次无关的失败被归错因，重试也换不到端口）。
-            val portInUse = recentLogTail(instance.id).any {
-                it.contains("reason=port-in-use") || it.contains("EADDRINUSE")
-            }
+            // ★ R33：判据从「尾巴里出现 EADDRINUSE」换成「脚本自己打了 reason=port-in-use」。
+            //   裸关键词匹配会被**任何**含该词的输出命中（依赖警告、用户贴的错误、上次运行的残留），
+            //   把无关失败归错因。脚本的判定（grep 这次 node 的完整 LOGFILE）精确得多，
+            //   且与"node 真的退出"这个事件绑定。见 [tailSaysPortInUse]。
+            val portInUse = tailSaysPortInUse(recentLogTail(instance.id))
             if (portInUse) {
                 // 文案不放进 strings.xml（本轮改动范围只允许三个文件）：直接给一句可操作的中文。
                 // 文案跟着界面语言走（这条会显示在启动失败对话框里）。
@@ -2554,6 +2556,79 @@ fun looksLikeSeccompTrouble(code: Int, tail: List<String>): Boolean {
     return text.contains("seccomp") || text.contains("ptrace") ||
         text.contains("bad system call") || text.contains("operation not permitted")
 }
+
+/**
+ * ★ R33：从一行**脚本自己打印的** `FAILED reason=<code>` 里取原因码。
+ *
+ * ## 为什么需要"只认脚本行"
+ * `onProcessLine` 无条件把**任何**输出写进实例日志流（`appendFor` 在世代校验之前），
+ * 而这个流会回流到两条控制流：
+ * 1. [looksLikeSeccompTrouble] —— 命中就**自动带 `PROOT_NO_SECCOMP=1` 重启**，
+ *    并烧掉该实例本次生命周期的兜底预算；
+ * 2. 端口冲突归因 —— 命中 `EADDRINUSE` 就把失败原因显示成"端口被占"。
+ *
+ * 也就是说：**rootfs 内任何能写 `/tmp/dsh-start-*.log` 的代码**（`ProotCommand` 把
+ * `<cacheDir>/dsh/tmp` bind 成 rootfs 的 `/tmp`）都能靠追加一行文本改变这两条决策。
+ * 危害不是"能改状态"（那是世代校验在管），而是**能让排障归因失真、能烧掉兜底预算**。
+ *
+ * ## 本函数的作用
+ * 把一个"裸关键词匹配"换成"**结构化来源**匹配"：
+ * 只认脚本按固定词表打印的那一行 `[<prefix>] FAILED reason=<code>`。
+ * 依据是这三个脚本是全仓唯一会打印该形态的地方（`start-dsh.sh` / `setup-node-dsh.sh`），
+ * 而它们的前缀是固定的 `[start-dsh]` / `[setup]`。
+ *
+ * ⚠️ 这**不能**完全阻止伪造（伪造者当然也能打出 `[start-dsh] FAILED reason=port-in-use`）。
+ * 它的价值是把攻击面从"任意含某个词的行"收窄到"必须精确模仿脚本的协约行"，
+ * 并且让**真实日志里自然出现的** `seccomp` / `ptrace` 字样不再误触发自动重启 ——
+ * 后者是这条修复在日常使用中最主要的收益。
+ *
+ * @return 原因码（如 `port-in-use` / `package-missing` / `node-exit`），格式不符返回 null
+ */
+fun scriptFailureReason(line: String): String? {
+    // 形如：`[start-dsh] FAILED reason=port-in-use port=3080 code=1`
+    //       `[setup] FAILED reason=verify-version`
+    val m = SCRIPT_FAILED_RE.find(line) ?: return null
+    return m.groupValues[1]
+}
+
+/**
+ * 脚本打印的失败协约行。
+ *
+ * ★ 行首可能有 [DshLogBus.stamp] 加的 `HH:mm:ss  ` 时间戳，所以锚 `^` 之后要允许它。
+ *   实测（JDK 17 逐个跑过）：
+ *   - `^\s*\[start-dsh] FAILED ...` 对 `01:00:05  [start-dsh] FAILED ...` **不匹配**
+ *   - `^(\d{2}:\d{2}:\d{2}\s+)?\[start-dsh] FAILED ...` 两种形态**都匹配**
+ *
+ *   为什么要容忍两种：`recentLogTail` 会用 `substringAfter("  ")` 把时间戳剥掉再传给判据，
+ *   但 [scriptFailureReason] 是公开顶层函数，别的调用方可能直接传原始行。
+ *   两种都认，调用方不必关心自己手里的是哪一形态。
+ *
+ * ★ 必须锚行首（`^`）：不锚就等于"行内任意位置出现这个片段都算"，
+ *   那样一行被其它输出带出来的文本（例如用户在 dsh 里 `cat` 了一个日志文件）
+ *   也会被当成脚本结论 —— 收窄就白做了。
+ *
+ * ★ 前缀限定为两个脚本名（`start-dsh` / `setup`），这是全仓仅有的两处会打印该形态的地方。
+ */
+private val SCRIPT_FAILED_RE =
+    Regex("""^(?:\d{2}:\d{2}:\d{2}\s+)?\[(?:start-dsh|setup)]\s+FAILED\s+reason=([a-z][a-z0-9-]*)""")
+
+/**
+ * ★ R33：从脚本协约行里取**端口冲突**这一条判定结果。
+ *
+ * 取代原来"日志里出现 `EADDRINUSE` 就算端口冲突"的裸匹配。
+ *
+ * 为什么原来那条有问题：`EADDRINUSE` 会自然出现在**任何** node 的 stderr 里 ——
+ * 包括依赖自己的警告、用户贴的错误、上一次运行的残留输出。把"日志里出现过这个词"
+ * 当成"本次失败是端口冲突"，会把无关失败归错因，用户按提示重试也解决不了。
+ *
+ * 新判据只用脚本自己算出来的结论：`start-dsh.sh` 在 node 退出后 grep 自己的 LOGFILE，
+ * 命中才打印 `FAILED reason=port-in-use`（见该脚本 :365-370）。那个判定比宿主的
+ * "尾 25 行里有没有这个词"精确得多 —— 它看的是**这次** node 的完整输出，
+ * 且与"node 真的退出"这个事件绑定。
+ */
+fun tailSaysPortInUse(tail: List<String>): Boolean =
+    tail.any { scriptFailureReason(it) == "port-in-use" }
+
 
 /**
  * R16/fix4（BL-136）：本行解析出的 [incoming] 是否属于"会覆盖已带 token url"的坏更新。
