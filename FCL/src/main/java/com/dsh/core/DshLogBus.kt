@@ -98,6 +98,13 @@ object DshLogBus {
     private const val MAX_STREAMS = 32
 
     /**
+     * ★ SP-07：被淘汰流的最后 revision 记忆表的容量上限（见 [evictedRevisions]）。
+     * 取 [MAX_STREAMS] 的 2 倍 —— 淘汰/重建来回一轮也不会把"刚被淘汰那条"挤掉，
+     * 同时保证这张表本身**有界**（它按 id 记，id 由实例创建/npm 安装churn 产生，可以无限多）。
+     */
+    private const val MAX_EVICTED_REVISIONS = MAX_STREAMS * 2
+
+    /**
      * 日志快照：UI 只比较 [revision]，避免无谓重绘。
      *
      * **不变式（K27）**：[levels] 与 [lines] **同序等长**，`levels[i]` 即 `lines[i]` 的级别。
@@ -254,6 +261,30 @@ object DshLogBus {
 
     /** 实例 id → 它的落盘文件（惰性推导并缓存，见 [fileFor]） */
     private val instanceFiles = LinkedHashMap<String, File>()
+
+    /**
+     * ★ SP-07：被 LRU 淘汰的流**最后一次发布过的 revision**（id → revision），让重建出来的流
+     * 从那里**接着数**而不是从 0 重来。有界（[MAX_EVICTED_REVISIONS]），FIFO 挤掉最老的。
+     *
+     * ## 为什么必须记住（缺陷本体）
+     * 消费侧用 `snap.revision == lastRevision` 做「同帧早退」（`DshLogsUI:417`、
+     * `DshWebViewActivity:706`）。revision 只在 [flush] 里随快照发布而递增，**从不回退** ——
+     * 这是那些早退判据成立的前提。淘汰把 `InstanceStream` 整个丢掉后，重建的新流 revision
+     * 从 0 开始：1200 → 0 是**回退**，早退判据虽然因此"不成立"（会重绘），但重绘的内容是
+     * **新流里那几行**（`Snapshot` 只有 buffer 的副本）⇒ 用户眼前的上千行历史一次性塌成 1 行。
+     * 更糟的是下一帧若又从 1 数到 2……只要还低于 `lastRevision`（1200）就会反复重绘，
+     * 而界面内容始终是残缺的。
+     *
+     * ## 为什么是"记住 revision"而不是"不淘汰"
+     * 不淘汰就回到内存无界（[MAX_STREAMS] 存在的理由）。记住一个 Long 是常数代价，
+     * 且只在淘汰时写一次。**它不恢复丢掉的 buffer** —— buffer 就是内存本身，恢复它等于不淘汰。
+     * 所以本表的职责收窄成一句：**让 revision 单调，UI 的早退判据不被打破**。
+     * （buffer 的丢失对 UI 的伤害因此从"历史塌成 1 行"降级为"重建后从空开始，与旧行为同级
+     *   的内存回收语义一致"—— 这正是 [MAX_STREAMS] 当初就接受的代价。）
+     *
+     * 调用方必须持有 [lock]。
+     */
+    private val evictedRevisions = LinkedHashMap<String, Long>()
 
     /**
      * Guarded by [lock]. True from the moment a merged flush is armed until that flush actually
@@ -666,6 +697,11 @@ object DshLogBus {
         synchronized(lock) {
             streams.remove(instanceId)
             instanceFiles.remove(instanceId)
+            // ★ SP-07：显式删除是"这个 id 彻底不存在了"，与 LRU 淘汰**语义不同** ——
+            //   不记 revision（重建就当全新流，revision 从 0 起），也不把 pendingForFile 入队：
+            //   调用方（DshInstances.delete）紧接着就删 `instance-<id>.log`，入队只会把文件
+            //   原地写回来（那条注释见 DshInstances.delete）。丢掉的行本来也随文件一起消失。
+            evictedRevisions.remove(instanceId)
         }
     }
 
@@ -900,6 +936,18 @@ object DshLogBus {
     private fun streamFor(instanceId: String): InstanceStream {
         streams[instanceId]?.let { return it } // access touch (LRU bump) + fast path
         val created = InstanceStream()
+        // ★ SP-07：这条 id 若之前被 LRU 淘汰过，**接着它最后一次发布的 revision 数下去** ——
+        //   而不是从 0 重来。消费侧用 `snap.revision == lastRevision` 做同帧早退
+        //   （DshLogsUI:417 / DshWebViewActivity:706），revision 回退会让判据失效、界面塌成
+        //   重建后那几行（详见 [evictedRevisions]）。
+        //   同时把初值直接设成 `Snapshot(rev, empty)`：早退判据成立 ⇒ 已经显示着旧内容的
+        //   UI **保持**旧内容不动（宁可是"陈旧但完整"，也不要"新但残缺"）；
+        //   万一让 UI 拿到 `Snapshot(0, empty)`，它反而会立刻把整页刷成空白。
+        val remembered = evictedRevisions.remove(instanceId)
+        if (remembered != null && remembered > 0) {
+            created.revision = remembered
+            created.state.value = Snapshot(remembered, emptyList())
+        }
         streams[instanceId] = created
         if (streams.size > MAX_STREAMS) evictLruStreamsLocked(keep = instanceId)
         return created
@@ -914,9 +962,72 @@ object DshLogBus {
         while (streams.size > MAX_STREAMS && it.hasNext()) {
             val e = it.next()
             if (e.key == keep) continue
+            // ★ SP-07：**先收尾，再移除**。淘汰绝不能"顺手把还没落盘的行一起丢掉"，
+            //   收尾内容见 [evictStreamLocked]（待落盘行入队 + 记住 revision）。
+            //   顺序很关键：它要读 `st.pendingForFile` 和 `fileFor(id)`，两者都挂在
+            //   即将被删的对象/缓存上。
+            evictStreamLocked(e.key, e.value)
             it.remove()
             instanceFiles.remove(e.key)
         }
+    }
+
+    /**
+     * ★ SP-07：淘汰一条流之前的收尾 —— **把攒在 `pendingForFile` 里、尚未成批入队的行接进
+     * [fileWriteQueue]**，并记下它的 revision。
+     *
+     * ## 为什么必须做（缺陷本体）
+     * `pendingForFile` 是"这一轮新增、还没落盘"的缓冲（全局与每实例各一份）：行先攒在这里，
+     * 等 [flush] 才成批搬进 [fileWriteQueue]（最坏要等一个 [FLUSH_INTERVAL_MS] = 200ms）。
+     * 而淘汰是由**另一个 id 的 append** 触发的（[streamFor] 在 append 热路径上），完全可能
+     * 落在这 200ms 窗口里。`InstanceStream` 对象被 `it.remove()` 之后，那些行：
+     * - 不在内存缓冲里（对象没了），也不
+     * - 不在文件里（没有任何人写它）
+     * ⇒ **静默丢失**。原来 [FileWrite.stream] 的 KDoc 只讨论了"已入队批次"被淘汰（文件副本丢了、
+     * 行还在内存环里），**这一支没被覆盖，而它后果更重：行本身没了，连内存里都没有。**
+     *
+     * ## 为什么是"入队"而不是"同步写盘"
+     * 本函数在 [appendFor] / [snapshotFor] 的调用栈上（每行日志都走），**不能有同步磁盘 IO**：
+     * 慢 eMMC / 磁盘满时那会把所有实例的日志生产一起卡住，而 `fileIoLock` 本来就是全实例共用
+     * 的一把锁。入队只取一次 [fileQueueLock] 的极短临界区（纯内存 addLast，无 IO），真正的写
+     * 仍由 [drainFileWrites] 的唯一排空者按 FIFO 做 —— 与既有落盘路径同一形状，行序仍由
+     * seq/FIFO 保证（这批的 seq 比后续批小，所以它一定先写）。
+     *
+     * ## revision
+     * 见 [evictedRevisions]：记下最后一次发布的 revision，重建时接着数，不让它回退。
+     * 有界（[MAX_EVICTED_REVISIONS] 条，FIFO 挤掉最老的）—— 不能因为"记住"而重新引入一个
+     * 随实例 churn 无限增长的 map，那正是 [MAX_STREAMS] 要防的东西。
+     *
+     * 调用方必须持有 [lock]。
+     */
+    private fun evictStreamLocked(id: String, st: InstanceStream) {
+        // 1) 记住 revision（先做：即使没有待落盘行，这条也要记）
+        if (st.revision > 0) {
+            evictedRevisions[id] = st.revision
+            while (evictedRevisions.size > MAX_EVICTED_REVISIONS) {
+                val oldest = evictedRevisions.keys.iterator()
+                if (oldest.hasNext()) {
+                    oldest.next()
+                    oldest.remove()
+                } else {
+                    break
+                }
+            }
+        }
+        // 2) 待落盘行：接到队列尾部（不写盘，见上面的理由）
+        if (st.pendingForFile.isEmpty()) return
+        // 与 [flush] 完全同一条判据：全局日志未绑定 = 路径系统未就绪，此时实例路径只能落到
+        // 临时目录兜底，写它没有意义（真机上两者同一时刻就绪）。
+        if (logFile == null) return
+        val batch = ArrayList(st.pendingForFile)
+        st.pendingForFile.clear()
+        // fileFor(id) 必须在 instanceFiles.remove 之前调用（惰性推导 + 缓存）
+        enqueueFileWrite(FileWrite(fileFor(id), batch, st, id, ++fileWriteSeq))
+        // 队列里现在有东西了，得保证有人来排空：appendFor 的调用方随后会自己 scheduleFlush，
+        // 但 snapshotFor 那条路径不会 —— 漏了这一下，这批行会一直躺在内存队列里（不丢，
+        // 但要等下一次任意 flush 才落盘）。scheduleFlush 自身幂等（flushScheduled 门），
+        // 且 synchronized 可重入，这里在锁内调用是安全的。
+        scheduleFlush()
     }
 
     /**
@@ -977,6 +1088,11 @@ object DshLogBus {
          * (retry must land in the stream the batch belongs to, not the other one). If the stream
          * was evicted (LRU) or removed in the meantime the requeue is skipped and only the file
          * copy of this batch is lost; the lines themselves still live in the in-memory ring.
+         *
+         * ★ SP-07 更正：上面"行还在内存环里"只对**已成批入队**的批次成立。淘汰发生在
+         * `pendingForFile` **还没被 flush 搬进队列**之前时，行根本不在这个 `FileWrite` 里 ——
+         * 它只活在即将被丢弃的 `InstanceStream` 对象上，`it.remove()` 之后**行本身就没了**。
+         * 修法见 [evictStreamLocked]：淘汰前先把这批 `pendingForFile` 入队。
          */
         val stream: InstanceStream?,
         /** BL-075: instance id matching [stream] (null for the global stream) — requeue residency check */
