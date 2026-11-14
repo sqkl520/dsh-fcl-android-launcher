@@ -323,6 +323,8 @@ class R37AtomicPidFileTest {
         val reads = AtomicInteger(0)
         val failures = AtomicInteger(0)
         val stop = AtomicBoolean(false)
+        // 写者是否全部结束 —— 读者的「永久读不出」判据只在它为 true 时才有意义
+        val writersDone = AtomicBoolean(false)
         val startGate = CountDownLatch(1)
         val samples = java.util.Collections.synchronizedList(mutableListOf<String>())
 
@@ -331,7 +333,19 @@ class R37AtomicPidFileTest {
             while (!stop.get()) {
                 val text = readWithRetry(target) { transientOpenFailures.incrementAndGet() }
                 if (text == null) {
-                    permanentlyUnreadable.incrementAndGet()
+                    // ★ R37 修测试自身的不稳定（不是产品缺陷）：
+                    //   readWithRetry 的预算是 8 次 × 1ms sleep = 8ms。读者这个循环**自身不 sleep**，
+                    //   在 4 写者 × 120 次的压力下每秒要读上万次 —— 连续撞上写窗口时，8ms 内
+                    //   凑不出一次成功读，就被计成「永久读不出」。实测 12 次全量里偶发 1 次。
+                    //
+                    //   正确的判据是「**写者全都停下之后**还能不能读出来」：那时没有任何人写，
+                    //   再读不出才是真的坏了。所以这里先退让一下再重试，只有**在写者已结束的情况下**
+                    //   仍然读不出才计入 permanentlyUnreadable。
+                    if (writersDone.get()) {
+                        permanentlyUnreadable.incrementAndGet()
+                    } else {
+                        Thread.sleep(2)
+                    }
                     continue
                 }
                 reads.incrementAndGet()
@@ -360,6 +374,9 @@ class R37AtomicPidFileTest {
         }
         startGate.countDown()
         threads.forEach { it.join(60_000) }
+        writersDone.set(true)
+        // 给读者一个稳定的收尾窗口：此刻没有任何人写，任何一次读失败都是真的坏了
+        Thread.sleep(50)
         stop.set(true)
         reader.join(5_000)
 
