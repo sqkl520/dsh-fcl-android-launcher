@@ -74,6 +74,52 @@ internal fun shouldDropBackup(extractComplete: Boolean, newTreeUsable: Boolean):
     extractComplete && newTreeUsable
 
 /**
+ * 盘上是否**已经有一份旧 rootfs**（决定空间门槛用哪一档，见 [DshBootstrap.requiredFreeBytes]）。
+ *
+ * ## 为什么不是 `DshPaths.rootfsLooksUsable()`
+ *
+ * 那个判据回答的是"旧底座看起来**可用**吗"（`bin/sh` / `usr/bin/env` / `bin/busybox` 三条
+ * 路径存在性），**与"盘上有没有旧底座"是两件事**。把它当 `replacing` 的代理，方向恰好反了：
+ * 旧 rootfs **存在但损坏**（最需要重解压的一次）会被判成首装，门槛从 960 MiB 抬到 1560 MiB。
+ * 真机可用空间约 1.1 GB（`docs/BUGLEDGER.md:399` BL-066 / `docs/CHANGELOG.md:1767` /
+ * `docs/reports/round12/A6-bootstrap.md:46,59`）：完好时能升级，一坏就**永久卡在空间门**上 ——
+ * 提示"需要 1.5GB、现有 1.1GB"，而事实是删掉盘上那 ~900 MB 就够。
+ *
+ * ## 为什么是"存在**且非空**"，不是 `exists()`
+ *
+ * `DshPaths.loadPaths()` 在启动时就把 `ROOTFS_DIR` mkdirs 出来了（`DshPaths.kt:95` 的 dirs
+ * 列表含 `ROOTFS_DIR`），所以**首装时这个目录也存在，只是空的**。照字面写
+ * `rootfsDir.exists()` 会把首装误判成升级 ⇒ 1560 MiB 门槛被砍成 960 MiB ⇒ 首装放行后紧接着的
+ * npm install 才撞空间墙（`DshInstaller.checkInstallSpace`），把一次清楚的"首装空间不足"
+ * 推迟成一次安装期失败。仓库里同口径的先例：`DshSetupActivity.hasAnyEntry`（空目录 = 还没来过）。
+ *
+ * ## 边界取"宽"
+ *
+ * `list()` 返回 null（目录读不出 / 不是目录之外的原因）时按"有旧内容"处理：宁可给宽松的
+ * 960 MiB，也不要在"读不到目录"时抛一句"空间不足"。这与本仓既有的方向一致 ——
+ * `DshPaths.freeSpaceBytes()` 读不到就返回 -1（放行）、`DshInstaller.checkInstallSpace`
+ * 读不到也放行。被误判成升级时上界风险有限：`rootfs.tmp` 解压只需 960 MiB，随后 npm 前还有
+ * [DshInstaller] 那道独立门槛兜着。
+ *
+ * ## 不碰既有判据
+ *
+ * 刻意**不**改 `DshPaths.rootfsLooksUsable`：它同时是 `ProotCommand.preflight` 的判据，给它加
+ * 约束会让**手工放置的 rootfs** 从"可用"变"不可用"（round31 `round31-handoff-index.md:207`
+ * 的明文结论，`R35PartialExtractTest.dshPathsRootfsProbeIsUntouched` 已用源码切片钉住）。
+ * 手工 rootfs 通常非空 ⇒ 在新判据下仍是 `replacing = true`（门槛 960 MiB，比修前更宽松），
+ * 不把任何手工用户挡在门外。
+ *
+ * 用 `list()` 而不是 `listFiles()?.isNotEmpty()`：与 `DshSetupActivity.hasAnyEntry` 同口径，
+ * 且 rootfs 有近 4 万条目，返回名字数组比构造 4 万个 `File` 对象便宜。
+ */
+internal fun isReplacingExistingRootfs(rootfsDir: File): Boolean {
+    if (!rootfsDir.isDirectory) return false
+    val entries = rootfsDir.list()
+    // 读不出（null）按"有旧内容"处理，理由见上面的「边界取宽」。
+    return entries == null || entries.isNotEmpty()
+}
+
+/**
  * 判定内核：按 `isReady()` 的 `&&` 短路顺序收集**全部**不满足项（空表 = 就绪）。
  *
  * 顺序与 [DshBootstrap.isReady] 一一对应：rootfs 版本 → scripts 版本 → scripts 版本
@@ -542,9 +588,20 @@ object DshBootstrap {
                 //   现在提前到此；extractRootfs 里那处保留（幂等，且防其它调用路径）。
                 //   注：`.old` 不跨启动残留（解压成功路径末尾即删），优先级低，不动。
                 runCatching { File("${DshPaths.ROOTFS_DIR}.tmp").deleteRecursively() }
-                val replacing = DshPaths.rootfsLooksUsable()
+                // ★ RE-07：replacing 的语义是「盘上**存在**旧 rootfs」，不是「旧 rootfs 看起来
+                //   可用」。用 rootfsLooksUsable() 当代理会让"存在但损坏"的现场（最需要重解压的
+                //   那一次）被判成首装，门槛反而抬到 1560MB —— 1.1GB 的真机当场死锁。判据见
+                //   [isReplacingExistingRootfs]（存在且非空；不能是 exists()，因为 loadPaths 已
+                //   mkdirs 出 ROOTFS_DIR，首装时它是个空目录）。
+                val replacing = isReplacingExistingRootfs(File(DshPaths.ROOTFS_DIR))
                 val need = requiredFreeBytes(replacing)
                 val free = DshPaths.freeSpaceBytes()
+                // 放行也要留诊断（对齐 BL-133）：真机上"这次为什么按 960MB 算"是排障唯一能对上的
+                // 信息 —— replacing 这个布尔由 dir 内容决定，日志里不印出来就无法从外部复现结论。
+                DshLogBus.append(
+                    "[bootstrap] space check replacing=$replacing need=${need / 1024 / 1024}MB " +
+                        "free=${free / 1024 / 1024}MB"
+                )
                 if (free in 0 until need) {
                     // 首装与升级**各一条**文案，而不是"共用一条 + 补一段括号说明"：
                     // 升级时那句"新旧两份会同时存在"是解释**为什么**要这么多空间，英文重写后
