@@ -2310,7 +2310,19 @@ object DshRuntime {
         val tail = DshLogBus.snapshotFor(instanceId).value.lines.takeLast(3)
             .joinToString(" / ") { it.substringAfter("  ") }
             .take(240)
-        return if (tail.isBlank()) base else "$base；最近输出：$tail"
+        if (tail.isBlank()) return base
+        // ★ R33/B1：连接语原来硬编码成 `"$base；最近输出：$tail"` —— 英文/繁体界面下会混进中文
+        //   （`The dsh process exited...；最近输出：...`）。改走资源，三语齐全。
+        //
+        //   取词用 DshUiText.getString（而不是 appContext.getString）：后者在本类里是
+        //   Application Context，只跟随**系统**语言，不跟随用户在启动器设置里选的语言。
+        //   DshUiText 走 LocaleUtils.setLanguage 那条链，与界面其它文案同一口径。
+        return DshUiText.getString(
+            R.string.dsh_reason_with_recent_output,
+            "$base ($tail)",      // 取不到资源时的兜底：退回英文形态，不混中文
+            base,
+            tail
+        )
     }
 
     /**

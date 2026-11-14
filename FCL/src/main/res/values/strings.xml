@@ -131,6 +131,9 @@
         <string name="dsh_port_auto">auto</string>
         <string name="dsh_port_invalid">Port must be between 0 and 65535</string>
         <string name="dsh_reason_exited_early">The dsh process exited before becoming ready (code %1$d)</string>
+        <!-- R33/B1：失败原因后面附「最近输出」时的连接语。原来是硬编码 "；最近输出："，
+             英文/繁体界面下会混进中文。%1$s = 失败原因，%2$s = 最近几行日志。 -->
+        <string name="dsh_reason_with_recent_output">%1$s; recent output: %2$s</string>
         <string name="dsh_reason_missing_entry">The dsh entry file is missing; the installation looks incomplete. Reinstall it.</string>
         <!-- fix12 / R2b-A1-1：实例的 package.json 一时读不出来（EIO/权限/SELinux），**不是**安装损坏。
              文案刻意不提"重装"——那会让用户为一次可恢复的读故障重下 500MB。 -->

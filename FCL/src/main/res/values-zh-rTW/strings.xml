@@ -115,6 +115,7 @@
         <string name="dsh_port_auto">自動</string>
         <string name="dsh_port_invalid">連接埠需在 0–65535 之間</string>
         <string name="dsh_reason_exited_early">dsh 行程在就緒前退出（退出碼 %1$d）</string>
+        <string name="dsh_reason_with_recent_output">%1$s；最近輸出：%2$s</string>
         <string name="dsh_reason_missing_entry">缺少 dsh 進入點檔案，安裝不完整，請重新安裝。</string>
         <!-- fix12 / R2b-A1-1：一時讀不出來 ≠ 安裝損壞，所以不說「重新安裝」。 -->
         <string name="dsh_reason_disk_unreadable">暫時讀不到 dsh 套件檔案，請稍後重試；若反覆出現，請查看日誌。</string>

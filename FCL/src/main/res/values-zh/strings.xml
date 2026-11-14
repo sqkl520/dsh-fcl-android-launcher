@@ -131,6 +131,7 @@
         <string name="dsh_port_auto">自动</string>
         <string name="dsh_port_invalid">端口需在 0–65535 之间</string>
         <string name="dsh_reason_exited_early">dsh 进程在就绪前退出（退出码 %1$d）</string>
+        <string name="dsh_reason_with_recent_output">%1$s；最近输出：%2$s</string>
         <string name="dsh_reason_missing_entry">缺少 dsh 入口文件，安装不完整，请重新安装。</string>
         <!-- fix12 / R2b-A1-1：一时读不出来 ≠ 安装损坏，所以不说"重装"。 -->
         <string name="dsh_reason_disk_unreadable">暂时读不到 dsh 包文件，请稍后重试；若反复出现，请查看日志。</string>

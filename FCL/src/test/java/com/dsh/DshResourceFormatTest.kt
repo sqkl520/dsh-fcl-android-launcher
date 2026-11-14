@@ -75,6 +75,9 @@ class DshResourceFormatTest {
         // DshRuntime（注意 dsh_reason_start_timeout 传的是 Long：%d 接受 Long）
         "dsh_runtime_exited" to arrayOf<Any>(143),
         "dsh_reason_exited_early" to arrayOf<Any>(1),
+        // R33/B1：失败原因 + 最近输出。两个都是 String（前者本身就是格式化好的文案，
+        // 后者是日志片段）—— 若写成 %d 会在真机上抛 IllegalFormatConversionException。
+        "dsh_reason_with_recent_output" to arrayOf<Any>("base reason", "line1 / line2"),
         "dsh_reason_start_timeout" to arrayOf<Any>(180L),
         // fix12 / C-08（round25）：降级启动提示。%1$s = 实例声明的版本，%2$s = 实际会运行的版本，
         // 两个都是版本号字符串（不是数字 —— 版本号里有 '-' 和 '.'，永远按 String 传）
@@ -329,6 +332,71 @@ class DshResourceFormatTest {
             }
             return null
         }
+    }
+
+    /**
+     * ★ R33/B1：**英文**文案里不许出现中文字符。
+     *
+     * 钉的是 B1 这个具体缺陷：`appendLastLinesHint` 原来把连接语硬编码成
+     * `"$base；最近输出：$tail"`，于是英文界面下会显示
+     * `The dsh process exited before becoming ready (code 1)；最近输出：...` ——
+     * 前半句英文、后半句中文。
+     *
+     * 判据：`values/strings.xml`（英文基准）里所有 `dsh_*` 文案不含 CJK 字符。
+     * 这条同时能抓住"以后有人往英文资源里塞中文"这一类回归，不只是 B1 本身。
+     *
+     * 例外：**语言名称本身**必须用该语言书写（英文界面里的「简体中文」/「繁體中文」）——
+     * 那是语言选择器正确性的要求，不是漏翻。这类键在此显式登记，
+     * **登记必须逐个列出具体键名**，不许用前缀通配（否则以后有人把 `dsh_*` 全塞进来）。
+     * 本仓当前只有两条。
+     */
+    @Test
+    fun englishStringsContainNoChineseCharacters() {
+        // 语言名例外：这两条在英文界面里**就该**显示中文，否则用户认不出是哪个语言。
+        val allowlist = setOf(
+            "dsh_lang_simplified_chinese",
+            "dsh_lang_traditional_chinese"
+        )
+        val file = resolve("values/strings.xml")
+            ?: throw AssertionError("找不到英文基准资源 values/strings.xml")
+        val strings = parseStrings(file)
+        val cjk = Regex("""[一-鿿㐀-䶿]""")
+        val offenders = strings.filter { (key, body) ->
+            key.startsWith("dsh_") && key !in allowlist && cjk.containsMatchIn(body)
+        }
+        assertTrue(
+            "英文资源里不得出现中文字符（B1 的成因：硬编码中文混进英文界面）。违规项：\n" +
+                offenders.entries.joinToString("\n") { "  ${it.key} = ${it.value}" },
+            offenders.isEmpty()
+        )
+        // 反向：被豁免的两条必须真的存在 —— 否则豁免名单是过期的，该删
+        allowlist.forEach { key ->
+            assertTrue(
+                "豁免名单里的 $key 在英文资源里不存在了 —— 名单已过期，请删掉这一项",
+                strings.containsKey(key)
+            )
+        }
+    }
+
+    /**
+     * 反向自检：上面那条的判据必须真的有识别力。
+     *
+     * 如果 `cjk` 正则写错或 `strings` 为空，上面会**永远绿**（假护栏）。
+     * 这条用真实存在的中文串自证正则有效，并确认确实解析到了大量文案。
+     */
+    @Test
+    fun chineseDetectionIsNotVacuous() {
+        val cjk = Regex("""[一-鿿㐀-䶿]""")
+        assertTrue("正则必须能识别中文", cjk.containsMatchIn("最近输出"))
+        assertTrue("正则不应对纯英文误报", !cjk.containsMatchIn("recent output"))
+
+        val file = resolve("values/strings.xml")
+            ?: throw AssertionError("找不到英文基准资源")
+        val strings = parseStrings(file)
+        assertTrue(
+            "应当解析到大量 dsh_* 文案（实际 ${strings.size} 条）；为 0 说明解析失败，上面那条是假护栏",
+            strings.size > 100
+        )
     }
 
     /**
