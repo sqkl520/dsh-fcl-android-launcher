@@ -1090,7 +1090,7 @@ object DshRuntime {
             ProotRunner.start(
                 spec = spec,
                 scope = scope,
-                onLine = { line -> onProcessLine(instance, gen, line) },
+                onLine = { line -> onProcessLine(instance, gen, line, launchPort) },
                 onExit = { code -> onProcessExit(instance, gen, code, launchedPid.get()) }
             )
         } catch (e: Exception) {
@@ -2040,7 +2040,12 @@ object DshRuntime {
         return true
     }
 
-    private fun onProcessLine(instance: DshInstance, gen: Long, line: String) {
+    private fun onProcessLine(
+        instance: DshInstance,
+        gen: Long,
+        line: String,
+        expectedPort: Int
+    ) {
         // 实例级：这是**该实例的进程**自己打印的 stdout/stderr（dsh 的 web 输出、start-dsh.sh 的
         // 就绪/失败标记）。"从开始到停止只显示这个实例发出的日志"要的就是这些行 —— 它们同时进
         // 全局流，所以排障时的"时间线全貌"不会丢（见 DshLogBus.appendFor 的说明）。
@@ -2060,12 +2065,20 @@ object DshRuntime {
         //   而同一行又带 `READY port=`，降级能让正常路径继续；没有③级时结果为 null，
         //   与"这行没有 URL"完全同义，不会把坏值漏下去。
         //   为什么不整行丢弃：这行仍要进实例日志（排障要看真实输出），只是不参与状态变更。
+        // ★ R34：候选门补上**端口维度**（`webUiUrlAllowed(url, expectedPort)`）。round32 的 N3
+        //   只挡了 host，认领路径（[adoptionCandidateAllowed]）却是"端口 + host"双判据 ——
+        //   同一份 `state.url` 两套口径。漏网的正是"回环但端口不对"：
+        //   `http://127.0.0.1:40404/?token=x` 在实例端口 3080 时被采信，而 proot 没有网络隔离，
+        //   rootfs 内进程能监听 40404 ⇒ WebView 加载攻击者页面（同源，cookie 可被同源带走）。
+        //   端口基准是 [launchPort]（本次真正让脚本绑定的值），**不是** `instance.port` ——
+        //   配置端口被占时前者是 0、后者是旧值，用后者会把真实 URL 全判死。见
+        //   [webUiUrlAllowed] 的 KDoc。
         val candidates = listOfNotNull(
             UrlScanner.findAuthenticatedUrl(line),
             UrlScanner.findMarkerUrl(line),
             UrlScanner.findMarkerPort(line)?.let { "http://127.0.0.1:$it/" }
         )
-        val url = candidates.firstOrNull { webUiUrlAllowed(it) }
+        val url = candidates.firstOrNull { webUiUrlAllowed(it, expectedPort) }
         if (url == null && candidates.isNotEmpty() && rejectedUrlNoted.getAndSet(gen) != gen) {
             // 每代只记一次：攻击者刷行不应放大日志面。只记"有几个候选被拒"，**不打印主机名**
             // （打印主机名等于把伪造内容抄进日志，是二次污染）。
@@ -2073,7 +2086,7 @@ object DshRuntime {
             DshLogBus.appendFor(
                 instance.id,
                 "[runtime] output contained ${candidates.size} candidate URL(s) rejected by the " +
-                    "loopback/scheme gate (gen=$gen); none written to state"
+                    "loopback/scheme/port gate (gen=$gen, expectedPort=$expectedPort); none written to state"
             )
         }
         // 先注册 token（若有）再判世代：旧 run 首次出现的 token 同样要脱敏
@@ -2728,6 +2741,13 @@ fun adoptionHostIsLoopback(candidate: String?): Boolean {
  * http 变体会被 `network_security_config.xml` 的 `cleartextTrafficPermitted=false` 拦下，
  * 但 **https 变体能真正渲染**，且同一条 URL 还会流到设置页显示与外跳（绕过 App 的 NSC）。
  *
+ * ★ R34（N3 的端口维度）：⚠️ 这**只是完整判据的一半**。真正决定"能不能写进 `state.url` /
+ * 进 WebView"的是带端口的重载 [webUiUrlAllowed]`(url, expectedPort)`；
+ * 本单参数版本只判 scheme + host，**不带端口维度**，仅保留给"端口此刻确实不可知"的调用方
+ * 与既有单测（R32 钉 host 口径）。新调用点若走这一版，等于给 rootfs 留下
+ * "写一行 `http://127.0.0.1:<攻击者端口>/?token=x` 就能改 WebView 目标"的口子
+ * （R34 红队 `N3Compose.java` 实测：实例端口 3080 时 `40404` 被采信）。
+ *
  * 只判 host 是不够的 —— `UrlScanner.hasHttpScheme` 拦 scheme，这里拦 host，
  * 两处各自独立实现：一处被改坏，另一处仍能挡住。
  */
@@ -2735,6 +2755,72 @@ fun webUiUrlAllowed(url: String?): Boolean {
     if (url == null) return false
     if (!UrlScanner.hasHttpScheme(url)) return false
     return adoptionHostIsLoopback(url)
+}
+
+/**
+ * ★ R34：**完整**的"能否作为应用内 WebView 加载目标"判据 = scheme + 回环 host + **端口绑定**。
+ *
+ * ## 为什么必须补端口这一维
+ * round32 的 N3 只修了 host 一半：同一份 `state.url` 有两条来路、两套口径 ——
+ * 认领路径 [adoptionCandidateAllowed] 是"端口 + host"双判据，实时路径（本文件
+ * [onProcessLine]）却只有 host。实例端口 3080 时，rootfs 内任何能写 `/tmp/dsh-start-*.log`
+ * 的代码（`ProotCommand` 把 `<cacheDir>/dsh/tmp` bind 成 rootfs 的 `/tmp`）追加一行
+ *
+ * ```
+ * dsh web: http://127.0.0.1:40404/?token=<自己造的 43 字符>
+ * ```
+ *
+ * 就能被采信：写进 `state.url`、pid 文件 url 字段、token 侧车，最后进 WebView。
+ * proot **没有网络隔离**（`ProotCommand` 的 argv 里没有 `--net`/`unshare`），rootfs 内进程
+ * 可以监听 40404；同源（都是 `127.0.0.1`）⇒ `setAcceptThirdPartyCookies(false)` 拦不住，
+ * 攻击者页面能带着 dsh 的 cookie 向真实端口发同源请求。
+ * 危害链的实测证据见 `docs/reports/round34/REDTEAM-RECENT-FIXES.md` §1.2 与探针
+ * `D:\tmp\redteam34\N3Compose.java`（N3/N5/N6 三例，`PORT MATCHES INSTANCE = false` 却
+ * `picked by gate` 非空）。
+ *
+ * ## [expectedPort] 的取值语义：**必须传"本次运行真正让脚本绑定的端口"**
+ * 调用点传的是 [startLocked] 的 `launchPort`（= [resolveLaunchPort] 的结果），不是
+ * `instance.port`。两者在"配置端口 > 0 且被占用"时会分叉：那时 `launchPort = 0`（脚本改用
+ * 系统随机端口），而 `instance.port` 仍是那个被占的旧值 —— 拿 `instance.port` 当基准会把
+ * **真实的** URL 全部判死（实例永远到不了 Running）。反方向同样不行：`instance.port` 在
+ * 自动端口实例上回写滞后。
+ *
+ * ## `expectedPort <= 0` ⇒ 跳过端口比对（与 [adoptionPortMatches] **相反**，别统一）
+ * `0` 在这里的含义是"本次运行用的是系统分配端口，端口此刻**不可知**"（见
+ * [resolveLaunchPort] 的两个分支：配置端口 <= 0，或配置端口被占）。不是"目标端口不可信"。
+ * + `adoptionPortMatches` 在 `expectedPort <= 0` 时返回 false，是因为认领路径的端口是**已知**
+ *  的（从 pid 文件读出并已探活），那一刻"不知道端口"本身就是可疑。
+ * + 这里端口**还没被任何可信来源告知**：若在 `<=0` 时也拒，自动端口实例（新实例默认端口是
+ *  `preferredPort`，但端口段全占或用户手填 0 时就是 0）将永远拿不到 URL，state 卡在
+ *  Starting 直到 180s 看门狗判超时 —— 把安全门做成了功能回归。
+ * 代价（明确登记为残余风险）：自动端口那一档，端口维度仍是空的 —— 因为**在没有网络隔离的
+ * 前提下，宿主无法区分"dsh 监听的端口"和"rootfs 内攻击者监听的端口"**，端口号本身不是身份。
+ * 固定端口档能挡住，是因为那个值由宿主自己选、且由宿主的预检唯一决定。
+ *
+ * ## 端口不匹配时**不降级**到③级合成 URL
+ * ③级 `http://127.0.0.1:<READY port>/` 的端口来自同一行输出，同样可伪造；拿它兜底等于把
+ * "端口不匹配"翻译成"采信另一个同样不可信的端口"。所以这里和 host 门一样只做"逐候选过滤"，
+ * 全被拒就是 null（= 这行没有可用 URL）。
+ */
+fun webUiUrlAllowed(url: String?, expectedPort: Int): Boolean =
+    webUiUrlAllowed(url) && webUiPortAllowed(url, expectedPort)
+
+/**
+ * ★ R34：完整判据的**端口半边**（单独暴露，供 [webUiUrlAllowed]`(url, expectedPort)` 与单测
+ * 分别钉住；与 host 半边 [adoptionHostIsLoopback] 同样的拆分惯例）。
+ *
+ * 判据：
+ * - [expectedPort] <= 0 → **true**（端口不可知，这一维弃权；理由与代价见 [webUiUrlAllowed]
+ *   的 KDoc —— 与 [adoptionPortMatches] 的极性相反，**故意**如此）；
+ * - url 为 null/空 → false；
+ * - 解析不出端口（裸 host、无 `:port`）→ [UrlScanner.portOf] 返回 null → false
+ *   （"看起来像回环地址"不等于"在预期端口上"，取严）；
+ * - 其余：URL 端口 == [expectedPort]。
+ */
+fun webUiPortAllowed(url: String?, expectedPort: Int): Boolean {
+    if (expectedPort <= 0) return true
+    if (url.isNullOrBlank()) return false
+    return UrlScanner.portOf(url) == expectedPort
 }
 
 /** 端口连通性探测（判断孤儿进程是否还活着、是否已就绪） */

@@ -948,9 +948,16 @@ class DshWebViewActivity : FCLActivity() {
         // 位置必须在 `compatOk` 直通**之前**：那条 `webView.loadUrl(url)` 是门禁系统的
         // 放行通道，放在它后面等于没加。
         //
-        // 判据与上游共用同一个 `webUiUrlAllowed`（scheme 白名单 + 回环 host），
+        // 判据与上游共用同一个 `webUiUrlAllowed`（scheme 白名单 + 回环 host + **端口绑定**），
         // 不重抄一份清单 —— 抄第二份就是下一次口径漂移的种子。
-        if (!com.dsh.core.webUiUrlAllowed(url)) {
+        //
+        // ★ R34：补上端口维度（round32 只挡了 host，于是"回环但端口不对"的 URL 两道门一起放行）。
+        //   基准取 `state` 里**宿主自己算出的**运行期端口 `State.Running.port` ——
+        //   **不能**取 `UrlScanner.portOf(url)`：那是被校验的对象，拿它当基准等于恒等放行。
+        //   state 此刻不是 Running 时（四个调用点都只在 Running 下触发，这里是防御）退化为 0，
+        //   即端口这一维弃权 —— 与上游 `expectedPort <= 0` 的语义一致（见 `webUiUrlAllowed` 的 KDoc）。
+        val expectedPort = (DshRuntime.state.value as? DshRuntime.State.Running)?.port ?: 0
+        if (!com.dsh.core.webUiUrlAllowed(url, expectedPort)) {
             loadedUrl = null
             showError(getString(R.string.dsh_webview_url_blocked))
             return

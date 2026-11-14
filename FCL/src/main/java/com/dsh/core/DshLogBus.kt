@@ -312,8 +312,154 @@ object DshLogBus {
         return f
     }
 
-    /** 已注册的敏感串（启动 token 等），做二次兜底替换 */
+    /**
+     * ★ R34：可被注册为 secret 的最长长度。
+     *
+     * 与 [MIN_SECRET_LENGTH] 对称的下界/上界：[sanitize] 对每条 secret 都要跑一次
+     * `String.replace`，代价与 secret 长度成正比。红队实测（`SecretProbe2`）注册一条
+     * **20 万字符**的串可以成功 —— 此后每行日志的 `replace` 都要扫 20 万字符的 needle。
+     * 真 token 是 43 字符 base64url，[MAX_SECRET_LENGTH] 留了远超真实需求的余量，
+     * 但把"一条输出就能让整个进程的每条日志变慢"这条路堵上。
+     */
+    private const val MAX_SECRET_LENGTH = 256
+
+    /**
+     * ★ R34：已注册 secret 的**条数**上限。
+     *
+     * ## 为什么需要（缺陷本体）
+     * [sanitize] 对**每一个**已注册串跑一次 `out.replace(t, "***")`，而 [registeredSecrets]
+     * 原来是**无上限**的 `CopyOnWriteArraySet`。触发路径完全在 rootfs 手里：
+     * 往可写的 `/tmp` 里追加 5 万行 `x?token=Q0001…`（每行都过 8 字符门槛），
+     * `onProcessLine` 就每行调一次 [registerSecret] —— 集合无限增长，而
+     * [MAX_LINES] 裁的是**日志**，从来不裁 secret 集合。
+     *
+     * 红队实测（round34 `D:\tmp\redteam34\SecretProbe2`，JDK 17）：
+     * 5 万条 → `sanitize` 1.668 ms/行、注册累计 60.7 s；10 万条 → 3.429 ms/行
+     * （≈500 行/s 时要 171% 单核，即**日志热路径被永久拖垮**）。
+     *
+     * ## 上限取多少：16
+     * 真 token 每实例 1 个（启动 token），兜底重试可能换 1 个，进程内同时活着的实例量级是
+     * 个位数 —— 16 已经给了很大余量。代价上界：16 × 256 字符 = 4 KB，每行固定最多 16 次
+     * `String.replace`，与攻击者写入多少行**彻底无关**。
+     *
+     * ## 超限策略：拒绝新增（**不是** LRU 淘汰）
+     * 两种选择的安全含义完全不同，这一点是本节最重要的部分：
+     * - **LRU 淘汰**会把一条**已经漏进日志的** secret 从集合里踢出去 —— 此后含该 token 的
+     *   新行（或重新出现的同一行）就**变回明文**。也就是说"淘汰"在安全上是**撤销脱敏**：
+     *   攻击者只要在真 token 打印之后灌满 16 条伪造 secret，就能把真 token 挤出去。
+     * - **拒绝新增**（本实现）方向相反：集合只增不减，已登记的秘密**永远**继续被脱敏；
+     *   被拒绝的只是**攻击者的伪造串**不再被登记。代价是伪造串可能以明文留在日志里 ——
+     *   但它们本来就是攻击者自己写进 `/tmp` 的公开内容，**不是秘密**。
+     *
+     * 一句话：宁可少脱敏几个攻击者自己写的假串，也绝不把真 token 重新变回明文。
+     *
+     * ## 为什么不是"每实例"而是"全局"
+     * [registeredSecrets] 是进程级的，[sanitize] 是**无上下文**的（不知道这行属于谁）——
+     * 按实例分别设上限只会让"总条数 = 实例数 × 上限"重新变成无界（实例数上限 [MAX_STREAMS]
+     * 是 32，32 × 16 = 512 条仍可接受，但收益为零而复杂度翻倍）。进程级单一是零成本的正确形状。
+     */
+    private const val MAX_SECRETS = 16
+
+    /**
+     * 已注册的敏感串（启动 token 等），做二次兜底替换。
+     *
+     * ★ R34：**有上限**（[MAX_SECRETS]），超限**拒绝新增**而不是淘汰 —— 理由见 [MAX_SECRETS]。
+     * 仍需并发安全（`onProcessLine` 在 IO 线程，[sanitize] 在任意生产者线程）：
+     * 继续用 `CopyOnWriteArraySet`，但上限把它的复制代价也一并钉死。
+     *
+     * 注意：**必须是 `Set`**，不能用 `List` —— 真 token 会被 `onProcessLine` 的
+     * "重复打印/迟到 URL"路径反复注册（同一 token 每次刷新都走一遍），`List` 会让
+     * 同一 token 占满整个上限。
+     */
     private val registeredSecrets = CopyOnWriteArraySet<String>()
+
+    /** [registerSecret] 被上限挡掉的次数（诊断用；只增不减的计数器，无锁读写的近似值足够） */
+    private val rejectedSecretCount = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * ★ R34：注册的**串行化**监视器。
+     *
+     * `CopyOnWriteArraySet` 自身线程安全，但"先看 size 再 add"不是原子的 —— 两个线程同时
+     * 看到 `size == MAX_SECRETS - 1` 就会双双写入，把上限顶破一格。registration 不在热路径
+     * （真 token 一辈子一两次），用一把独立的小锁换"上限是硬上限"很划算。
+     *
+     * **不能**复用 [lock]：那样会把 `sanitize` 的生产者线程和总线缓冲锁搅在一起，
+     * 而 [sanitize] 完全不需要 [lock]（它只读 COW 集合，快照语义天然安全）。
+     */
+    private val secretLock = Any()
+
+    /**
+     * ★ R34：**禁止被脱敏**的日志词表（缺陷 2 的修法）。
+     *
+     * ## 问题
+     * [sanitize] 对每个已注册串做无差别 `out.replace(t, "***")`。只要注册了一个恰好是
+     * 协约词片段的"secret"，协约行就被打成马赛克，`scriptFailureReason` 返回 null，
+     * **R33 刚修好的端口归因被静默废掉**。红队实测（round34 `PortAttr2`）：
+     * - 注册 `port-in-use` → `[start-dsh] FAILED reason=*** port=3080 code=1`（reason=null）
+     * - 注册 `start-dsh`  → `[***] FAILED reason=port-in-use port=3080 code=1`（reason=null）
+     *
+     * 攻击成本极低：rootfs 往 `/tmp` 写一行 `x?token=port-in-use`（11 字符，过 R33 的 8 字符门槛）。
+     *
+     * ## 为什么"再加个门槛"不行
+     * `port-in-use` 有 11 字符，比门槛长；把门槛提到 52 才够，而真 token 是 43 字符 —— 那样
+     * 连真 token 都注册不进来（等于把脱敏整个关掉）。
+     *
+     * ## 本实现的判据：**内容**，不是长度
+     * 拒绝注册"任何是下列词表片段（substring）的串"。为什么这一个检查就够：
+     *
+     * 1. 能进入 [registeredSecrets] 的串，经 [registerSecret] 的形状门后必然形如
+     *    `[A-Za-z0-9_-]+`（见 [TOKEN_SHAPE_RE]）；两个真实调用点都走
+     *    `UrlScanner.tokenOf(url)`，其正则就是 `[A-Za-z0-9_\-]+`。
+     * 2. 于是 secret **不可能**含 `[`/`]`/`=`/`:`/空格/换行 —— 它永远无法改写
+     *    `[start-dsh]`、`FAILED`、`reason=` 这些**结构骨架**，只能落在骨架之间的
+     *    "值"上：前缀名（`start-dsh`）与原因码（`port-in-use` 等）。
+     * 3. 因此"能破坏归因的 secret"必然满足：是某个**协约词**的连续子串。
+     *    词表有限且固定，逐个 `contains` 即可完整覆盖 —— 这不是打地鼠式的黑名单，
+     *    而是由第 2 点的字符集约束推出的**完备判据**。
+     *
+     * 注意方向是 `词表词.contains(secret)`（secret 是词的片段），**不是**反过来：
+     * 43 字符的真 token 长于任何词，不可能出现在协约行里，不该被误拒。
+     *
+     * ⚠️ **维护约定**：本词表必须与 `FCL/src/main/assets/dsh/scripts/` 下的脚本打印的
+     *    `FAILED reason=<code>` 取值、以及 `[<prefix>]` 前缀名保持同步。
+     *    `R34SecretCapTest.contractVocabularyCoversEveryScriptReasonCode` 会扫描脚本目录
+     *    做交叉校验 —— 脚本新增一个原因码而这里没跟上时，那条用例会红。
+     */
+    private val protectedLogVocabulary = listOf(
+        // --- 影响脚本协约行（scriptFailureReason / tailSaysPortInUse）---
+        "start-dsh",          // 前缀名
+        "port-in-use",        // ← 红队实测的武器
+        "node-exit",
+        "package-missing",
+        "node-missing",
+        "no-writable-logdir",
+        "ready-timeout",
+        "unexpected-exit",    // setup 的 trap 兜底
+        "node-version",
+        "npm-missing",
+        "verify-version",
+        "smoke-env",
+        "smoke-test",
+        // --- 影响 seccomp 兜底判定（looksLikeSeccompTrouble）---
+        // 该判据查 "seccomp" / "ptrace" / "bad system call" / "operation not permitted"。
+        // 前两个都短于 MIN_SECRET_LENGTH，注册不进来；后两个含空格，token 形状的串同样
+        // 拼不出整句 —— 但可以打掉其中一个**单词**（"operation" / "permitted" 都是 9 字符），
+        // 于是整句不再匹配。保险起见把单词也列上。
+        "operation",
+        "permitted"
+    )
+
+    /**
+     * ★ R34：token 形状门（缺陷 2 完备性论证的第 2 点）。
+     *
+     * 只有形如 `[A-Za-z0-9_-]+` 的串才允许进入 [registeredSecrets]。理由有两条：
+     * - **安全**：这保证 secret 永远无法含 `[`/`]`/`=`/`:`/空白/换行，因而无法改写协约行的
+     *   结构骨架，也无法借 `\n` 制造伪行（[stamp] 里的 [escapeLineBreaks] 只处理了进入总线的
+     *   行，注册路径是另一条独立入口）。
+     * - **正确性**：两个真实调用点（`DshRuntime` 的 `UrlScanner.tokenOf(url)`）产出的就是
+     *   这个字符集；非 token 形状的串本来就不该被当成"token 值"去全文替换。
+     */
+    private val TOKEN_SHAPE_RE = Regex("""^[A-Za-z0-9_\-]+$""")
 
     /**
      * ★ R33：可被注册为 secret 的最短长度。
@@ -476,7 +622,8 @@ object DshLogBus {
      */
     @JvmStatic
     fun clearForTestOfRegisteredSecrets() {
-        registeredSecrets.clear()
+        synchronized(secretLock) { registeredSecrets.clear() }
+        rejectedSecretCount.set(0)
     }
 
     /**
@@ -563,6 +710,17 @@ object DshLogBus {
     /**
      * 把敏感 token 从日志里抹掉。
      * dsh 启动行形如：`dsh web: http://127.0.0.1:3080/?token=XXXX (LAN: ...)`
+     *
+     * 两条通路：
+     * 1. **结构化**：[tokenRegex] 抹掉任何 `token=<值>` —— 与是否注册过无关、与长度无关，
+     *    这条是主力（URL 里的 token 一律打码）。
+     * 2. **兜底**：已注册串的全文替换，管住"token 以别的形态出现"（例如 dsh 把 token
+     *    单独打成一行、或写进 cookie 调试输出）。
+     *
+     * ★ R34：第 2 条的**代价现在是常数上界**，不再是攻击者可控的 O(注册条数)。
+     *   [registeredSecrets] 被 [MAX_SECRETS] 钉死（且每串不超过 [MAX_SECRET_LENGTH]），
+     *   所以每行的 `replace` 次数 ≤ 16、扫描总长 ≤ 4 KB，与 rootfs 往 `/tmp` 灌多少行无关。
+     *   修复前红队实测 10 万条注册后是 3.429 ms/行 —— 那是**永久**的 CPU 税。
      */
     fun sanitize(line: String): String {
         var out = tokenRegex.replace(line) { m -> "${m.groupValues[1]}***" }
@@ -589,13 +747,63 @@ object DshLogBus {
      *
      * 注意这**不影响** `token=` 那条正则通路（[sanitize] 第一行）——
      * URL 里的 token 是结构化的，无论长短一律打码，不依赖本阈值。
+     *
+     * ## ★ R34：四道门（顺序有讲究）
+     * 1. **长度下界** [MIN_SECRET_LENGTH]（R33）—— 挡单字符把日志变马赛克；
+     * 2. **长度上界** [MAX_SECRET_LENGTH] —— 挡"一条 20 万字串让每行都变慢"；
+     * 3. **形状** [TOKEN_SHAPE_RE] —— 只收 token 形状的串（缺陷 2 完备性论证的基础）；
+     * 4. **保护词表** [protectedLogVocabulary] —— 挡掉会摧毁协约行/归因判据的串（缺陷 2 本体）。
+     *
+     * 之后才进**容量**检查（[MAX_SECRETS]，超限**拒绝新增**，不淘汰）。
+     *
+     * 有一件事**刻意不做**：不论登记成败，都**不**往日志总线写任何东西。
+     * 本函数会被攻击者可控的输出以每秒上千次的频率触发，若每次拒绝都记一行，
+     * 拒绝日志本身就变成新的放大器（红队第二轮就能拿它做 DoS）。诊断信息只经
+     * [rejectedSecretCountForTest] 暴露给测试。
      */
     fun registerSecret(secret: String) {
         if (secret.length < MIN_SECRET_LENGTH) return
-        registeredSecrets += secret
-        // 同时注册给 FCL 的 logger，避免经由 FCL 自身日志路径泄漏
+        if (secret.length > MAX_SECRET_LENGTH) {
+            rejectedSecretCount.incrementAndGet()
+            return
+        }
+        if (!TOKEN_SHAPE_RE.matches(secret)) {
+            rejectedSecretCount.incrementAndGet()
+            return
+        }
+        // 缺陷 2：secret 是某个协约词的片段 → 注册它会让协约行被打码、归因静默失效
+        if (protectedLogVocabulary.any { it.contains(secret) }) {
+            rejectedSecretCount.incrementAndGet()
+            return
+        }
+        // 容量门：copy-add 必须原子，否则并发注册能顶破上限（见 [secretLock]）
+        synchronized(secretLock) {
+            if (secret in registeredSecrets) return // 幂等：同一 token 反复注册不占额度
+            if (registeredSecrets.size >= MAX_SECRETS) {
+                rejectedSecretCount.incrementAndGet()
+                // ★ 不淘汰（见 [MAX_SECRETS]）：踢掉旧的 = 把已经漏过的真 token 变回明文
+                return
+            }
+            registeredSecrets += secret
+        }
+        // 同时注册给 FCL 的 logger，避免经由 FCL 自身日志路径泄漏。
+        // ★ R34：**放在容量门之后** —— 那个 Java 侧数组是 `Arrays.copyOf` 的 O(n²) 追加
+        //   （红队 `RegisterCost`：5 万条 13.1 s），不设防就等于把 DoS 从本类搬到了隔壁。
+        //   放进本类的上限之后，它最多也只收 [MAX_SECRETS] 条。
         runCatching { com.tungsten.fclcore.util.Logging.registerAccessToken(secret) }
     }
+
+    /** 测试 seam：当前已注册的 secret 条数（验证上限真的生效）。 */
+    @JvmStatic
+    fun registeredSecretCountForTest(): Int = registeredSecrets.size
+
+    /** 测试 seam：被任一道门（含容量门）挡掉的注册次数。 */
+    @JvmStatic
+    fun rejectedSecretCountForTest(): Int = rejectedSecretCount.get()
+
+    /** 测试 seam：某个串当前是否在脱敏集合里（不暴露集合本身，避免调用方绕过 [secretLock]）。 */
+    @JvmStatic
+    fun isSecretRegisteredForTest(secret: String): Boolean = secret in registeredSecrets
 
     // --- 内部：入总线的唯一加工口 -------------------------------------------
 
