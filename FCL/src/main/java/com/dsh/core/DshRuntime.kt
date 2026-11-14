@@ -2320,31 +2320,37 @@ object DshRuntime {
             // ★ 但必须确认"现在 Running 的仍是本实例"——否则被停掉的旧实例（终止是异步的，最长 5s）
             // 在退出前把 URL 打出来，就会把新实例的 url/port 覆盖成旧实例的，WebView 于是连到已经
             // 关掉的端口上。第三轮已把"状态跃迁先校验 instanceId"定成约定，这一处当时漏了。
-            if (cur is State.Running && cur.instanceId == instance.id) {
-                if (syntheticUrlWouldOverwriteToken(cur.url, url)) {
-                    // ★ BL-136（R16/fix4）：**无 token 的合成 URL 不许覆盖已带 token 的 url**。
-                    //   fix3 的③级兜底（READY port= → 合成 http://127.0.0.1:P/）在行序为
-                    //   "dsh web:（①级带token）→ READY port=（③级裸）→ READY url=（②级带token）" 时，
-                    //   中间那一步会短暂把裸 URL 写进 state（毫秒级窗口；若收集器/外跳恰在窗口内读
-                    //   state 即受害）。判据见纯函数，端口仍可取（合成值里有端口）；url 保留旧值。
-                    val portOnly = UrlScanner.portOf(url) ?: cur.port
-                    _state.value = cur.copy(port = portOnly)
-                    _running.value = Running(cur.instanceId, portOnly, cur.url)
-                } else {
-                    val port = UrlScanner.portOf(url) ?: cur.port
-                    _state.value = cur.copy(url = url, port = port)
-                    _running.value = Running(cur.instanceId, port, url)
-                    // BL-135：重复打印/迟到的带 token URL 是 pid 文件里 url 字段的刷新机会
-                    //（首次写入若发生在③级裸 URL 行，writePidFile 会把 url 记为 null；
-                    // 此处把它补成带 token 的最终值）。
-                    if (UrlScanner.tokenOf(url) != null && cur.url != url) {
-                        handle?.pid?.takeIf { it > 0 }
-                            ?.let { ProcessUtil.writePidFile(instance.id, it, port, url) }
-                        // R17：侧车文件同刷（不依赖 pid 解析成功，见 onProcessLine 就绪段的注释）
-                        ProcessUtil.writeTokenUrlFile(instance.id, url)
-                    }
-                }
-            }
+            // ★ R35/RE-02：上面那句 `cur` 是**锁外快照**，只配用来决定"走不走这条分支"，
+            //   绝不能拿它去判"现在还是不是 Running"、更不能拿它当写回的基础值。
+            //   旧实现在这里 `_state.value = cur.copy(...)`：只要 stop()（@Synchronized，锁内置
+            //   State.Stopping，见 :1573）插在"读 cur"与"写 state"之间，就会把 Stopping 覆盖回
+            //   Running，`_running` 也被重新写活 ⇒ 两套 flow 互相矛盾，随后进程真退出时
+            //   onProcessExit 又把它当"意外退出"上报。修法与紧邻的 A5 段（Round24）同一口径：
+            //   **同一临界区 + 锁内重读 + 判定抽成纯函数 + 副作用留锁外**。
+            val incomingPort = UrlScanner.portOf(url)
+            val refresh = synchronized(this) {
+                // 锁内重读 _state.value —— 不用上面的 cur（那是旧值，判了也白判）。
+                // 返回 null（已是 Stopping / 别的实例 / 非 Running）= 一个字都不许动。
+                val plan = planRunningRefresh(_state.value, instance.id, url, incomingPort)
+                    ?: return@synchronized null
+                // 锁内只做"配对写"，与 startLocked/stop 同一把对象监视器。
+                _state.value = plan.state
+                _running.value = plan.running
+                plan
+            } ?: return
+            // ↓ 以下是**锁外**副作用（与 A5 段同样的理由：别把文件 IO 拖进 stop 的等待里）。
+            //   ★ BL-136（R16/fix4）：无 token 的合成 URL 不许覆盖带 token 的 url —— 该判定
+            //     已在 planRunningRefresh 内按**锁内重读的** current.url 做完；这里只看结果。
+            //   ★ BL-135/R17：persistUrl 非 null ⇔ `tokenOf(url) != null && current.url != url`
+            //     （逐字保留原条件，判定只做一遍）。
+            val persistUrl = refresh.persistUrl ?: return
+            // BL-135：重复打印/迟到的带 token URL 是 pid 文件里 url 字段的刷新机会
+            //（首次写入若发生在③级裸 URL 行，writePidFile 会把 url 记为 null；
+            // 此处把它补成带 token 的最终值）。
+            handle?.pid?.takeIf { it > 0 }
+                ?.let { ProcessUtil.writePidFile(instance.id, it, refresh.state.port, persistUrl) }
+            // R17：侧车文件同刷（不依赖 pid 解析成功，见 onProcessLine 就绪段的注释）
+            ProcessUtil.writeTokenUrlFile(instance.id, persistUrl)
             return
         }
         val port = UrlScanner.portOf(url) ?: instance.port
@@ -2901,6 +2907,88 @@ fun tailSaysPortInUse(tail: List<String>): Boolean =
 fun syntheticUrlWouldOverwriteToken(current: String?, incoming: String): Boolean =
     UrlScanner.tokenOf(incoming) == null &&
         current != null && UrlScanner.tokenOf(current) != null
+
+/**
+ * ★ R35/RE-02：「已 Running 时只刷新 url」这一次续写要**落成什么**（纯函数，便于单测）。
+ *
+ * [state] / [running] 是锁内要配对写下去的两个值；[persistUrl] 非 null 表示锁外还要做一次
+ * 持久化刷新（pid 文件的 url 字段 + token 侧车），见调用点 [DshRuntime.onProcessLine]。
+ *
+ * ★ 为什么把"持久化"也写进返回值，而不是让调用点自己再判一遍：
+ *   BL-135/R17 的写入条件（`tokenOf(incoming) != null && current.url != incoming`）里的
+ *   `current` 必须是**锁内重读到的**那一份 —— 在锁外重判一次就得再读一次状态（又一个窗口），
+ *   或者用锁外旧快照（正是 RE-02 这个 bug 的形状）。判定只做一遍，结果带出来。
+ *
+ * @property persistUrl 非 null ⇒ 锁外写 pid 文件（还需**本实例**的 `handle?.pid > 0`）与 token 侧车
+ */
+internal data class RunningRefresh(
+    val state: DshRuntime.State.Running,
+    val running: DshRuntime.Running,
+    val persistUrl: String?,
+)
+
+/**
+ * ★ R35/RE-02：`onProcessLine` 里「状态已是本实例的 Running，dsh 又打印了一行 URL」时
+ * 该不该改状态、改成什么（纯函数，便于单测）。
+ *
+ * ## 为什么存在
+ * 这段逻辑原来在 `onProcessLine` 里是**锁外读快照 + 锁外写**：
+ * ```
+ * val cur = _state.value          // 锁外读
+ * ... _state.value = cur.copy(..) // 锁外写
+ * ```
+ * [DshRuntime.stop] 是 `@Synchronized` 且在锁内置 `State.Stopping`（:1573）：只要它插在
+ * 这次读写之间，这里的旧快照就会把 **Stopping 覆盖回 Running**（`_running` 也被重新写活）。
+ * 后果：界面显示"还在跑"、`activeOwnerOf` 判通道仍被占用、而停止协程已经把 `_running` 清空过，
+ * 两个 flow 互相矛盾；等到进程真的退出，`onProcessExit` 又看到 Running 把它报成"意外退出"。
+ * 同一函数里紧邻的 Starting→Running 迁移已在 Round24 A5 修好（锁内重读 + 同一临界区 +
+ * 副作用留锁外），两段判据不一致 —— 这就是 RE-02。
+ *
+ * ## 契约
+ * - **返回 null = 一个字都不许动**（不写 state、不写 running、不做任何文件 IO）。
+ *   这就是修复的关键：调用点锁外判"是 Running"，锁内重读可能已是 Stopping —— 以重读为准。
+ * - 判据要求 [current] **既是 Running、又属于 [instanceId]**。后半条是老缺陷（第三轮）的修复：
+ *   被停掉的旧实例在退出前打印 URL，不能把新实例的 url/port 覆盖成旧实例的（WebView 会连到
+ *   已经关掉的端口）。
+ * - 端口取 `[incomingPort] ?: current.port`（原实现的 `UrlScanner.portOf(url) ?: cur.port`）。
+ * - BL-136（R16/fix4）：[syntheticUrlWouldOverwriteToken] 为真时**只更新 port、url 保留旧值**；
+ *   判据以**锁内重读到的** [current].url 为基准（只许更严：快照里的 url 可能比锁内更旧）。
+ *   这种情况下 [RunningRefresh.persistUrl] 必为 null（新值无 token，BL-135 条件不成立）。
+ * - BL-135/R17：`tokenOf(incomingUrl) != null && current.url != incomingUrl` 时带出 [persistUrl]，
+ *   调用点在锁外据此刷新 pid 文件与 token 侧车。逐字保留原条件。
+ *
+ * 写成顶层函数而不是 private：单测 harness 不加载 android 依赖，顶层落在 `DshRuntimeKt`
+ * 静态方法上（同 [syntheticUrlWouldOverwriteToken] / [shouldPersistPort] 的惯例）。
+ */
+internal fun planRunningRefresh(
+    current: DshRuntime.State,
+    instanceId: String,
+    incomingUrl: String,
+    incomingPort: Int?,
+): RunningRefresh? {
+    // ★ 这一行就是 RE-02 的修复本体：不满足"本实例的 Running"就什么都不返回。
+    //   Stopping / Failed / Exited / 别的实例 —— 一律不碰（尤其 Stopping：那是 stop() 刚写下的事实）。
+    if (current !is DshRuntime.State.Running || current.instanceId != instanceId) return null
+    val port = incomingPort ?: current.port
+    if (syntheticUrlWouldOverwriteToken(current.url, incomingUrl)) {
+        // BL-136：旧值带 token、新值不带 ⇒ 裸 URL 不许覆盖（毫秒级降级窗口）。
+        // 端口仍可取（③级合成值里有端口），url 保留旧值。
+        return RunningRefresh(
+            state = current.copy(port = port),
+            running = DshRuntime.Running(current.instanceId, port, current.url),
+            persistUrl = null,
+        )
+    }
+    // BL-135：重复打印/迟到的带 token URL 是 pid 文件里 url 字段的刷新机会
+    //（首次写入若发生在③级裸 URL 行，writePidFile 会把 url 记为 null；此处补成最终值）。
+    val persistUrl =
+        if (UrlScanner.tokenOf(incomingUrl) != null && current.url != incomingUrl) incomingUrl else null
+    return RunningRefresh(
+        state = current.copy(url = incomingUrl, port = port),
+        running = DshRuntime.Running(current.instanceId, port, incomingUrl),
+        persistUrl = persistUrl,
+    )
+}
 
 /**
  * ★ BL-176（R21-E）：认领孤儿时，候选 token URL 的**监听端口是否等于本实例当前端口**的判据

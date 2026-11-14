@@ -22,6 +22,58 @@ enum class ReadinessGap {
 }
 
 /**
+ * 一轮 rootfs 解压的**结论**（R35 / RE-04）。判据内核是 [extractVerdict]，本枚举只是它的值域。
+ *
+ * 为什么要三个值而不是两个布尔：`CLEAN` 之外的两种失败**后果完全不同**，必须分开：
+ * - [PARTIAL_FAILURES]：解压这一轮有子项没落实（符号链接没建出来 / 可执行位没还原 / 硬链接
+ *   既建不成也复制不成）—— 树本身可能"看起来"完整，但那一部分在 guest 里用不了；
+ * - [LAYOUT_BAD]：这一轮没报失败，但解出来的目录**不像**一个 rootfs（典型成因：tar 里多套了
+ *   一层顶层目录）。两者的用户指引不同（前者重试/换设备，后者是打包问题），所以不能合并成
+ *   "失败"一个值。
+ *
+ * `PARTIAL_FAILURES` 排在 `LAYOUT_BAD` 之前（同时命中时优先报它）：它的 [RuntimeUtils.ExtractReport.describe]
+ * 带着**首个失败条目名 + 异常**，比"找不到 bin/sh"更能定位问题。
+ */
+internal enum class ExtractVerdict {
+    CLEAN,
+    PARTIAL_FAILURES,
+    LAYOUT_BAD
+}
+
+/**
+ * 解压是否**完整**（R35 / RE-04 的门禁内核，纯函数）。
+ *
+ * [hasFailures] 必须来自 `ExtractReport.hasFailures()`，**不能**用 `describe() == "all entries applied"`、
+ * 也不能把 `getDegradedHardLinks() > 0` 算进来：硬链接退化为复制是**内容正确**的降级路径，
+ * 在不支持硬链接的文件系统上"退化即失败"会把正常装机打成假失败（见 `ExtractReport` 的 KDoc）。
+ *
+ * [layoutUsable] 必须来自布局判据（现为 `DshBootstrap.looksUsable` 的 3 路径）。两条判据
+ * **并列**、互不替代：布局门回答"这棵树长得像不像 rootfs"，本函数回答"这一轮有没有把每一条
+ * 子项都落实"。前者对后者无蕴含关系 —— `bin/sh` 在、但 1049 条符号链接一条都没建出来的树，
+ * 布局门照样判 true，这正是 RE-04。
+ */
+internal fun extractVerdict(hasFailures: Boolean, layoutUsable: Boolean): ExtractVerdict = when {
+    hasFailures -> ExtractVerdict.PARTIAL_FAILURES
+    !layoutUsable -> ExtractVerdict.LAYOUT_BAD
+    else -> ExtractVerdict.CLEAN
+}
+
+/**
+ * 替换成功后，能不能删掉 `.old` 备份（R35 / RE-04，纯函数）。
+ *
+ * 收紧前的判据只有 [newTreeUsable]（`looksUsable(destDir)`）：新树解压**部分失败**时它仍然
+ * 为 true，于是**可用的旧备份被删**、回滚路径永久消失（用户只剩"重下 500MB"一条路）。
+ * 现在必须两条同时成立 —— 内容完整性（[extractComplete]）与布局可用性缺一不可。
+ *
+ * 这不会造成"备份永不删除、磁盘被两份 300MB+ 的 rootfs 吃满"：`extractComplete` 为 false 的
+ * 情况在今天走不到这里（解压失败在动 dest 之前就抛了，见 [DshBootstrap] 的 `extractRootfs`），
+ * 所以正常路径上它恒为 true、备份照旧在本轮末尾删掉；而万一将来有人把失败判定挪晚，
+ * 这里会走回滚分支（旧树回到 dest），`.old` 同样不会跨轮残留。
+ */
+internal fun shouldDropBackup(extractComplete: Boolean, newTreeUsable: Boolean): Boolean =
+    extractComplete && newTreeUsable
+
+/**
  * 判定内核：按 `isReady()` 的 `&&` 短路顺序收集**全部**不满足项（空表 = 就绪）。
  *
  * 顺序与 [DshBootstrap.isReady] 一一对应：rootfs 版本 → scripts 版本 → scripts 版本
@@ -669,21 +721,65 @@ object DshBootstrap {
 
     /**
      * 解压 rootfs.tar.xz 到临时目录，校验布局后原子替换。
+     *
+     * ## R35 / RE-04：为什么现在接住 `ExtractReport`
+     *
+     * `RuntimeUtils.uncompressTarXZ` 从 round31 起就**返回**一轮的子项失败汇总
+     * （[RuntimeUtils.ExtractReport]），但本方法（它唯一的生产调用点）一直丢弃返回值 ——
+     * 于是"符号链接没建出来 / 可执行位没还原 / 硬链接既建不成也复制不成"这类子项失败
+     * 只要 `bin/sh`、`usr/bin/env`、`bin/busybox` 三个路径之一存在，就会被下面的布局门判成
+     * "解压成功"；随后 `:720` 还会把**可用的旧备份删掉**，回滚路径永久消失。
+     *
+     * 修法：**新增**一条"这一轮解压是否完整"的门（[extractVerdict]），与布局门并列，
+     * **不改布局门**（[looksUsable] 有第三个调用点在 [hoistSingleTopLevelDir]，改它会波及
+     * hoist 的判定语义）。新门放在**写 version、动 destDir/.old 之前** —— fail-fast：
+     * 部分失败时旧 rootfs 连挪都不挪，回滚路径根本不消耗。
      */
     private fun extractRootfs(context: Context, onProgress: (Progress) -> Unit) {
         val destDir = File(DshPaths.ROOTFS_DIR)
         val tmpDir = File("${DshPaths.ROOTFS_DIR}.tmp")
         if (tmpDir.exists()) tmpDir.deleteRecursively()
-        tmpDir.mkdirs()
+        // R35 / RE-04：返回值必须判。`mkdirs()` 在"目录已存在"时也返回 false（上面的
+        // deleteRecursively 可能没删干净），所以只有在**目录确实不在**时才把它当失败。
+        // 不判的后果：在一个不存在/不可写的目录里解压，第一个子项抛 FileNotFoundException，
+        // 用户看到的是一句和 rootfs 毫无关系的路径错误。
+        if (!tmpDir.mkdirs() && !tmpDir.isDirectory) {
+            throw IllegalStateException(
+                (DshUiText.contextOrNull() ?: context).getString(
+                    R.string.dsh_bootstrap_data_dir_failed, tmpDir.absolutePath
+                )
+            )
+        }
 
-        context.assets.open("$ASSET_ROOT/rootfs/rootfs.tar.xz").use { input ->
+        // ★ R35 / RE-04：**必须接住返回值**（原来这里是裸调用，返回值直接丢弃）。
+        val report = context.assets.open("$ASSET_ROOT/rootfs/rootfs.tar.xz").use { input ->
             RuntimeUtils.uncompressTarXZ(input, tmpDir, listener(onProgress))
         }
 
         // 布局校验 / 自动上提单层顶层目录
         hoistSingleTopLevelDir(tmpDir)
 
-        if (!looksUsable(tmpDir)) {
+        // ★ R35 / RE-04 的第一道门（新增）：这一轮解压有没有把每一条子项都落实。
+        //   判据是 `report.hasFailures()`，**不是** `describe() == "all entries applied"`，
+        //   也**不**把 `getDegradedHardLinks()` 算进失败 —— 硬链接退化为复制是内容正确的
+        //   降级路径，算成失败会在不支持硬链接的文件系统上把正常装机打成假失败。
+        val verdict = extractVerdict(report.hasFailures(), looksUsable(tmpDir))
+        if (verdict == ExtractVerdict.PARTIAL_FAILURES) {
+            tmpDir.deleteRecursively()
+            // 归因走日志（英文技术细节，含条目名与异常），用户可见文案用本地化的
+            // "失败：%1$s" 外壳 + describe() 的摘要 —— describe() 里带着"哪一条没解开"。
+            // 顺序说明：这里**故意**不写 version、不碰 destDir、不碰 .old。
+            // 旧的 rootfs 一个字节都没动 ⇒ 下次 install 仍会被判为未就绪并重试（不会陷入
+            // "version 已最新 ⇒ 永不重解压"的死角）；同时用户手上仍是那个能用的旧底座。
+            DshLogBus.append("[bootstrap] rootfs extraction incomplete, discarding this round: ${report.describe()}")
+            throw IllegalStateException(
+                (DshUiText.contextOrNull() ?: context).getString(
+                    R.string.dsh_state_failed, report.describe()
+                )
+            )
+        }
+
+        if (verdict == ExtractVerdict.LAYOUT_BAD) {
             tmpDir.deleteRecursively()
             // 异常消息的去向是 catch → fail() → 准备页/首页任务区（用户可见），所以必须能本地化。
             // 这是首启最容易撞上的一条：rootfs.tar.xz 一旦多套了一层目录，用户看到的就是它。
@@ -716,7 +812,12 @@ object DshBootstrap {
             tmpDir.deleteRecursively()
         }
         if (backupDir.exists()) {
-            if (looksUsable(destDir)) {
+            // ★ R35 / RE-04 的第二道门：删备份的条件收紧为"新树解压完整 ∧ 布局可用"。
+            //   原来只看 `looksUsable(destDir)` —— 部分失败的树（bin/sh 在、但 1049 条符号链接
+            //   没建出来）也能让它为 true，于是**可用的旧备份被删掉**，回滚路径永久消失。
+            //   现在完整性与布局两条同时成立才删；不成立就回滚到备份（旧树回到 dest，
+            //   .old 随 rename 消失 —— 所以不会出现"备份永不删除"把磁盘吃满的情况）。
+            if (shouldDropBackup(extractComplete = verdict == ExtractVerdict.CLEAN, newTreeUsable = looksUsable(destDir))) {
                 backupDir.deleteRecursively()
             } else {
                 // 新内容不可用 → 回滚旧的，别让用户连旧底座都没了
