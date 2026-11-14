@@ -2052,13 +2052,34 @@ object DshRuntime {
         //   （二次停止秒置 Idle 的另一条出口，还把删除实例的等待条件整个跳过——进程还活着就删目录）。
         //   现在：Stopping 同实例时进下面的"等它离开 Stopping"循环；start() 里对"旧实例还在 Stopping"
         //   的 stopAndWait 调用同样因此等到位（stop() 对 Stopping 已按 BL-036a no-op，不会重复发停止）。
+        // ★ R36/D-1：这里**不再**有"没在跑就裸写 Idle 然后 return true"的快路径。
+        //
+        // 删掉的那段是锁外的读-判-写：`activeInstanceId()` 读、`if (instanceId == null)` 判、
+        // 然后**不持锁**写 `_state.value = State.Idle` / `_running.value = null`。判断与两次写之间
+        // 没有任何保护，谁在这 200~300ns 里落了 `State.Starting`（唯一写点 `startLocked` 的 :1125，
+        // 并发入口只有绕开 [startMutex] 的 seccomp 重试），那个 `Starting` 就会被无条件抹成 `Idle`。
+        // 同一段写还顺带抹掉带 `reason` 的 `Failed`（`Failed → Idle` 会连带丢掉失败原因）。
+        //
+        // ## 为什么删掉是对的（等价性，不是"看起来像"）
+        // `activeInstanceId() == null` ⇒ 状态 ∈ {Idle, Failed, Exited}
+        //   ⇒ [runningInstanceId]（只看 Running/Starting）也为 null
+        //   ⇒ 下面这个 [stop] 必走它的 `instanceId == null` 分支，而那个分支在 `@Synchronized` 的
+        //     监视器里做的**正是**同一件事（`:1567 _state.value = State.Idle` /
+        //     `:1568 _running.value = null`），并且额外收掉上一轮"停止失败保留的 leftover 句柄"
+        //     （Round24 N-2 —— 快路径从来没有这一步）。
+        // 判决性的反面前提：`stop()` 开头对 `State.Stopping` 是早退（BL-036a no-op）。它不会在这里
+        // 被误命中 —— `Stopping` 的 `activeInstanceId()` 非 null，走不到"没在跑"的语境。
+        //
+        // ## 返回值语义（与旧代码同值，语义略严）
+        // `stop()` 返回后的轮询循环：无并发时状态已是 `Idle` ⇒ `cur !is State.Stopping` ⇒ 第一次
+        // 就 `return true`，与旧快路径的 `return true` 同值、且不再有窗口。
+        // 若读判据之后、`stop()` 拿到监视器之前，别人落了 `Stopping(X)`：`stop()` 早退（不会像旧代码
+        // 那样把 `Stopping(X)` 抹成 `Idle`），循环看到 `cur.instanceId != instanceId` 也返回 true。
+        // 旧代码此时会**clobber 掉别人的 Stopping** —— 新代码严格更安全，不是行为回退。
+        //
+        // ## 不许在总结里说"状态机线程安全了"
+        // 本轮只封死这一个具名点。`_state` 仍有别的锁外写点。
         val instanceId = activeInstanceId()
-        if (instanceId == null) {
-            // 本来就没在跑：确保状态干净
-            _state.value = State.Idle
-            _running.value = null
-            return true
-        }
         stop(reason)
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -2417,14 +2438,20 @@ object DshRuntime {
         //   停后秒启时旧 run 的退出（及其 137 之类的退出码）会迟到到新 run 已接管现场之后，
         //   绝不能让它清掉新 run 的 handle/nodePid（proot 会变停不掉的半孤儿）、或烧掉新 run 的
         //   seccomp 兜底机会 —— 所以把它并入下面的"无副作用清理"分支统一处理。
-        val staleGen = gen != runGen
+        //
         // ★ 归属校验（第五轮修复）：退出回调是异步的。用户"停 A 起 B"时，A 的退出回调完全可能
         // 在 B 已经 Starting/Running 之后才到；旧实现无条件 `handle = null` / `_running = null`，
         // 并把状态写成 Exited(A)，于是 B 的进程句柄被抹掉（[stop] 再也拿不到句柄，只能删 pid 文件，
         // B 的 proot 变成谁也停不掉的孤儿），界面也显示成"A 退出了"。
         // 现在：只有"当前仍属本实例且世代未过期"才允许动状态与句柄，否则只做无副作用的清理。
-        val cur = _state.value
-        if (staleGen || ownerOf(cur) != instance.id) {
+        //
+        // ★ R36/D-2：下面这两个锁外读（`staleGen` / `earlyCur`）只配用来**尽早分流** ——
+        //   绝大多数迟到回调都被 `staleGen` 挡在这条无副作用路径上，为一个已经确定的结果去抢
+        //   监视器不值当。它们**不再是判据**：真正决定"动不动全局句柄"的判决与三次赋值在下面的
+        //   `synchronized(this)` 里锁内重读（见 [planExitSettlement] 的 KDoc 讲后果链）。
+        val staleGen = gen != runGen
+        val earlyCur = _state.value
+        if (staleGen || ownerOf(earlyCur) != instance.id) {
             // ★ BL-038：迟到的旧 run 回调走到这里，说明新 run 已经接管（gen 已递增）；此时
             //   `handle`/`nodePid`/`_state` 都归新 run，一个都不许碰。只做 compare-and-delete 的
             //   pid 文件清理（文件里若已是新进程的 pid 则不动，见 [ProcessUtil.removePidFile]）。
@@ -2441,7 +2468,7 @@ object DshRuntime {
                 DshLogBus.appendFor(
                     instance.id,
                     "[runtime] ${instance.name} 的进程已退出（code=$code），" +
-                        "但当前状态不属于它（现状：${cur::class.simpleName}），仅清理 pid 文件"
+                        "但当前状态不属于它（现状：${earlyCur::class.simpleName}），仅清理 pid 文件"
                 )
             }
             // K03 compare-and-delete：只有当 pid 文件仍记着**这个已退出的** proot 时才删；
@@ -2450,12 +2477,57 @@ object DshRuntime {
             return
         }
 
-        val wasStopRequested = stopRequestedFor == instance.id
-        val exitedNodePid = nodePid
-        handle = null
-        // 进程已经退出：内存里的 node pid 作废（避免它被系统复用后误杀，见 ProcessUtil.kill 的身份校验）
-        nodePid = 0
-        _running.value = null
+        // ★ R36/D-2：判决与三次赋值必须**同一个临界区**，且判据锁内**重读**。
+        //
+        // 为什么锁内重读而不是用上面那个 `earlyCur`：`earlyCur` 是锁外快照。从读它到下面写
+        // `handle = null` 之间（实测自然窗口 ~186ns，但窗口宽度不是判据），`startLocked` 完全
+        // 可能已经落了新的 `Starting` + 新 `handle` + `++runGen`。那时 `handle` / `nodePid` /
+        // `_state` 全归新 run —— 无条件清空会让 `stop()` 拿不到 proot pid，于是它
+        // `gone = true` ⇒ `stopSucceeded = true` ⇒ **落 Idle 并宣布"已停止"，而 proot 还活着**，
+        // 连 `stop-incomplete evidence` 那行诊断都打不出来。
+        //
+        // 锁内纪律（别往里加东西）：一次 `_state.value` 读 + 一次 `runGen` 读 + 一次
+        // `stopRequestedFor` 读 + 一次 `nodePid` 读 + 三个赋值，**仅此而已**。
+        // 文件 IO（removePidFile / deleteNodePidFile / writePidFile）、DshLogBus.appendFor、
+        // reportRuntime、recentLogTail、scope.launch、retryIfSeccompLooksGuilty —— 全部锁外。
+        // [setStateIfOwned] 不在锁内调（它在下游分支里，自己再 `synchronized` 一次；monitor 可重入
+        // 所以不会死锁，但把那两个分支整体拖进监视器没有必要）。
+        val settle = synchronized(this) {
+            val plan = planExitSettlement(
+                current = _state.value,
+                instanceId = instance.id,
+                stopRequestedFor = stopRequestedFor,
+                nodePid = nodePid,
+                runGen = runGen,
+                gen = gen,
+            )
+            if (plan != null) {
+                handle = null
+                // 进程已经退出：内存里的 node pid 作废（避免它被系统复用后误杀，见 ProcessUtil.kill 的身份校验）
+                nodePid = 0
+                _running.value = null
+            }
+            plan
+        }
+        if (settle == null) {
+            // 锁外快照还属于本实例，但锁内重读发现已经易主（典型：这一瞬间 startLocked 落了新的
+            // Starting + 新 handle + ++runGen）。此时 handle / nodePid / _state 全归新 run，
+            // **一个都不许碰** —— 与上面 staleGen 早退分支同款的"无副作用清理"。
+            // 这行只应在真机竞态里出现；它频繁出现就说明窗口仍在。
+            DshLogBus.appendFor(
+                instance.id,
+                "[runtime] exit settlement skipped (code=$code): another run took over between the " +
+                    "outer snapshot and the lock; handle / node pid / state left untouched"
+            )
+            ProcessUtil.removePidFile(instance.id, exitedProotPid)
+            return
+        }
+        // ↓ 以下全部锁外。分支判据一律用 settle.state（**锁内重读值**），不用 earlyCur ——
+        //   尤其 `cur is State.Starting` 那条会走到 retryIfSeccompLooksGuilty：拿旧快照判"是 Starting"
+        //   而实际已是 Stopping 的话，会把一次用户主动停止当成"启动失败"再多起一次进程。
+        val wasStopRequested = settle.wasStopRequested
+        val exitedNodePid = settle.exitedNodePid
+        val cur = settle.state
         // K03 compare-and-delete：删 pid / node pid 文件前核对仍是这个退出的进程写的，别误删秒启后新进程的。
         ProcessUtil.removePidFile(instance.id, exitedProotPid)
         deleteNodePidFile(instance.id, exitedNodePid)
@@ -2988,6 +3060,72 @@ internal fun planRunningRefresh(
         running = DshRuntime.Running(current.instanceId, port, incomingUrl),
         persistUrl = persistUrl,
     )
+}
+
+/**
+ * ★ R36/D-2：[DshRuntime.onProcessExit] 那一次「退出结算」的判决结果（纯函数产物）。
+ *
+ * 非 null = 调用点**允许**动 `handle` / `nodePid` / `_running` 三个字段，且必须用
+ * [state]（锁内重读到的状态）而不是任何锁外快照去选下游分支。
+ *
+ * @property wasStopRequested 这次退出是不是 [DshRuntime.stop] 要求的（区分"预期停止"与"崩溃"）
+ * @property exitedNodePid 结算那一刻内存里的 node pid —— 给锁外的 compare-and-delete 删文件用
+ * @property state 锁内重读到的那一份 `_state.value`（**同一个实例**，不是 copy）
+ */
+internal data class ExitSettlement(
+    val wasStopRequested: Boolean,
+    val exitedNodePid: Long,
+    val state: DshRuntime.State,
+)
+
+/**
+ * ★ R36/D-2：`onProcessExit` 的结算判据 —— 「这一次退出，还轮得到我去动全局句柄吗」（纯函数）。
+ *
+ * ## 缺陷本体
+ * 修复前 `onProcessExit` 是：
+ * ```
+ * val staleGen = gen != runGen                // 锁外读
+ * val cur = _state.value                      // 锁外快照
+ * if (staleGen || ownerOf(cur) != id) { … return }
+ * val wasStopRequested = stopRequestedFor == id   // 锁外读
+ * val exitedNodePid = nodePid                     // 锁外读
+ * handle = null                                   // 锁外写（全局、无条件）
+ * nodePid = 0                                     // 锁外写
+ * _running.value = null                           // 锁外写
+ * ```
+ * 判据与三次写之间没有保护。若这期间新一轮 [DshRuntime.startLocked] 已经写了**它自己的**
+ * `handle`（`:1162`），无条件清空会把**新进程**的句柄抹掉。后果链（可执行模型实测）：
+ * `handle == null` ⇒ `stop()` 里 `prootPid = h?.pid ?: 0` ⇒ `prootPid == 0` ⇒ `gone == true`
+ * ⇒ `stopSucceeded == true` ⇒ **`stop()` 落 `Idle`、对外宣布"已停止"，而 proot 还活着**
+ * （正是 round34 RE-01 修掉的那个用户可见症状，成因完全不同），且 `:1650` 那条
+ * `stop-incomplete evidence` 诊断行再也打不出来 —— 真机上连线索都没有。
+ *
+ * ## 契约
+ * - **返回 null = 一个字都不许动**（handle / nodePid / _running / _state 全不写）。
+ *   调用点据此走"只做 compare-and-delete 删 pid 文件"的无副作用清理。
+ * - 判据用 [ownerOfState]（含 Failed/Exited），**不用** [activeOwnerOf]：退出回调必须能为
+ *   "本实例的 Failed/Exited 收尾"服务（下游 `cur is State.Failed` / `cur is State.Exited`
+ *   两个分支就是干这个的）；`activeOwnerOf` 对 Failed/Exited 返回 null，会把这两条正常分支
+ *   误判成"别人的"。
+ * - **世代号也在这里比**（[runGen] / [gen]）：修复前 `staleGen` 自己是锁外读，而 `++runGen`
+ *   发生在 `startLocked` 的监视器里 —— 所以它能读到"新 run 还没走到 `++runGen`"的旧值，
+ *   世代判据本身就不是第二道防线。放进锁内读才算看全。
+ * - [stopRequestedFor] / [nodePid] 作为参数传入而不是直接读字段：判据必须是纯函数，
+ *   否则单测要么得加载 Android 宿主，要么只能断言源码字符串。
+ * - 纯函数，无 IO、无日志、无 `delay`、无 Android 依赖 —— 所以调用点可以把它整个塞进
+ *   `synchronized(this)` 而不用把副作用拖进监视器。
+ */
+internal fun planExitSettlement(
+    current: DshRuntime.State,
+    instanceId: String,
+    stopRequestedFor: String?,
+    nodePid: Long,
+    runGen: Long,
+    gen: Long,
+): ExitSettlement? {
+    if (ownerOfState(current) != instanceId) return null
+    if (gen != runGen) return null
+    return ExitSettlement(stopRequestedFor == instanceId, nodePid, current)
 }
 
 /**
