@@ -18,8 +18,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * ★ fix12（C-07 / C-08）：启动时刻**真正会跑哪一份 dsh 包** —— [resolveLaunchTarget] 的结果。
@@ -1222,8 +1227,13 @@ object DshRuntime {
             //   [ProcessUtil.pruneStartLogs] 的轮转规则统一处置。
             //   另两个早退分支（没有 pid 文件 / 端口不通）保持不动 —— 进程可能活着，
             //   删了会毁掉恢复源。
-            val latest = ProcessUtil.readPidFile(instance.id)
-            if (latest?.pid == meta.pid) {
+            val latest = ProcessUtil.readPidFileState(instance.id).map { it.pid }
+            // ★ SP-01：改用三态判据（同一个 compare-and-delete 内核）。旧写法 `latest?.pid == meta.pid`
+            //   在"读不出"时静默不删（方向偶然是对的），但它与 removePidFile 是两套口径；现在统一。
+            //   —— 顺带修掉旧写法的一个真缺口：pid 文件**不存在**时（`latest == null`，例如清理竞态
+            //   刚删过）旧代码 `null == meta.pid` 为 false ⇒ 侧车成了孤儿（pid 文件没了、token 侧车
+            //   留在磁盘上）。三态判据对 Missing 返 true ⇒ 两者一起清干净。
+            if (pidFileMayBeDeleted(latest, meta.pid)) {
                 // 文件操作一律 runCatching（清理是旁路，绝不许把认领流程带崩；侧车删除内部已包）
                 runCatching { DshPaths.instancePidFile(instance.id).delete() }
                 ProcessUtil.deleteTokenUrlFile(instance.id)
@@ -1373,8 +1383,10 @@ object DshRuntime {
                 //   已被新进程接管（latest.pid 是别的值）→ 一个都不写，只记诊断。
                 //   注意 writeTokenUrlFile 没有 pid 概念，但同样受"新进程已接管"影响（新 run 的
                 //   侧车可能已被 onProcessLine 更新）——所以**一个 latest 判断同时 gate 两个写入**。
-                val latest = ProcessUtil.readPidFile(instance.id)
-                if (pidFileAllowsAdoptionWriteBack(latest?.pid, meta.pid)) {
+                //   ★ SP-01：判据改三态的 [pidFileAllowsAdoptionWriteBack]——"读不出"不再当成
+                //   "文件不存在 ⇒ 可以覆盖"（那多半是新 run 正在写这份文件，覆盖它 = 毁掉它的孤儿保护）。
+                val latest = ProcessUtil.readPidFileState(instance.id).map { it.pid }
+                if (pidFileAllowsAdoptionWriteBack(latest, meta.pid)) {
                     ProcessUtil.writeTokenUrlFile(instance.id, recovered)
                     ProcessUtil.writePidFile(instance.id, meta.pid, port, recovered)
                     if (recovered != persistedUrl) {
@@ -1384,10 +1396,15 @@ object DshRuntime {
                         )
                     }
                 } else {
+                    // 三态在这里要如实区分：`readable=false` 说明文件正被（多半是新 run）写，
+                    // 与"文件里是别的 pid"是两种现场 —— 混成一句话会让排障时看不出是哪一种。
+                    val why = when (latest) {
+                        PidFileRead.Unreadable -> "pid file unreadable (likely being written)"
+                        else -> "pid file already replaced by a newer process (stored=${latest.storedPidOrNull()})"
+                    }
                     DshLogBus.append(
-                        "[runtime] adopted ${instance.name}: write-back skipped — pid file already " +
-                            "replaced by a newer process (stored=${latest?.pid}, adopted=${meta.pid}); " +
-                            "recovery persisted nothing"
+                        "[runtime] adopted ${instance.name}: write-back skipped — $why, " +
+                            "adopted=${meta.pid}; recovery persisted nothing"
                     )
                 }
             }
@@ -1902,31 +1919,43 @@ object DshRuntime {
     /** node pid 文件（与 start-dsh.sh 的 NODE_PID_FILE 默认值一致：$INSTANCE_DIR/dsh-node.pid） */
     private fun nodePidFile(instanceId: String): File = File(DshPaths.instanceDir(instanceId), "dsh-node.pid")
 
-    /** 读 node pid 文件。与 [ProcessUtil.readPidFile] 同一口径：文件只有十几个字节，同步读即可 */
-    private fun readNodePidFile(instanceId: String): Long? = runCatching {
-        val f = nodePidFile(instanceId)
-        if (!f.isFile) return@runCatching null
-        f.readText().trim().substringBefore(' ').toLongOrNull()?.takeIf { it > 0 }
-    }.getOrNull()
+    /**
+     * 读 node pid 文件。与 [ProcessUtil.readPidFileState] 同一三态口径（★ SP-01）：
+     * 内容 `"<pid> <port>"`，pid 解析不出（含 0 字节/半截/非数字）一律 [PidFileRead.Unreadable]。
+     */
+    private fun readNodePidFileState(instanceId: String): PidFileRead<Long> =
+        ProcessUtil.readStateOf(nodePidFile(instanceId)) { text ->
+            text.trim().substringBefore(' ').toLongOrNull()?.takeIf { it > 0 }
+        }
+
+    /** 两态视图（[PidFileRead.Unreadable] 也折成 null）。只用于"读来当提示值"的地方，不用于删除判据。 */
+    private fun readNodePidFile(instanceId: String): Long? =
+        (readNodePidFileState(instanceId) as? PidFileRead.Present)?.value
 
     /**
-     * 删除 node pid 文件（K03 compare-and-delete）。
-     * 仅当文件里仍是 [expectedPid]（或文件已不存在/读不出）时才删，避免误删"停后秒启"时
-     * 脚本为新 node 刚写下的 pid 文件（见 [pidFileBelongsTo]）。
+     * 删除 node pid 文件（K03 compare-and-delete，★ SP-01 三态版）。
      *
-     * ★ R17：**侧车 token URL 文件与此成对清理**（同一 K03 判据守卫）——
+     * 判据与 [ProcessUtil.removePidFile] 同源：只有 [PidFileRead.Missing] 或"文件里仍是
+     * [expectedPid]"才删；[PidFileRead.Unreadable]（= 脚本正在写 `dsh-node.pid` 的瞬时态）**不删**。
+     * 旧口径把"读不出"当成"不存在 ⇒ 可删"，于是在 `start-dsh.sh` 写 `"$NODE_PID" > "$NODE_PID_FILE"`
+     * 的截断窗口里会删掉新 node 的那份 —— 后果比 pid 文件更直接：**停止时按 pid 精确终止 node 的
+     * 唯一把手没了**（B10 的整个修复前提）。
+     *
+     * ★ R17：**侧车 token URL 文件与此成对清理**（同一判据守卫）——
      * 该 run 的 node 已经退出/被停，其 token 已失效，留着只会让下次认领多探一次死候选；
-     * 而"停后秒启"时新 run 已写过自己的两份文件 → `pidFileBelongsTo` 为假 → 二者都不动
+     * 而"停后秒启"时新 run 已写过自己的两份文件 → 判据为假 → 二者都不动
      *（不会误删新 run 的侧车）。expectedPid<=0（拿不到 pid）时不删——保守方向：
      * 侧车多留一会儿无害，下次认领的探活会拒绝死 token。
      */
     private fun deleteNodePidFile(instanceId: String, expectedPid: Long) {
-        runCatching {
-            if (pidFileBelongsTo(readNodePidFile(instanceId), expectedPid)) {
+        ProcessUtil.compareAndDelete(
+            readState = { readNodePidFileState(instanceId) },
+            expectedPid = expectedPid,
+            onDelete = {
                 nodePidFile(instanceId).delete()
                 ProcessUtil.deleteTokenUrlFile(instanceId)
-            }
-        }
+            },
+        )
     }
 
     /**
@@ -2761,11 +2790,83 @@ fun shouldPersistPort(configuredPort: Int, actualPort: Int): Boolean =
 
 /**
  * K03：pid 文件是否可以删（compare-and-delete）。
- * 只有当文件里的 pid 等于"我要清理的那个 pid"（或文件已不存在/读不出）时才允许删 ——
- * 否则在"停后秒启"场景下会删掉**新进程刚写的** pid 文件，把新进程变成失联孤儿。
+ *
+ * ★ SP-01（round37）：本函数只有**两态**输入（`Long?`），而 `null` 同时代表"文件不存在"与
+ *   "文件存在但读不出"——后者恰恰是"另一个线程正在写这份文件"的瞬时态，把它当"不存在"就会
+ *   删掉**新进程刚写的**那份。pid 文件的删除判据一律改用三态的 [pidFileMayBeDeleted]；
+ *   本函数只保留给"读函数本身只能给出 `Long?`"的调用方（安装 pid 文件，见
+ *   `DshInstaller.deleteInstallPidFile`），别给 pid 文件写新调用。
  */
 fun pidFileBelongsTo(storedPid: Long?, expectedPid: Long): Boolean =
     storedPid == null || storedPid == expectedPid
+
+/**
+ * ★ SP-01（round37）：pid 文件的**三态**读取结果 —— 修掉"读不出被当成不存在"这个前提错误。
+ *
+ * 为什么必须是三态：`File.writeText` 是"开 → 截断到 0 字节 → 写 → 关"，中间存在"路径存在但
+ * 内容为空/半截"的瞬时态（此时 `isFile` 仍为 true、JSON 解析必然失败）。旧读法把这三种情况一律
+ * 折成 `null`，而旧判据 [pidFileBelongsTo] 把 `null` 解释成"文件不存在 ⇒ 删一下无妨" —— 于是
+ * "新 run 正在写自己的 pid 文件"的那一刻，旧 run 的迟到收尾会判定可以删，**删掉的正是新进程
+ * 那份**：新进程从此失联（孤儿认领失效 → 冷启找不到它 → 进程残留约 300MB）。
+ *
+ * 本类型只表达"读到了什么"，**不做决策**；决策在纯函数 [pidFileMayBeDeleted]（删）与
+ * [pidFileAllowsAdoptionWriteBack]（覆盖）里，JVM 单测直接钉。
+ */
+sealed interface PidFileRead<out T> {
+    /** 路径不存在（上级目录都没有也算）—— 删除是 no-op */
+    data object Missing : PidFileRead<Nothing>
+
+    /**
+     * 路径存在，但**读不出可用内容**：0 字节 / 截断的 JSON / 不是普通文件 / IO 错。
+     *
+     * ★ 与 [Missing] 的区别是本修复的全部要点：这一态**不能**当成"没有文件"。它最常见的成因
+     * 恰恰是"另一个线程正在写这份文件"（非原子的截断-写窗口内的瞬时态）。
+     */
+    data object Unreadable : PidFileRead<Nothing>
+
+    /** 读到了，且内容可用 */
+    data class Present<T>(val value: T) : PidFileRead<T>
+}
+
+/** 把 [PidFileRead] 里的值换个形状（`Missing`/`Unreadable` 原样传递，不吞语义） */
+fun <T, R> PidFileRead<T>.map(transform: (T) -> R): PidFileRead<R> = when (this) {
+    PidFileRead.Missing -> PidFileRead.Missing
+    PidFileRead.Unreadable -> PidFileRead.Unreadable
+    is PidFileRead.Present -> PidFileRead.Present(transform(value))
+}
+
+/**
+ * 日志用：读到的 pid 值（[PidFileRead.Missing] / [PidFileRead.Unreadable] 都是 null）。
+ *
+ * 只给诊断文案用 —— 判据一律用三态（`null` 在这里同时代表两种现场，正是本次修复要消灭的歧义）。
+ */
+fun PidFileRead<Long>.storedPidOrNull(): Long? = (this as? PidFileRead.Present)?.value
+
+/**
+ * ★ SP-01：compare-and-delete 的**三态**判据（[pidFileBelongsTo] 的安全版）。
+ *
+ * | 磁盘真实状态 | 读结果 | 本函数 | 后果 |
+ * |---|---|---|---|
+ * | 文件不存在 | [PidFileRead.Missing] | `true` | `delete()` 是 no-op，无害 |
+ * | 文件是我的 | [PidFileRead.Present] 且 pid 相等 | `true` | 按设计清掉 |
+ * | 文件是新进程的 | [PidFileRead.Present] 且 pid 不等 | `false` | 不动（K03 的原始意图） |
+ * | **文件正在被写** | [PidFileRead.Unreadable] | **`false`** | **保守不删**（旧实现删的就是这一格） |
+ *
+ * ## 为什么"读不出就不删"这个代价可以接受（删错 vs 不删）
+ * 不删的代价：磁盘上多留一份读不出的 pid 文件。它有界且会自愈 ——
+ * ① 下一次成功启动时 [ProcessUtil.writePidFile] 会把它**原子覆盖**掉（tmp+rename，目标路径直接换代）；
+ * ② 它骗不到认领：`adoptOrphan` / `killStale` 的入口都读成 `null` ⇒ 只是"不认领 / 不清理"，
+ *    不会拿一个错 pid 去认领或杀进程；
+ * ③ 实例目录被删时随目录一起消失，不会跨实例累积。
+ * 删错的代价：孤儿进程（约 300MB）+ 认领链断掉 + 只能靠"端口被占"反推。
+ * 两者不对称，所以取"不确定就不删"。
+ */
+fun pidFileMayBeDeleted(read: PidFileRead<Long>, expectedPid: Long): Boolean = when (read) {
+    PidFileRead.Missing -> true
+    // ★ 修复点：读不出 ≠ 不存在。宁可留一份脏 pid 文件，也不删活进程的那份。
+    PidFileRead.Unreadable -> false
+    is PidFileRead.Present -> read.value == expectedPid
+}
 
 /**
  * ★ BL-158：认领恢复**回写**的 compare-and-write 判据（纯函数，便于单测）。
@@ -2782,9 +2883,41 @@ fun pidFileBelongsTo(storedPid: Long?, expectedPid: Long): Boolean =
  *
  * 写成顶层函数而不是 private：单测 harness 不加载 android 依赖，顶层落在 `DshRuntimeKt`
  * 静态方法上（同 [pidFileBelongsTo] / [canSendQuitSignal] 的惯例）。
+ *
+ * ⚠️ **SP-01 之后这个两态重载只保留给旧单测（`R18RuntimeTest`），生产代码一律用三态版** ——
+ * 它对 `null` 的放行同时覆盖了"读不出"，在生产路径上会允许把死 pid 覆盖到新进程的文件上。
+ * 新代码请用下面那个 `PidFileRead<Long>` 重载。
  */
+@Deprecated(
+    "SP-01：两态版把「读不出」当「文件不存在」而放行覆盖；生产代码用 PidFileRead 三态重载",
+    ReplaceWith("pidFileAllowsAdoptionWriteBack(latest: PidFileRead<Long>, adoptedPid)")
+)
 fun pidFileAllowsAdoptionWriteBack(latestPid: Long?, adoptedPid: Long): Boolean =
     latestPid == null || latestPid == adoptedPid || latestPid == 0L
+
+/**
+ * ★ SP-01：上式的**三态**版本（认领回写用的 compare-and-write），与 [pidFileMayBeDeleted] 对称。
+ *
+ * 两态版有个同样形状的前提错误：`latestPid == null` 把"文件不存在"与"读不出"折在一起，
+ * 而"读不出"意味着**另一个线程正在写这份文件**（新 run 正在写自己的 pid）。这时回写会把
+ * 认领来的**死 pid** 覆盖到新进程刚写的文件上 —— 与"删错"同族，只是破坏方式是覆盖。
+ *
+ * 判据：
+ * - [PidFileRead.Missing] → 允许（没有文件，写出去不会毁掉任何东西）；
+ * - [PidFileRead.Present] 且 pid 等于认领值 / 等于 0（占位）→ 允许（幂等回写 / 本代码库不写 0）；
+ * - [PidFileRead.Present] 且是别的 pid → 拒绝（新进程已接管，BL-158 的原意）；
+ * - **[PidFileRead.Unreadable] → 拒绝**（读不出 ≠ 可以覆盖，宁可这次回写不落盘）。
+ *
+ * 拒绝的代价：这一代次认领的 token 没被持久化 → 下次冷启认领要多走一遍 start-log 扫描
+ * （已有路径，只是慢一点）。接受的代价：把死 pid 覆盖到活进程的文件上 → 认领链断掉、孤儿残留。
+ */
+fun pidFileAllowsAdoptionWriteBack(latest: PidFileRead<Long>, adoptedPid: Long): Boolean =
+    when (latest) {
+        PidFileRead.Missing -> true
+        // ★ 读不出就不写：那多半是新 run 正在写这份文件，覆盖它等于毁掉它的孤儿保护。
+        PidFileRead.Unreadable -> false
+        is PidFileRead.Present -> latest.value == adoptedPid || latest.value == 0L
+    }
 
 /**
  * ★ BL-036：**含 Stopping** 的"运行时通道占用者"（[DshRuntime.activeInstanceId] 的纯函数核）。
@@ -3403,6 +3536,40 @@ object UrlScanner {
 object ProcessUtil {
 
     /**
+     * ★ SP-01：tmp 文件名里的单调计数器（见 [atomicWriteText] 的 tmp 唯一性理由）。
+     *
+     * 用计数器而不是只靠纳秒：`System.nanoTime()` 在部分内核/虚拟化环境下精度只有毫秒级，
+     * "同一线程同一毫秒连写两次"会撞名 —— 两个写者共用一个 tmp 文件，就把原子替换退化成
+     * "抢同一个缓冲区"（先关掉的那个会被后者 rename 走，内容可能来自另一次写）。
+     */
+    private val TMP_NAME_SEQ = AtomicLong(0)
+
+    /** [atomicWriteText] 的尝试次数（理由见那里：吸收瞬时 rename 冲突，Android 上第一次即成功） */
+    private const val ATOMIC_WRITE_ATTEMPTS = 3
+
+    /** [atomicWriteText] 重试间隔（瞬时冲突的窗口是微秒级，10ms 足够且不会拖慢启动路径） */
+    private const val ATOMIC_WRITE_RETRY_DELAY_MS = 10L
+
+    /** `Throwable` → `Exception`：把 `Files.move` 抛出的 `Error` 形态也折进统一出口，避免丢根因 */
+    private fun asException(t: Throwable): Exception =
+        t as? Exception ?: RuntimeException(t.toString(), t)
+
+    /**
+     * ★ SP-01（场景 B / TOCTOU）：「读 pid 文件 → 判归属 → delete」这三步必须串行，否则
+     * 判完到删之间另一线程可能刚好写入了新 pid，删掉的仍是新进程那份。
+     *
+     * 锁的纪律（照 round35/36 的结论，别往临界区里加东西）：
+     * - 临界区里**只**做一次几十字节的文件读 + 一次 delete（微秒级），不做日志、不做网络探活、
+     *   不调用 [DshRuntime] 的同步方法 —— 它是**叶子锁**，与对象监视器没有任何嵌套方向，
+     *   所以不存在死锁路径。
+     * - 写侧只在 **commit 点（rename）** 上进这把锁（见 [atomicWriteText] 的 `commitUnderLock`），
+     *   **不覆盖** tmp 写入与 `fd.sync()`（那可能是毫秒级，会拖住 stop 的收尾）。
+     *   这样场景 B 才真正闭合：一次写要么发生在"读之前"（读到的就是新 pid ⇒ 判据拒绝删），
+     *   要么发生在"删之后"（文件被重新原子创建）。中间不存在"判完→删掉新文件"的缝。
+     */
+    private val PID_FILE_LOCK = Any()
+
+    /**
      * pid 文件内容。
      *
      * ★ BL-135（R16/fix4）：新增 [url] 字段（默认 null，旧文件反序列化天然兼容 —— GSON 对缺字段
@@ -3418,6 +3585,103 @@ object ProcessUtil {
      */
     data class PidMeta(val pid: Long, val port: Int, val url: String? = null)
 
+    /**
+     * ★ SP-01（round37）：把 [text] **原子地**写到 [f]（tmp + rename），而不是 `f.writeText`。
+     *
+     * 为什么必须换掉 `writeText`：它是"开 → 截断到 0 字节 → 写 → 关"，中间存在"路径存在、
+     * 内容为空/半截"的瞬时态。掉电会留下那种残留；更要紧的是**并发读者**会看到它 ——
+     * 而 pid 文件的旧读法把"读不出"折成 `null`，旧删除判据又把 `null` 解释成"不存在 ⇒ 可删"，
+     * 于是读到瞬时态的一方会删掉**正在被写的那份**（见 [PidFileRead] 的表）。
+     * tmp+rename 之后，目标路径只剩"旧的完整内容"或"新的完整内容"两种状态，**不存在中间态**。
+     *
+     * 实现细节（每条都有具体理由）：
+     * - **同目录**的 tmp：`rename(2)` 只在同一文件系统内原子。跨目录/跨盘的 rename 会退化成
+     *   "复制 + 删"，那就又有中间态了，所以 tmp 必须与目标同级。
+     * - **tmp 名唯一**（pid + 线程 id + 纳秒）：多个线程同时写同一实例的 pid 文件时（`startLocked`
+     *   刚写完 `onProcessLine` 又刷新、认领回写、stop 收尾），共用一个 `.tmp` 名会互相踩掉对方的
+     *   内容 —— 那等于把"原子替换"变成"两个写者抢一个缓冲区"。
+     * - **`fd.sync()`**：`writeText` 只 close 不 fsync，掉电时"rename 成功但内容还是空的"就是这种
+     *   漏法（同 `DshInstances.writeManifest` 的 C-06 结论）。
+     * - **文件权限 0600**：`FileOutputStream` 新建文件是 0666 & ~umask（真机通常 0600，但不保证）。
+     *   pid 文件里带 token（BL-135），App 私有目录之外不再加一层就不该依赖 umask。所以在 **tmp 上**
+     *   显式 `setReadable/setWritable(owner only)`（rename 会把权限一起带过去），把"只有本 App 能读"
+     *   钉死。
+     * - **rename 失败**：重试有限次后删 tmp 并**抛出真实原因**，由调用方留痕（[writePidFile] /
+     *   [writeTokenUrlFile] 内部已 runCatching + 日志，控制流与 BL-046 一致：失败照旧不抛给调用方）。
+     *   **绝不**回退成"直接原地写目标"—— 那正是本次要消除的中间态窗口。
+     *
+     * 为什么要重试：原子替换在部分文件系统/平台上会**瞬时**失败 —— Windows 上目标被另一个进程
+     * 以不带 `FILE_SHARE_DELETE` 的句柄打开时，`MoveFileEx` 返回 `AccessDeniedException`
+     * （单测宿主上实测并发写有约 25% 命中这一条）。Android/Linux 上 `rename(2)` 不受读者影响
+     * （第一次必成），所以这段重试在真机上几乎不会被执行；它存在的意义是"不把一次瞬时冲突当成
+     * 写入失败"，同时保持"失败要有可读的原因"。
+     *
+     * @return 成功时恒为 `true`；失败**抛 [IOException]**（带最后一次的真实原因）。签名保留
+     *         `Boolean` 是为了让调用点读起来仍是"一次写入动作"，但真正的失败信号走异常 ——
+     *         别退化成"返回 false 吞掉根因"（那正是 BL-046 要防的静默失败）。
+     */
+    fun atomicWriteText(f: File, text: String): Boolean {
+        val dir = f.parentFile
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        var lastError: Exception? = null
+        // 3 次：第 1 次在 Android 上就成功；多出来的两次只用于吸收瞬时冲突。
+        repeat(ATOMIC_WRITE_ATTEMPTS) { attempt ->
+            // tmp 名每次尝试都唯一：单调计数 + 线程 id + 纳秒。三项都要 ——
+            // 计数器兜住"同一线程同一毫秒连写两次"（有些内核的 nanoTime 精度只有毫秒级，会撞名）；
+            // 线程 id 兜住"不同线程在同一纳秒"；纳秒让诊断日志里的文件名自带时序。
+            val seq = TMP_NAME_SEQ.incrementAndGet()
+            val tmpName = "${f.name}.tmp.$seq.${Thread.currentThread().id}.${System.nanoTime()}"
+            val tmp = if (dir != null) File(dir, tmpName) else File("$tmpName")
+            try {
+                FileOutputStream(tmp).use { out ->
+                    out.write(bytes)
+                    out.flush()
+                    // 掉电语义：内容先落盘，再让 rename 生效（顺序反过来就会出现"空文件已就位"）
+                    out.fd.sync()
+                }
+                // 0600：先建再改权限（FileOutputStream 建出来的权限受 umask 影响，不可依赖）
+                runCatching {
+                    tmp.setReadable(false, false)
+                    tmp.setReadable(true, true)
+                    tmp.setWritable(false, false)
+                    tmp.setWritable(true, true)
+                }
+                // 同目录 rename = 原子替换：目标路径上只会出现"旧的完整内容"或"新的完整内容"。
+                // 优先 Files.move(ATOMIC_MOVE)：POSIX 上与 rename(2) 等价，Windows 上也能覆盖已存在
+                // 的目标（实测 `File.renameTo` 在 Windows 上"目标已存在"直接返回 false，而单测就跑在
+                // Windows 上）。它抛异常时再试 renameTo —— 老文件系统/受限目录下那是最后一条路。
+                //
+                // ★ SP-01 场景 B：**commit 点与删除判据共用 PID_FILE_LOCK**（见那把锁的 KDoc）。
+                //   只把 rename 这一瞬间纳入临界区（微秒级）；tmp 写入与 fd.sync 留在锁外，
+                //   否则一次落盘就能把 stop 的收尾拖住。
+                val moveFailure = synchronized(PID_FILE_LOCK) {
+                    runCatching {
+                        Files.move(
+                            tmp.toPath(), f.toPath(),
+                            StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING
+                        )
+                    }.exceptionOrNull()
+                }
+                if (moveFailure == null) return true
+                // renameTo 的退路同样要在锁内（它也是 commit 点）
+                val renamed = synchronized(PID_FILE_LOCK) { tmp.renameTo(f) }
+                if (renamed) return true
+                lastError = lastError ?: asException(moveFailure)
+            } catch (e: Exception) {
+                // 写 tmp 就失败（磁盘满 / 目录不可写）：重试也没用，但保持同一出口
+                lastError = lastError ?: e
+            } finally {
+                // 无论成败：tmp 不许残留（成功时 mv 已经把它移走，这里的 delete 是 no-op）
+                runCatching { tmp.delete() }
+            }
+            if (attempt < ATOMIC_WRITE_ATTEMPTS - 1) {
+                runCatching { Thread.sleep(ATOMIC_WRITE_RETRY_DELAY_MS) }
+            }
+        }
+        // 失败：抛出可读原因，由调用方 runCatching 留痕。绝不回退成原地写。
+        throw IOException("atomic replace failed for ${f.name}: ${lastError?.message ?: "unknown"}")
+    }
+
     fun writePidFile(instanceId: String, pid: Long, port: Int, url: String? = null) {
         // BL-046：失败必须留痕（R12-A2-8 点名）—— 这条文件是"孤儿认领/清理"的唯一凭证，
         // 静默失败 = 该实例的后台残留从此无人能认领/清理，事后只能靠"端口被占"反推。
@@ -3427,8 +3691,12 @@ object ProcessUtil {
             f.parentFile?.mkdirs()
             // BL-135：url 只存**带 token 的**那种（调用方保证）；裸 URL / null 一律不存
             //（裸 URL 存进去对认领无益，反而让"文件里有没有可用的 token"这个判据变模糊）。
-            JsonUtils.GSON.toJson(PidMeta(pid, port, url?.takeIf { UrlScanner.tokenOf(it) != null }))
-                .let { f.writeText(it) }
+            val json = JsonUtils.GSON.toJson(
+                PidMeta(pid, port, url?.takeIf { UrlScanner.tokenOf(it) != null })
+            )
+            // ★ SP-01：原子替换（见 [atomicWriteText]）。这句是"并发读者看不到 0 字节瞬时态"的**唯一**
+            //   保证 —— 换回 writeText 就复活了表里最后一格。失败时它会抛，交给下面的 runCatching 留痕。
+            atomicWriteText(f, json)
         }.onFailure { e ->
             DshLogBus.appendFor(
                 instanceId,
@@ -3451,7 +3719,10 @@ object ProcessUtil {
         runCatching {
             val f = DshPaths.instanceTokenUrlFile(instanceId)
             f.parentFile?.mkdirs()
-            f.writeText(url)
+            // ★ SP-01：同样走原子写。侧车没有 pid 概念，不存在 compare-and-delete，但**读**它的人
+            //   （`adoptOrphan` → `readTokenUrlFile`）会把"读到半截"当成"没有侧车"从而回落到更弱的
+            //   恢复源（裸 URL / 401）。原子替换让"读到"永远是完整 URL。
+            atomicWriteText(f, url)
         }.onFailure { e ->
             DshLogBus.appendFor(
                 instanceId,
@@ -3472,11 +3743,39 @@ object ProcessUtil {
         runCatching { DshPaths.instanceTokenUrlFile(instanceId).delete() }
     }
 
-    fun readPidFile(instanceId: String): PidMeta? {
-        val f = DshPaths.instancePidFile(instanceId)
-        if (!f.isFile) return null
-        return runCatching { JsonUtils.fromNonNullJson(f.readText(), PidMeta::class.java) }.getOrNull()
+    /**
+     * 读一个 pid 文件并把**三态**分开（★ SP-01）。[parse] 返回 null 表示"内容不可用"。
+     *
+     * 泛型版供 `dsh.pid`（JSON）与 `dsh-node.pid`（`"<pid> <port>"` 纯文本）共用 —— 两个文件都
+     * 有同一个前提错误要修：它们都是**先截断后写**（`File.writeText` / 脚本的 `> "$NODE_PID_FILE"`），
+     * 中间存在"路径存在、内容为空/半截"的瞬时态，而旧的两态读法把它折成 `null`（= 不存在）。
+     */
+    fun <T> readStateOf(f: File, parse: (String) -> T?): PidFileRead<T> {
+        // 先 exists 再 isFile：目录/符号链接之类的存在物**不是** Missing（那是"读不出"，不是"没文件"）
+        if (!f.exists()) return PidFileRead.Missing
+        if (!f.isFile) return PidFileRead.Unreadable
+        val text = runCatching { f.readText() }.getOrNull() ?: return PidFileRead.Unreadable
+        // 空白 = 截断写的瞬时态（"截断到 0 字节"那一步）或掉电残留。显式判而不是交给 parse：
+        // 让"为什么是 Unreadable"在代码里可读，而不是藏在某个解析器的容错行为里。
+        if (text.isBlank()) return PidFileRead.Unreadable
+        return PidFileRead.Present(parse(text) ?: return PidFileRead.Unreadable)
     }
+
+    /**
+     * 读 pid 文件，把"不存在"与"读不出"分开（★ SP-01）。
+     *
+     * 旧实现 [readPidFile] 把两者都折成 `null`，于是下游无法区分
+     * "没有文件（删一下无妨）" 与 "文件正在被写（删了就是删掉新进程那份）"。
+     * 判据见 [pidFileMayBeDeleted]。
+     */
+    fun readPidFileState(instanceId: String): PidFileRead<PidMeta> =
+        readStateOf(DshPaths.instancePidFile(instanceId)) { text ->
+            runCatching { JsonUtils.fromNonNullJson(text, PidMeta::class.java) }.getOrNull()
+        }
+
+    /** 旧的两态读法（`null` = 不存在**或**读不出）。只留给"拿来做乐观重读"的调用方。 */
+    fun readPidFile(instanceId: String): PidMeta? =
+        (readPidFileState(instanceId) as? PidFileRead.Present)?.value
 
     /**
      * R17（H1/H2 根治）：从 start-dsh.sh 的**实时日志文件**里恢复带 token 的 URL 候选。
@@ -3608,17 +3907,51 @@ object ProcessUtil {
     }
 
     /**
-     * 删除实例的 proot pid 文件（K03 compare-and-delete）。
-     * 仅当文件里仍是 [expectedPid]（或文件已不存在/读不出）时才删 —— "停后秒启"时新进程可能已经
-     * 把自己的 pid 写进了这个文件，无条件删会把**新进程**的 pid 文件抹掉，使它变成失联孤儿。
+     * 删除实例的 proot pid 文件（K03 compare-and-delete，★ SP-01 三态版）。
+     *
+     * 两个修复点：
+     * 1. **判据改三态**：旧口径 [pidFileBelongsTo] 把"读不出"也当成"不存在 ⇒ 可删"，而"读不出"
+     *    的典型成因正是"另一个线程正在写这份文件"—— 于是迟到退出的一方会删掉**新进程刚写的**
+     *    那份。现在 [pidFileMayBeDeleted] 对 [PidFileRead.Unreadable] 一律返回 false（保守不删）。
+     * 2. **读-判-delete 放进 [PID_FILE_LOCK]**（场景 B 的 TOCTOU）：即使判据全对，三步之间被别的
+     *    线程插进来写入新 pid，第三步仍会删错。锁是 `ProcessUtil` 私有的**叶子锁**（持锁期间不获取
+     *    其它锁、只做几十字节的文件 IO），与 `DshRuntime` 的对象监视器互不嵌套，不会死锁。
+     *
      * [expectedPid] 传 0（拿不到自己的 pid）时等价于"文件里只要不是 0 就不删"，天然不会误删新进程。
+     *
+     * @return 是否真的删掉了（调用方一般不关心；`false` 也包含"本来就没有文件"）
      */
-    fun removePidFile(instanceId: String, expectedPid: Long) {
+    fun removePidFile(instanceId: String, expectedPid: Long): Boolean =
+        compareAndDelete(
+            readState = { readPidFileState(instanceId).map { it.pid } },
+            expectedPid = expectedPid,
+            onDelete = { DshPaths.instancePidFile(instanceId).delete() },
+        )
+
+    /**
+     * compare-and-delete 的**通用内核**（★ SP-01）：在同一把叶子锁里完成「读 → 判 → 删」。
+     *
+     * 抽出来是为了让 `dsh.pid`（JSON，本文件写）、`dsh-node.pid`（`"<pid> <port>"`，脚本写）与
+     * 它们的 token 侧车共用**同一份**判据与同一把锁 —— 这几个文件有同一个前提错误（先截断后写），
+     * 分裂成几套判据必然有一边漏。
+     *
+     * @param readState 三态读取（[ProcessUtil.readPidFileState] / `readNodePidFileState`）
+     * @param onDelete 判据为真时要删的东西（调用方给，锁内执行，只许做文件删除）
+     * @return 判据是否为真（`true` 时 [onDelete] 已执行）
+     */
+    fun compareAndDelete(
+        readState: () -> PidFileRead<Long>,
+        expectedPid: Long,
+        onDelete: () -> Unit,
+    ): Boolean = synchronized(PID_FILE_LOCK) {
         runCatching {
-            if (pidFileBelongsTo(readPidFile(instanceId)?.pid, expectedPid)) {
-                DshPaths.instancePidFile(instanceId).delete()
+            if (pidFileMayBeDeleted(readState(), expectedPid)) {
+                onDelete()
+                true
+            } else {
+                false
             }
-        }
+        }.getOrDefault(false)
     }
 
     fun isAlive(pid: Long): Boolean {
@@ -3697,8 +4030,12 @@ object ProcessUtil {
     private fun removePidFileByPid(pid: Long) {
         runCatching {
             File(DshPaths.INSTANCES_DIR).listFiles()?.forEach { dir ->
-                val f = File(dir, "dsh.pid")
-                if (f.isFile && readPidFile(dir.name)?.pid == pid) f.delete()
+                // ★ SP-01：走 [ProcessUtil.removePidFile] 的三态 compare-and-delete（同一个叶子锁 +
+                //   同一份判据），而不是自己 `isFile && read == pid && delete()` —— 裸的三步之间有
+                //   TOCTOU，且"读不出"在这里会被 `?.pid == pid` 判成 false（保守方向对，但也漏掉了
+                //   "文件是我的、只是瞬时读不出"这条会永久滞留的情况）。集中到一个实现，别让同一
+                //   判据在这份文件里出现第二套。
+                ProcessUtil.removePidFile(dir.name, pid)
             }
         }
     }
