@@ -350,6 +350,30 @@ object DshRuntime {
          */
         fun isAliveAndOwned(): Boolean = isAlive()
 
+        /**
+         * ★ R34/RE-01：**停止之后**判"这个 proot 到底还在不在"，与 [isAlive] 分开。
+         *
+         * 为什么不能复用 [isAlive]：两个实现的事实来源在停止之后都可能偏"活"，偏的方式还不一样 ——
+         * - [ProcessHandle.isAlive] 读 `Process.isAlive`（JVM 侧状态，Android 上是 `ProcessImpl`）；
+         *   真机 DT-07 采样 13/13 次 `/proc/<pid>` 在 1~2 秒内消失，而 App 侧两段宽限（1s+4s）后
+         *   仍判"存活"（`verifyProotGone` 的警告与 `stop incomplete` 是同一条结论）。
+         * - [PidHandle.isAlive] 读 `ProcessUtil.isAlive(pid)`（`/proc/<pid>` 存在 ∨ `sendSignal(pid, 0)`）。
+         *   pid 会被系统复用：原 proot 死了、号被别的进程用掉，这条就恒真。
+         *
+         * 停止路径对"活"的判断是**结论性**的（`!alive` ⇒ 宣布已停止、删 pid 文件、丢句柄），
+         * 所以必须有**证据**才说活：pid 还在，**且** cmdline 里仍含本实例的标识
+         * （`proot` + instanceId，口径同 [canSendQuitSignal]）。
+         *
+         * @return `true` = 仍在且确属本实例的 proot；`false` = 没有证据表明它还在（已退出 /
+         *   cmdline 读不到 / 身份已不符）。读不到取 `false` 是**刻意**的：进程退出后
+         *   `/proc/<pid>/cmdline` 立即消失，读不到正是"它已经走了"的常态。
+         *
+         * 与 [isAlive] 的方向差异（同一个布尔在两处取值相反）正是它必须独立存在的原因：terminate
+         * 入口需要"读不到也照杀"（宁可多发一次信号），停止收尾需要"没证据就算走"（否则永远停不成功）。
+         * 见 PLAN D-1b。
+         */
+        fun isStillTheSameProotAfterStop(): Boolean = isAlive()
+
         suspend fun terminate(graceMillis: Long)
     }
 
@@ -397,6 +421,18 @@ object DshRuntime {
     ) : Handle {
         override val pid: Long get() = handle.pid()
         override fun isAlive(): Boolean = handle.isAlive()
+
+        /**
+         * ★ R34/RE-01：停止后的存活判据 —— **不**复用 [isAlive]（JVM 侧 `Process.isAlive`）。
+         *
+         * 见 [Handle.isStillTheSameProotAfterStop] 的 KDoc。刻意不看 `process.isAlive`，只看两个
+         * **可独立复核**的宿主事实：`pid > 0` 且 `/proc/<pid>/cmdline` 里仍有 `proot` + instanceId
+         * （口径同在用的 [canSendQuitSignal]）。读不到 cmdline 也算"不在" —— 进程退出后
+         * `/proc/<pid>` 立刻消失，读不到正是它已经走了的常态；pid 被复用时 cmdline 里没有这两个词，
+         * 也不会误判成"活"。
+         */
+        override fun isStillTheSameProotAfterStop(): Boolean =
+            prootStillOwnsPid(pid, ProcessUtil.cmdline(pid), instanceId)
 
         /**
          * 停止 proot：**SIGQUIT → 等 → 原来的 TERM/KILL 兜底**（理由见 [signalProotQuit]）。
@@ -468,6 +504,22 @@ object DshRuntime {
          */
         override fun isAliveAndOwned(): Boolean =
             isAlive() && canSendQuitSignal(pid, ProcessUtil.cmdline(pid).orEmpty(), instanceId)
+
+        /**
+         * ★ R34/RE-01：[PidHandle] 的停止后存活判据 —— 必须带身份证，不能只看 `/proc/<pid>`。
+         *
+         * [isAlive]（`/proc/<pid>` 存在 ∨ `sendSignal(pid, 0)`）在停止路径上是**朝"永远活着"偏**的：
+         * pid 被系统复用给任何进程之后它恒真，而认领态（本类）恰恰只有 pid 一个把手。停止收尾用
+         * `!alive` 判"gone"，偏真就等于"每次停止都失败"（RE-01 的另一半 —— 审计只看了 `stopSucceeded`
+         * 那一行，没看这条判据本身的偏置）。
+         *
+         * 判据与 [isAliveAndOwned] 相同（这个 pid 上还是不是本实例的 proot），但**故意各自实现**：
+         * 一个回答"能否复用现有 run"，一个回答"停止是否已经生效"，将来可能分叉；直接互相调用会把
+         * 下一次改动的方向绑在另一个用途上。共用的是下面 [prootStillOwnsPid] 那一条**判据**，
+         * 不是这两个方法本身。
+         */
+        override fun isStillTheSameProotAfterStop(): Boolean =
+            prootStillOwnsPid(pid, ProcessUtil.cmdline(pid), instanceId)
 
         override suspend fun terminate(graceMillis: Long) = withContext(Dispatchers.IO) {
             if (!isAlive()) return@withContext
@@ -1566,12 +1618,29 @@ object DshRuntime {
                 terminateFailed = true
                 DshLogBus.appendFor(instanceId, "[runtime] terminate of proot handle failed during stop (pid=$prootPid): ${e.message}")
             }
-            verifyProotGone(instanceId, prootPid)
+            // ★ R34/RE-01：判活改用 [Handle.isStillTheSameProotAfterStop]（带 cmdline 身份），
+            //   不再用 `ProcessUtil.isAlive(prootPid)`。理由见那个方法的 KDoc：旧的 `isAlive` 只看
+            //   `/proc/<pid>` 存在 ∨ `sendSignal(pid,0)`，pid 一被系统复用就恒真；而进程真退出后
+            //   `/proc/<pid>` 立刻消失。两者叠加还会出现"同一事实被算两次、阈值不同"的裂缝
+            //   （`verifyProotGone` 与这里各判一次）。
+            //   `h == null`（没有句柄可问，例如 stop 前句柄已被别的路径清掉）：退回按 pid 判，
+            //   且同样带身份 —— 拿不到 pid（<=0）按"已结束"处理（旧口径不变）。
+            //
+            // ★ R34/RE-01(b)：**先把判据定成一个 lambda，再让 verifyProotGone 与这里共用它** ——
+            //   两段宽限结束后"活没活"必须与 `stopSucceeded` 是同一个答案。修复前
+            //   verifyProotGone 用 `ProcessUtil.isAlive`（`/proc` 存在即算活）、这里用另一个表达式，
+            //   于是同一份日志里能同时出现"仍存活"和"已停止"两句相反的话。
+            val stillHereNow: (Long) -> Boolean = { pid ->
+                h?.takeIf { it.pid == pid }?.isStillTheSameProotAfterStop()
+                    ?: prootStillOwnsPid(pid, ProcessUtil.cmdline(pid), instanceId)
+            }
+            verifyProotGone(instanceId, prootPid, stillHereNow)
             // ★ Round24 N-2（同族）：停止没成功时**也不删 pid 文件** —— 它是下一次启动的
             //   `killStale`（带 cmdline 身份校验）唯一能定位到这个残留 proot 的线索。旧实现无条件删，
             //   于是"终止失败 + 句柄已丢 + pid 文件已删"三件套一起发生，这个 proot 就彻底失联了。
             //   成功与否的判据与下面清句柄用同一组（gone && !terminateFailed），保证两者不会分叉。
-            val gone = prootPid <= 0 || !ProcessUtil.isAlive(prootPid)
+            val stillTheSameProot = prootPid > 0 && stillHereNow(prootPid)
+            val gone = !stillTheSameProot
             val stopSucceeded = gone && !terminateFailed
             if (stopSucceeded) {
                 // K03 compare-and-delete：只有当 pid 文件仍记着**我们正在停的这个** proot/node 时才删，
@@ -1582,16 +1651,47 @@ object DshRuntime {
                 DshLogBus.appendFor(
                     instanceId,
                     "[runtime] stop incomplete: pid files + handle kept (pid=$prootPid, " +
-                        "terminateFailed=$terminateFailed, stillAlive=${!gone}); " +
+                        "terminateFailed=$terminateFailed, stillAlive=${stillTheSameProot}); " +
                         "the next start's stale cleanup (killStale, cmdline-checked) can still reach this proot"
+                )
+                // ★ R34：把"为什么判它还在"钉成可复核的事实，别再留一个未解之谜。
+                //
+                // 修复前的诊断只有 `stillAlive=true` 一个布尔，于是真机上"13/13 次说仍存活、而
+                // /proc 早已消失"这件事无法归因（审计给了三个候选假设，一个都证不了）。
+                // 现在判据是**两条**（`/proc` 存在 + cmdline 身份），那么把两条分开打印，
+                // 下一次真机日志就能直接读出是哪一条成立：
+                // - `procExists=true, cmdlineHasIdentity=false` ⇒ **pid 被复用给了别的进程**
+                //   （H4：pid 来源选错，或我们停的那个早就走了而号被别人用掉）；
+                // - `procExists=false` ⇒ 判"仍存活"是假阳（不该发生，出现即本判据有 bug）；
+                // - `procExists=true, cmdlineHasIdentity=true` ⇒ 真的还活着（proot 顽固）；
+                // - `cmdline=unreadable` ⇒ SELinux/权限挡住了 cmdline（判据只能退化为保守）。
+                //
+                // 只在**失败**分支打（成功时 /proc 已经不在，打这行只是噪音）。
+                val procExists = ProcessUtil.isAlive(prootPid)
+                val cmd = ProcessUtil.cmdline(prootPid)
+                val cmdlineHasIdentity = prootStillOwnsPid(prootPid, cmd, instanceId)
+                DshLogBus.appendFor(
+                    instanceId,
+                    "[runtime] stop-incomplete evidence: procExists=$procExists, " +
+                        "cmdlineHasIdentity=$cmdlineHasIdentity, " +
+                        "cmdline=" + (cmd?.take(120)?.replace('\u0000', ' ')?.let { "\"$it\"" } ?: "unreadable") +
+                        " (procExists && !cmdlineHasIdentity = pid reused by another process)"
                 )
             }
             // 关键：终止是异步的（最长 5s）。期间用户可能已经启动了新实例，
-            // 只有当前状态仍停在这个实例上时才允许置 Idle / 收服务，否则会把新实例的
+            // 只有当前状态仍停在这个实例上时才允许动状态，否则会把新实例的
             // Starting/Running 覆盖掉，并且误杀它的前台通知。
-            // 注意：对\"进程句柄\"（ProcessHandle）而言，terminate 会触发 onProcessExit，
-            // 那里已把状态落到 Idle；这里主要覆盖\"孤儿进程句柄\"（PidHandle）没有 onExit 回调的情况。
-            synchronized(this@DshRuntime) {
+            // 注意：对"进程句柄"（ProcessHandle）而言，terminate 会触发 onProcessExit，
+            // 那里已把状态落到 Idle；这里主要覆盖"孤儿进程句柄"（PidHandle）没有 onExit 回调的情况。
+            //
+            // ★ R34/RE-01：这里的判据从"无条件宣布已停止"改成 stopSucceeded 三态，但**分支的所有
+            //   副作用（日志 / 上报 / 收服务）都排在锁外** —— 与 onProcessLine 就绪段同一条纪律：
+            //   监视器里只做状态与句柄的配对写，别把 IO 拖进 stop 的等待里。
+            //
+            // 返回值：`null` = 状态已不属本实例的 Stopping（什么都不做、也不收服务）；
+            // `false` = 本实例已停止（Idle）；`true` = 停止未完成（Failed + 原因见 failedReason）。
+            var failedReason: String? = null
+            val weOwnedTheStop: Boolean? = synchronized(this@DshRuntime) {
                 // ★ Round24 N-2：句柄在这里才清 —— 且只在"仍是本次停的那个句柄"时清。
                 //   ① 进程确实已不在（prootPid<=0 = 拿不到 pid，无从判活，按已结束处理）；
                 //   ② 终止没抛异常。两条有一条不满足 = 本次停止没成功：**保留 handle**
@@ -1601,12 +1701,66 @@ object DshRuntime {
                     if (h != null && stopSucceeded) handle = null
                 }
                 val cur = _state.value
-                if (cur is State.Stopping && cur.instanceId == instanceId) {
+                if (cur !is State.Stopping || cur.instanceId != instanceId) return@synchronized null
+                // ★ R34/RE-01：**停止失败不许再宣布"已停止"**。
+                //
+                // 修复前这里完全不看 stopSucceeded：`stillAlive=true` 只变成上面一行日志，
+                // 用户可见的结论依旧是 Idle + 「已停止」。审计 RE-01 记的真机现场就是这个：
+                // 01:31:47 落 Idle/「已停止」，01:31:53 才打出「仍存活 / stop incomplete」。
+                //
+                // 语义选择（为什么落 Failed 而不是留在 Stopping / 落 Idle）：
+                // 1) **不能留在 Stopping** —— [stopAndWait] 的 13s 判据只认"状态离开 Stopping"，
+                //    留着会把下一次启动拖满 13 秒再走"超时后强行启动"兜底分支（Round24 N-1 刚
+                //    修掉的坏路径）；二次 stop 对 Stopping 又是 no-op（BL-036a），用户点不出第二次停止。
+                // 2) **不能落 Idle** —— Idle 断言"没有进程、通道空闲"（[activeInstanceId] 返回 null），
+                //    而此刻进程可能还活着。
+                // 3) 所以落 **Failed**：它就是本代码库表达"有结论的失败终态"的那一档
+                //    （启动失败、认领失败都用它）。`ownerOfState` 保留归属，`activeInstanceId()` 为空
+                //    ⇒ 下一次 start 走"没有在跑"的快路径，不白等 13s；句柄与 pid 文件都留着
+                //    （上面 stopSucceeded 分支），`start()` 入口的 `killStale` + [terminateNodeProcess]
+                //    能按 cmdline 身份收掉这个残留。
+                // 4) 文案：**直接内联一句英文**，与 [R.string.dsh_start_port_in_use] 当初的处置同款
+                //    （那条也只因"必须落在这个文件里"才写成内联字面量）。本任务不许改 res/，
+                //    所以这里不写一个"取不到就兜底"的假资源引用 —— 那种写法会让读者以为文案已本地化。
+                //    ⚠️ 待补：`dsh_reason_stop_incomplete`（三语）。
+                if (stopSucceeded) {
                     _state.value = State.Idle
                     stopRequestedFor = null
+                    false
+                } else {
+                    val reason = "Stop incomplete: the dsh process may still be running (pid=$prootPid). " +
+                        "Start the instance again to clean it up."
+                    _state.value = State.Failed(instanceId, name, reason)
+                    // ★ stopRequestedFor **不清**：它表达"接下来那次进程退出是我们要的"，而这个 proot
+                    //   还没走。清掉的话，它日后真退出时 onProcessExit 会把这次退出当意外崩溃上报
+                    //   （错误 Toast + 任务区 DONE），与本次结论自相矛盾。它由 onProcessExit（同实例）
+                    //   或下一次 startLocked 的 [shouldClearStopRequested] 收尾，不会永久滞留。
+                    failedReason = reason
+                    true
+                }
+            }
+            when (weOwnedTheStop) {
+                null -> Unit   // 状态已被别的 run 接管：什么都不做（也不收服务）
+                false -> {
                     // 实例级：该实例生命周期的收尾（对应上面的"停止"），实例页要看到闭环
                     DshLogBus.appendFor(instanceId, "[runtime] $name 已停止")
                     stopServiceIfIdle()
+                }
+                true -> {
+                    DshLogBus.appendFor(
+                        instanceId,
+                        "[runtime] $name 停止未完成：进程可能仍在运行（pid=$prootPid, " +
+                            "terminateFailed=$terminateFailed）—— 句柄与 pid 文件保留给下次启动的残留清理"
+                    )
+                    // ★ 不调 stopServiceIfIdle()：真正要保住前台保活得让服务继续跑，但
+                    //   DshRuntimeService 的观察者（`st !is Starting && !is Running` ⇒ stopSelfSafely）
+                    //   在状态变 Failed 时必然退出，本文件改不动它（服务与 UI 不在本次范围）。
+                    //   所以本分支只做"不再撒谎"：结论/文案/状态如实说"没停干净"，
+                    //   前台保活仍会丢 —— 已登记为 residual risk。
+                    val reason = failedReason
+                    if (reason != null) {
+                        reportRuntime(instanceId, name, DshTask.State.FAILED, reason, error = reason)
+                    }
                 }
             }
         }
@@ -1818,15 +1972,23 @@ object DshRuntime {
      *
      * @param prootPid 停止前记下的 proot pid；<=0（拿不到 pid）时跳过校验 —— 那种情况下
      *                 "孤儿认领/清理"这条兜底本来也是断的，校验没有意义。
+     * @param stillHere 可选的存活判据（缺省 = [ProcessUtil.isAlive]）。R34/RE-01 之后调用方传
+     *                 [Handle.isStillTheSameProotAfterStop] —— 判"还在不在"必须与下面
+     *                 `stopSucceeded` 用**同一个**判据，否则同一个事实在这里被算两次、结论可以打架
+     *                 （审计 RE-01 的现场正是这样：本函数说"仍存活"，20 行后却宣布"已停止"）。
      */
-    private suspend fun verifyProotGone(instanceId: String, prootPid: Long) {
+    private suspend fun verifyProotGone(
+        instanceId: String,
+        prootPid: Long,
+        stillHere: (Long) -> Boolean = { ProcessUtil.isAlive(it) }
+    ) {
         if (prootPid <= 0) return
         // ★ R16/fix4（BL-138）：两段式宽限。第一段（PROOT_EXIT_GRACE_MS）覆盖常见收尾；
         //   仍在则以 PROOT_EXIT_GRACE_EXTENDED_MS 为增量再等第二段 —— SIGQUIT 的
         //   kill_all_tracees 收整棵 tracee 树可能 >1s，单段 1s 会把正常收尾误报成"仍存活"。
         //   只有两段全过仍活着才告警（此时才真正值得排障者注意）。
-        var alive = waitProotExit(prootPid, PROOT_EXIT_GRACE_MS)
-        if (alive) alive = waitProotExit(prootPid, PROOT_EXIT_GRACE_EXTENDED_MS)
+        var alive = waitProotExit(prootPid, PROOT_EXIT_GRACE_MS, stillHere)
+        if (alive) alive = waitProotExit(prootPid, PROOT_EXIT_GRACE_EXTENDED_MS, stillHere)
         if (!alive) {
             // 实例级：这是"这个实例的 proot 确实走了"的结论，实例页要能看到（否则只有"停止"没有下文）
             DshLogBus.appendFor(instanceId, "[runtime] proot 已退出（pid=$prootPid）")
@@ -1843,14 +2005,19 @@ object DshRuntime {
 
     /**
      * R16/fix4（BL-138）：等 [pid] 退出最多 [budgetMs] 毫秒；期间每 100ms 轮询一次。
+     * @param stillHere 存活判据（缺省 = [ProcessUtil.isAlive]，见 [verifyProotGone] 的同名参数）
      * @return true = 预算耗尽时仍存活；false = 已退出
      */
-    private suspend fun waitProotExit(pid: Long, budgetMs: Long): Boolean {
+    private suspend fun waitProotExit(
+        pid: Long,
+        budgetMs: Long,
+        stillHere: (Long) -> Boolean = { ProcessUtil.isAlive(it) }
+    ): Boolean {
         val deadline = System.currentTimeMillis() + budgetMs
-        while (System.currentTimeMillis() < deadline && ProcessUtil.isAlive(pid)) {
+        while (System.currentTimeMillis() < deadline && stillHere(pid)) {
             kotlinx.coroutines.delay(100)
         }
-        return ProcessUtil.isAlive(pid)
+        return stillHere(pid)
     }
 
     /**
@@ -1995,9 +2162,46 @@ object DshRuntime {
      *   都是在判断"这个实例为什么起不来"。全局流里混着别的实例、别的安装、底座解压的输出，
      *   拿它做判据会把别人的行当成本实例的线索（例如别的一次安装里的 `Error: ...` 触发误判），
      *   附到错误提示里的"最近输出"也会是别人的东西 —— 与实例页看到的内容对不上。
+     *
+     * ★ R34 / 缺陷 A：**不能读 [DshLogBus.snapshotFor] 的 StateFlow**。
+     *
+     * 那个 `StateFlow` 只在 flush 时发布，而 [DshLogBus] 的合并刷新间隔是 **200ms**
+     * （`FLUSH_INTERVAL_MS`）。本函数的两个调用点都在**进程刚退出**的路径上：
+     * [DshRuntime.onProcessExit] 在 `drainLines` 读完 + `waitFor` 返回后**立即**调
+     * `tailSaysPortInUse` / `retryIfSeccompLooksGuilty`，中间没有任何 sleep ——
+     * 脚本临终打的 `[start-dsh] FAILED reason=port-in-use` 与 seccomp 关键词那几行，
+     * 那一刻**几乎必然还没进快照**。
+     *
+     * 规划 Agent 的探针实测（`SNAP_COUNT=5` vs `LIVE_COUNT=7`；`appendFor` 之后立即读快照 = 0 行，
+     * 而同一时刻 `export(id)` 已有 1 行）就是这个时间差。后果：round33 修的 `tailSaysPortInUse`
+     * 在最常见的失败时序下从未生效，失败对话框里的"最近输出"引用的也是旧行。
+     *
+     * 改用 [DshLogBus.export]：它是 `@JvmStatic`，在 `synchronized(lock)` 里**直接读那个
+     * `ArrayList` 缓冲**（不经 StateFlow、不等 flush），所以"刚 append 完就能读到"。
+     * 行格式与快照逐字节相同（同一份 `stamp()` 产物），只是容器不同 —— 时间戳仍以
+     * `"HH:mm:ss  "`（两个空格）分隔，所以 `substringAfter("  ")` 的剥法保持不变。
+     *
+     * ⚠️ 这里**不调 `flushNow()`** 换新鲜度：`flush()` 会顺带做落盘 IO（`drainFileWrites`），
+     *   把它拉进"进程退出回调"这条路径等于用一次磁盘写换几行日志，而且并不能让读到的行更全
+     *   （`export` 读的缓冲本来就是 append 的同一份内存）。
      */
     private fun recentLogTail(instanceId: String, count: Int = 25): List<String> =
-        DshLogBus.snapshotFor(instanceId).value.lines.takeLast(count).map { it.substringAfter("  ") }
+        liveInstanceLines(instanceId).takeLast(count).map { it.substringAfter("  ") }
+
+    /**
+     * 该实例**此刻**的内存日志行（同步可见，不经 flush）。
+     *
+     * 为什么单独抽一个函数：缺陷 A 的同族有两处（[recentLogTail] 与 [appendLastLinesHint]），
+     * 两处都必须走同一个"实时读"口径 —— 否则下一次有人只改一处，另一半又退回陈旧快照。
+     *
+     * 空串语义（[DshLogBus.export] 对"没有该实例"返回 `""`）在这里折成空列表：
+     * `"".split('\n')` 是 `[""]`，直接用会凭空多出一行空行，污染"最近输出"文案与关键词判据。
+     */
+    private fun liveInstanceLines(instanceId: String): List<String> {
+        val text = DshLogBus.export(instanceId)
+        if (text.isEmpty()) return emptyList()
+        return text.split('\n')
+    }
 
     /**
      * 就绪前早期退出时，必要时安排一次 `PROOT_NO_SECCOMP=1` 的兜底重试。
@@ -2318,9 +2522,16 @@ object DshRuntime {
      * 把"最近几行输出"拼进失败原因。
      * ★ 取的是**该实例**的末尾几行（与实例页看到的一致）—— 用全局流末尾会出现"错误提示里引用了
      *   别的实例的输出"这种没法对照的怪现象。
+     *
+     * ★ R34 / 缺陷 A（同族第二处）：原来读 [DshLogBus.snapshotFor] 的 StateFlow，而它只在
+     *   ~200ms 一次的合并 flush 时发布 —— 本函数的唯一调用点是 [onProcessExit] 的
+     *   "启动失败"分支，恰好在进程刚退出、脚本临终那几行刚 append 完的瞬间。于是显示给用户的
+     *   "最近输出"是**上一批**行，甚至可能是空的（`tail.isBlank()` ⇒ 干脆不附）。
+     *   改走 [liveInstanceLines]（`DshLogBus.export`，锁内直读缓冲，同步可见），
+     *   口径与 [recentLogTail] 一致。
      */
     private fun appendLastLinesHint(instanceId: String, base: String): String {
-        val tail = DshLogBus.snapshotFor(instanceId).value.lines.takeLast(3)
+        val tail = liveInstanceLines(instanceId).takeLast(3)
             .joinToString(" / ") { it.substringAfter("  ") }
             .take(240)
         if (tail.isBlank()) return base
@@ -2530,6 +2741,25 @@ fun activeOwnerOf(state: DshRuntime.State): String? = when (state) {
  */
 fun canSendQuitSignal(pid: Long, cmdline: String, instanceId: String): Boolean =
     pid > 0 && instanceId.isNotBlank() && cmdline.contains("proot") && cmdline.contains(instanceId)
+
+/**
+ * ★ R34/RE-01：停止收尾的"这个 pid 上还是不是我那条 proot"判据。
+ *
+ * 抽成顶层函数（而不是直接调 [canSendQuitSignal]）的理由是**它要能单独被单测钉住**，
+ * 而它回答的问题与发信号前的复核不是同一个：
+ * - [canSendQuitSignal] 决定"要不要发 SIGQUIT"（发错 = 连根杀掉别人的 tracee 树）；
+ * - 本函数决定"停止是否已经生效"（判错的后果在反方向：判"活" ⇒ 永远停不成功、句柄与 pid 文件
+ *   永不释放；判"死" ⇒ 少一次 keep，但有 [ProcessUtil.readPidFile] 与下次启动的 killStale 兜底）。
+ *
+ * 判据本身与 [canSendQuitSignal] 完全一致（同一个事实：`/proc/<pid>/cmdline` 里的 `proot` +
+ * instanceId）。**读不到 cmdline ⇒ false**，这是刻意的：进程退出后 `/proc/<pid>` 立即消失，
+ * 读不到正是"它已经走了"的常态；而 pid 被系统复用时 cmdline 里没有这两个词，也不会被误判成"活"。
+ *
+ * @param cmdline `/proc/<pid>/cmdline` 的内容（调用方读不到时传空串/null，见 [ProcessUtil.cmdline]）
+ * @return true = 这个 pid 上仍然是本实例的 proot
+ */
+fun prootStillOwnsPid(pid: Long, cmdline: String?, instanceId: String): Boolean =
+    canSendQuitSignal(pid, cmdline.orEmpty(), instanceId)
 
 /**
  * ★ fix12（E3-N-11）：`killBlocking` 发 SIGTERM/SIGKILL 前的身份复核判据（纯函数，便于单测）。

@@ -1091,6 +1091,27 @@ class DshInstaller(
             // ★ BL-032：run() 内部预检失败也走 onLine（"[proot] 预检失败: <原因>"），删掉外层预检后
             //   这里收进尾部——失败摘要链经 errorSummary → 原样回放仍能带出可读原因，不回落泛化文案。
             trimmed.startsWith(PREFLIGHT_FAIL_PREFIX) -> rememberFailureLine(instance.id, trimmed)
+            // ★ R34：run() **顶层 catch** 的失败行（`[proot] 执行失败: <原因>`，见
+            //   [PROOT_RUN_FAIL_PREFIX]）。它与预检失败是两回事：预检是"还没跑就被拦下"，
+            //   这一行是"跑的时候炸了"（`start()` 的 IOException、读管道的 IOException、InterruptedException…）。
+            //   这类异常在 `ProotProcessExecutor.run` 内部被折成退出码 -1，**唯一**的现场就是这一行；
+            //   改造前三个分支一个都不认它，于是 errorSummary 必然回落到"安装失败（详见日志）"——
+            //   而日志在 App 私有目录，未 root 的用户根本读不到，那句话对他是空头支票。
+            //
+            // ★ 写 [errorSummaries] 而不是 [errorTails]（这个选择很重要，理由三条）：
+            //   1. **不经 [describeFailure]**，也就不会被它的**网络分类器**重新解释。
+            //      `errorTails` 那条路会把整段摘要跑 `classifyNetworkFailure` + `npmErrorCode`：
+            //      一条 `IOException: Connection reset` 会被改写成"网络超时，请检查网络"，
+            //      把"proot 起不来"误导成"你的网不好"——`describeFailure` 自己的 KDoc 就写着
+            //      "把真实原因报错成网络问题会让用户去查网络，白折腾一轮"。
+            //      这里要的是**原样把异常消息送到界面**，正好是 `errorSummaries` 的语义。
+            //   2. **优先级最高**：它压过 npm 尾部。run() 抛异常时进程是被**我们自己**的
+            //      catch 收掉的，那才是终局原因；此时 npm 尾部里剩下的多半是"被掐断"的下游症状。
+            //   3. **与既有口径一致**：[runInstall] 外层 `catch` 写的就是 `errorSummaries[id] = t.message`。
+            //      run() 内部吞掉的异常是同一类事件、只是深了一层 —— 落到同一张表才不反常。
+            trimmed.startsWith(PROOT_RUN_FAIL_PREFIX) -> {
+                errorSummaries[instance.id] = prootRunFailureSummary(trimmed)
+            }
             // ★ R20：npm http 行 → 实时活动行（见 [extractNpmActivity]）。**不覆盖 stage**：
             //   只更新 activity 字段（卡片/任务区拿它显示"正在抓哪个包"的滚动细节）。
             //   读-改-写安全：onInstallLine 由单一 stdout 读取线程顺序调用，不存在与
@@ -1239,6 +1260,84 @@ class DshInstaller(
          *   字符串判据按原文写死——两边都是本仓库代码，真机无混用新旧版本的路径（预检行走同一进程）。
          */
         private const val PREFLIGHT_FAIL_PREFIX = "[proot] 预检失败:"
+
+        /**
+         * ★ R34：`ProotProcessExecutor.run()` **顶层 catch** 打出的失败行前缀
+         * （`ProotProcessExecutor.describeRunFailure` 的产物，形状恒为 `[proot] 执行失败: <message 或异常类名>`）。
+         *
+         * ## 为什么需要这一行（缺陷本体）
+         * 安装期 `run()` 内**任何**异常（`ProcessBuilder.start()` 的 `IOException`、读管道时的
+         * `IOException`、`InterruptedException`…）都会被 `reportRunFailure` 吞掉、把退出码折成
+         * `-1`，**唯一**留下的现场就是这一行 stdout。改造前 [onInstallLine] 的三个收口分支
+         * （npm 错误行 / `[setup] FAILED` / [PREFLIGHT_FAIL_PREFIX]）一个都不认它，于是它只进了
+         * 日志、没进任何失败摘要通道 ⇒ [errorSummary] 落到 `dsh_install_failed_generic`
+         * （"安装失败（详见日志）"）—— 用户拿到了一个**死胡同**：日志在私有目录里，未 root 读不到。
+         *
+         * ## 收口去向：[errorSummaries]（**不是** [errorTails]）
+         * 这条行走 [errorSummaries] —— 优先级最高，且**不经 [describeFailure] 的二次解释**。
+         * 详见 [onInstallLine] 该分支的三条理由；最关键的是"别让网络分类器把
+         * `Connection reset` 之类改写成'请检查网络'"。
+         *
+         * ## 与 [PREFLIGHT_FAIL_PREFIX] 的关系（两条不是一回事，别合并）
+         * 预检失败是"**还没开始跑**就被拦下"（proot 二进制/rootfs/脚本缺失），前缀不同、
+         * 由 `run()` 在 `start()` **之前**发出；本前缀是"跑起来了/准备跑的时候炸了"。
+         * 两者的用户下一步不同（去修底座 vs 看底层异常），所以分开成两个常量。
+         *
+         * ⚠️ 与 `ProotProcessExecutor` 是**字符串协约**（跨文件、无编译器保护）：那边改措辞这里
+         *   就静默失效。故本常量在 [R34InstallErrorTest] 里被按**字面量**钉住（测试不复用这个
+         *   常量，否则两边一起漂移测试还是绿的）。
+         */
+        private const val PROOT_RUN_FAIL_PREFIX = "[proot] 执行失败:"
+
+        /** 摘要里"底层原因"最多留多少字符 —— 与 [SUMMARY_MAX_CHARS] 同量级，见 [prootRunFailureSummary] */
+        private const val RUN_FAILURE_CAUSE_MAX = 200
+
+        /**
+         * 这一行是不是 `ProotProcessExecutor.run()` 顶层 catch 的失败行（[PROOT_RUN_FAIL_PREFIX]）。
+         *
+         * 与 [isNpmErrorLine] 一样放 companion、做成纯函数：判据必须**能单测**。
+         * 它坏掉时的症状是"用户又只剩'详见日志'"——那正是本轮要修的东西，不能让它再次
+         * 只存在于跑不起来的实例方法里。
+         *
+         * @param line 已 `trim()` 的行（[onInstallLine] 传进来前已去过首尾空白）
+         */
+        fun isProotRunFailureLine(line: String): Boolean = line.startsWith(PROOT_RUN_FAIL_PREFIX)
+
+        /**
+         * 把 `[proot] 执行失败: <原因>` 折成**可直接展示**的一句话（[onInstallLine] 收进 [errorSummaries] 用）。
+         *
+         * ## 为什么只留"原因"、把中文前缀丢掉
+         * 这个返回值会经 [errorSummary] 直接进界面（toast / 实例卡片 / 任务区）。
+         * 前缀 `[proot] 执行失败:` 是**日志协约**（排障按它 grep），不是给人看的句子；原样回放会让
+         * 英文/繁体界面里塞进一串硬编码中文 —— 正是 round33 修过的那类回归。丢掉前缀之后剩下的
+         * 是 `IOException` 的 message 或异常类名（`java.io.IOException: Cannot run program …`），
+         * 它本来就是英文/系统语言。这与 [describeFailure] 对认不出的 npm 尾部"原样回放"同一口径：
+         * **宁可显示一句看不懂的原文，也不要吞掉** —— 原文至少能拿去搜。
+         *
+         * ⚠️ 这里**不新增**任何文案：加一句"运行时启动失败：%1$s"需要 strings.xml（不属本次改动
+         *   范围），硬编码中文又是明确禁止的方向。所以走"丢掉日志外壳、留原文"这条路。
+         *
+         * ## 脱敏
+         * 原因串来自 `Exception.message`，内容不可控（可能带 URL / 命令行）。先过
+         * [DshLogBus.sanitize]：`token=…` 与已注册密钥一律打码，与日志正文同一口径。
+         * 注：Android 上落进 message 的路径是应用私有目录（`/data/user/0/<包名>/…`），
+         * 不含系统用户名；包名不是秘密，故不做路径裁剪。
+         *
+         * @param line 整行（含前缀）
+         * @return 去前缀、脱敏、按 [RUN_FAILURE_CAUSE_MAX] 截断后的一句话；原因部分为空时
+         *         **退回整行**（宁可带着日志外壳，也不要交出一句空话）
+         */
+        fun prootRunFailureSummary(line: String): String {
+            val full = line.trim()
+            val rawCause = if (isProotRunFailureLine(full)) {
+                full.removePrefix(PROOT_RUN_FAIL_PREFIX).trim()
+            } else {
+                ""
+            }
+            val kept = DshLogBus.sanitize(rawCause.takeIf { it.isNotEmpty() } ?: full).trim()
+            // 截断放在脱敏之后：先按原长脱敏，才不会把一个 token 从中间截断而漏掉半截明文。
+            return if (kept.length > RUN_FAILURE_CAUSE_MAX) kept.take(RUN_FAILURE_CAUSE_MAX) + "…" else kept
+        }
 
         /** 失败摘要送进界面/任务区的最大字符数（超出的截断，接口与实例卡片都放不下长文） */
         private const val SUMMARY_MAX_CHARS = 300
@@ -1608,6 +1707,10 @@ class DshInstaller(
                 trimmedLine.startsWith("[setup] preinstalled") ||
                 trimmedLine.startsWith("[setup] using preinstalled") ||
                 trimmedLine.startsWith(PREFLIGHT_FAIL_PREFIX) ||
+                // ★ R34：run() 顶层 catch 的失败行同样是**唯一**的失败现场（见 [PROOT_RUN_FAIL_PREFIX]），
+                //   它一旦落进节流缓冲就可能恰好在收尾 flush 之前被 emit 顺序挤掉观感；
+                //   作为失败归因而非普通输出，必须立即发射。
+                trimmedLine.startsWith(PROOT_RUN_FAIL_PREFIX) ||
                 isNpmErrorLine(trimmedLine)
 
         /**
