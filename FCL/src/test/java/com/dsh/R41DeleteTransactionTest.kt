@@ -2,12 +2,11 @@ package com.dsh
 
 import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
-import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
 import com.dsh.core.DshRuntime
-import com.dsh.core.DshTask
 import com.dsh.core.DshTasks
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -314,16 +313,33 @@ class R41DeleteTransactionTest {
         }
     }
 
-    /** 把实例 [id] 重新造回清单与目录，让"再删一次"有对象。返回重读后的实例。 */
+    /**
+     * 把实例 [id] 造回**内存与目录**，让"再删一次"有对象。
+     *
+     * ⚠️ **不能用 `resetForTest()`**：它会把 `deleteInFlight` 一起清掉，于是本用例想验证的
+     * "闸门是否已被 finally 释放"就被测试自己替实现做掉了（变异 b 会因此假绿）。
+     * 所以这里只把实例塞回 `_instances`（生产里等价于"用户在删除失败后重新建了同名实例"），
+     * 闸门与 `_deleting` 一概不动。
+     */
     private fun rebuildInstance(root: File, id: String): DshInstance? {
         File(root, "instances").let { assertTrue("应能建出 instances 目录", it.isDirectory || it.mkdirs()) }
         val dir = File(root, "instances/$id")
         assertTrue("应能建出实例目录", dir.isDirectory || dir.mkdirs())
-        File(root, "instances.json").delete()
-        File(root, "instances.json").writeText("""{"instances":[${entry(id)}],"selectedId":null}""")
-        DshInstances.resetForTest()
-        DshInstances.loadFrom(File(root, "instances.json"))
+        val inst = DshInstance(
+            id = id, name = "SP-04 重建的实例", dshVersion = "0.1.6", profile = "web",
+            port = 0, model = DshInstance.MODEL_FLASH, createdAt = 1, updatedAt = 2,
+            state = DshInstance.State.READY
+        )
+        memoryFlow().update { list -> if (list.any { it.id == id }) list else list + inst }
         return DshInstances.byId(id)
+    }
+
+    /** `DshInstances._instances`（内存列表的 StateFlow）。 */
+    @Suppress("UNCHECKED_CAST")
+    private fun memoryFlow(): MutableStateFlow<List<DshInstance>> {
+        val f = DshInstances::class.java.getDeclaredField("_instances")
+        f.isAccessible = true
+        return f.get(DshInstances) as MutableStateFlow<List<DshInstance>>
     }
 
     // --- T4：源码形状钉子 ----------------------------------------------------
@@ -406,6 +422,27 @@ class R41DeleteTransactionTest {
             Thread.sleep(5)
         }
         return !DshInstances.deleting.value.contains(id)
+    }
+
+    /**
+     * 轮询到「该 id 的删除事务闸门已释放」为止。
+     *
+     * ★ 为什么不能复用 [awaitDeletingEmpty]：`_deleting` 在 `finally` 里**先于**
+     *   `endDeleteTransaction` 移除（见 `DshInstances.delete` 的 finally 注释：
+     *   "闸门最后释放：必须在 `_deleting` 之后"）。所以"`_deleting` 空了"**不代表**
+     *   "闸门已释放" —— 两者之间有微秒级窗口。
+     *
+     *   本轮就踩了这个：t5 用 `awaitDeletingEmpty` 之后立刻断言 `deleteInFlight` 为空，
+     *   整批跑时偶发红（协程还没走到 `endDeleteTransaction`）。
+     *   这不是产品缺陷，是**测试判据不足**。
+     */
+    private fun awaitTransactionGateReleased(id: String, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (!deleteInFlightSet().contains(id)) return true
+            Thread.sleep(5)
+        }
+        return !deleteInFlightSet().contains(id)
     }
 
     /** 轮询到 [ref] 被赋值为止（回调到达）。返回 null = 超时。 */
@@ -522,7 +559,12 @@ class R41DeleteTransactionTest {
             assertTrue("前置：应能先移走清单文件", File(root, "instances.json").delete())
 
             assertTrue(DshInstances.delete(id) { })
-            awaitDeletingEmpty(id, 30_000)
+            // ★ 必须等**闸门**释放，不能只等 _deleting 清空 —— 后者在 finally 里先移除，
+            //   两者之间有窗口（见 awaitTransactionGateReleased 的 KDoc）。
+            assertTrue(
+                "前置：删除事务必须收尾（闸门释放）",
+                awaitTransactionGateReleased(id, 30_000)
+            )
             assertEquals(
                 "收尾之后 deleteInFlight 必须为空（否则该 id 永久不可再删）",
                 emptySet<String>(), deleteInFlightSet().toSet()
