@@ -1336,6 +1336,42 @@ object DshInstances {
     /**
      * 读本实例的 `dsh-install.pid`（BL-041 三闭环的同一文件），回答"安装 proot 是否还在跑"。
      * 文件缺失/读不出/pid 不合法 → false（没有等待对象）；路径系统未就绪（JVM 单测等）→ false。
+     *
+     * ## ★ SP-02（round39）：为什么这里**没有**把"读不出"改成 `true`（三态读侧）
+     *
+     * 这道判据被 `delete` 的等待循环用（见下面 [DELETE_WAIT_TIMEOUT_MS] / 删除事务），
+     * 语义方向是 **`true` = 继续等、`false` = 可以删**。于是"不确定"时**看起来**该偏向 `true`
+     * （不删），round34 的 SP-02 建议正是这么写的。**这个方向被否决了**，理由三条（逐条可核对）：
+     *
+     * 1. **等待有 8s deadline，超时后硬删。** 等待循环是
+     *    `while (activeInstanceId()==id || isInstalling(id) || installProotStillAlive(id))` +
+     *    `if (now >= waitDeadline) { stopTimedOut = true; break }`（预算 [DELETE_WAIT_TIMEOUT_MS] =
+     *    8 秒），随后**没有任何二次确认**就走到 `deleteRecursively()`。
+     *    所以把"读不出"改成 `true` 能买到的最多是**一个轮询 tick**（[DELETE_WAIT_POLL_MS] = 100ms，
+     *    且通常 8s 内也不会自愈），最坏是让**每一次删除**白等满 8 秒后才照样删 ——
+     *    它**买不到任何超过 8 秒的保护**。而安装本身是 10~30 分钟的活
+     *    （`DshInstaller.INSTALL_TIMEOUT_MS` 是 30 分钟看门狗），8s 只占其 1/225 量级。
+     * 2. **写侧已经消掉了 `Unreadable` 的物理来源。** 这个文件只由
+     *    `DshInstaller.writeInstallPidFile` 写出，而它现在是**原子替换**
+     *    （`ProcessUtil.atomicWriteText`：tmp + fsync + `rename`）。`rename(2)` 之下目标路径只可能是
+     *    "旧的完整内容"或"新的完整内容"，**不存在半截/0 字节的中间态**；写失败时它抛异常并且
+     *    **不落目标**（绝不回退成原地写），所以连"写坏了"的残留都不会有。
+     *    ⇒ 对本 App 自己写出的文件，`Unreadable` 分支**物理上不可达**（只剩历史脏文件/外部破坏）。
+     * 3. **8s 白等的代价却是真实的**：删除跑在 `DshAppScope` 的 IO 协程里，界面挂着"删除中"、
+     *    任务区有一条进行中的行，用户看到的就是"点了删除，卡 8 秒"。
+     *
+     * 因此本函数**保持两态**（读不出 → `false`），这不是漏改，是裁决结果。若将来要接
+     * round37 的三态工具（`ProcessUtil.readStateOf` + `PidFileRead`），必须**同时**解决第 1 条
+     * （deadline 之后照样硬删 ⇒ 保守等待没有意义），否则只是把同一个问题换成三态形状。
+     *
+     * ## 已知近似（不是本判据的职责，别在这里修）
+     * - 文件里记的是 **proot** 的 pid。proot 被 SIGKILL 后，rootfs 内的 node/npm（tracee）
+     *   可能还活着写盘 —— 而 `DshInstaller` 在 `proot.run()` 返回后的 `finally` 就删了本文件。
+     *   所以"文件没了 ⇒ npm 结束了"是**近似推理**，不是等价。
+     * - `isLiveInstallProot` 要求 `cmdline != null`，即"cmdline 读不到"也被当成"它已经走了"。
+     *   这在**运行期判停**的语境里是刻意的（[ProcessUtil.isAlive] 那一族的理由：进程退出后
+     *   `/proc/<pid>` 立即消失），但在这里代价方向相反。与上一条同族，同属"信号源本身不够"，
+     *   换三态读文件补不上。
      */
     private fun installProotStillAlive(instanceId: String): Boolean {
         if (!DshPaths.isLoaded) return false

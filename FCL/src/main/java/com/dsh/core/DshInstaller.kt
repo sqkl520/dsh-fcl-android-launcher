@@ -219,6 +219,24 @@ class DshInstaller(
      *
      * ★ 必须**同步**写（不经 [DshLogBus] 的异步落盘）：App 被 LMK 杀掉时来不及刷任何异步队列，
      *   而这个 pid 的唯一用途恰好就是"App 没了之后"被下一次安装读到。
+     *
+     * ★ SP-02（round39）：**原子替换**（[ProcessUtil.atomicWriteText]，tmp + fsync + rename），
+     *   不再用 `f.writeText`。理由与 [ProcessUtil.writePidFile] 逐条同构：
+     *
+     *   - `writeText` 是"开 → 截断到 0 字节 → 写 → 关"，中间存在"路径存在、内容为空/半截"的
+     *     瞬时态，且此时 `isFile` 仍为 `true`。这份文件的两个读者都不认中间态：
+     *     [DshInstances.installProotStillAlive]（删除前的等待判据）与 [readInstallPidFile]
+     *     （[cleanupStaleInstallProcess] 的孤儿认领）都把它折成 `null`/`false` = "没有等待对象"。
+     *   - rename 之后目标路径上只可能看到"旧的完整内容"或"新的完整内容"，
+     *     `Unreadable` 这个现场**由本代码写出时物理上不可达**。
+     *     ⇒ 读侧因此**不需要**改成"读不出当还在等"（那件事已由主 Agent 裁决否决，见
+     *     `DshInstances.installProotStillAlive` 的 KDoc），本函数是 SP-02 的完整闭环。
+     *   - 失败时 `atomicWriteText` **抛异常且不落目标**（绝不回退成原地写），所以写失败
+     *     也不会把目标文件留成 0 字节 —— 失败走下面的 `failure` 分支留痕，不静默。
+     *
+     * 写入频度极低（每次安装**只写一次**：`onPidResolved` 里被 `installPid.compareAndSet(0L, pid)`
+     * 挡住重放，全仓唯一调用点），所以 tmp 文件与 fsync 的代价可以忽略；
+     * 这 31 字节的完整性就是"App 被杀后能不能认领孤儿 npm"的唯一凭证。
      */
     private fun writeInstallPidFile(instance: DshInstance, pid: Long) {
         // 写文件与日志分开：日志本身不该再被 runCatching 卷进来 —— 否则"日志 bus 出错"会被
@@ -226,7 +244,10 @@ class DshInstaller(
         val failure = runCatching {
             val f = dshInstallPidFile(instance.id)
             f.parentFile?.mkdirs()
-            f.writeText(JsonUtils.GSON.toJson(ProcessUtil.PidMeta(pid, 0)))
+            // ★ SP-02：原子替换。换回原来的**非原子**写法就复活了"读者看到 0 字节瞬时态"
+            //   （R39InstallPidAtomicTest 的并发用例会精确变红）。失败时它会抛，交给下面的
+            //   runCatching 留痕 —— 与 [ProcessUtil.writePidFile] 的 BL-046 口径一致。
+            ProcessUtil.atomicWriteText(f, JsonUtils.GSON.toJson(ProcessUtil.PidMeta(pid, 0)))
         }.exceptionOrNull()
         if (failure == null) {
             DshLogBus.appendFor(instance.id, "[install] installer pid=$pid written to $INSTALL_PID_FILE_NAME")
