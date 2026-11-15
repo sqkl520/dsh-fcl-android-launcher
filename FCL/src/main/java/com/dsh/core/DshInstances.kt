@@ -673,6 +673,37 @@ object DshInstances {
     private val pendingDeletes = LinkedHashMap<String, DshInstance>()
 
     /**
+     * **删除事务在途集合**（SP-04）：某个 id 的 [delete] 事务从受理到**彻底收尾**之间都在这里。
+     *
+     * ★ 为什么不能拿 [pendingDeletes] 当闸门：它的语义是「**磁盘上还没落这一笔**」，在
+     *   `commitPendingDelete`（清单落盘成功那一刻）就把 id 摘掉了 —— 而真正耗时的收尾
+     *   （[DshPaths.instanceDir] 的 `deleteRecursively`、日志文件删除、`_deleting` 清理、
+     *   终态上报）全在提交**之后**。旧闸门于是只覆盖事务的前半段，第二次 [delete] 能在收尾期间
+     *   长驱直入：两条事务抢同一棵目录树、各上报一条 DONE、并且共用同一个 `_deleting` 元素
+     *   （先收尾的那个会在终态上报前把它摘掉，替还没跑完的另一条宣布"删除结束"）。
+     *
+     * ★ 为什么也不能拿 `_deleting` 当闸门（两个理由）：
+     *   ① `_deleting` 的移除（成功出口）在终态上报**之前**，这是被 KDoc 写死的既有顺序决定
+     *      （理由见 `_deleting.update { it - id }` 上方那段注释）；闸门要求"所有收尾做完才放开"，
+     *      两者对同一条流的要求正好相反。
+     *   ② `_deleting` 是 UI 投影（卡片"删除中"、任务区那一行），语义不该被并发正确性绑住。
+     *   把「事务在途」独立成一个集合，两边各归各位。
+     *
+     * ★ 与 [pendingDeletes] **共用同一把锁** [pendingDeleteLock]：「查闸门 + 占闸门 + 摘内存 +
+     *   登记待删」必须在**同一次**临界区里完成。旧写法把检查放在锁内（`synchronized` 里查
+     *   [pendingDeletes]）、把置位放在锁外，对主线程串行调用无害，但对任何非主线程调用者就是
+     *   标准的 check-then-act 竞态。
+     *
+     * ★ 覆盖 ghost id：[beginDeleteTransaction] **无条件**占闸，所以"删一个不在清单里的 id"
+     *   （`byId(id) == null`，此时它不进 [pendingDeletes]）也会被挡住 —— 旧实现里这种调用
+     *   可无限次进入，每次都走完整个流程再留一条幻影 DONE 行。
+     *
+     * 释放统一在 [delete] 协程体的 `finally`（[endDeleteTransaction]）：正常完成、写盘失败回滚、
+     * 异常、取消都走同一条，闸门不会永久卡住。
+     */
+    private val deleteInFlight = HashSet<String>()
+
+    /**
      * 清单**读取**失败（拒写中）。UI 横幅读它。
      *
      * ★ 为什么读失败要拒写（Round 25 §2.3 / E2-C-04）：读失败时内存里的事实是"空的"
@@ -746,6 +777,12 @@ object DshInstances {
         // ★ r31-s02-conc-03：待删记录同理 —— 它的作用是"把还没提交的删除补回写快照"，
         //   漏清会让**下一条**用例的写盘凭空多出一个实例（同样是"单跑绿、整批红"的形状）。
         synchronized(pendingDeleteLock) { pendingDeletes.clear() }
+        // ★ SP-04：在途集合同理 —— 它是 delete 的闸门，残留一个 id 会让**下一条**用例
+        //   对同一个 id 的 delete 被直接拒绝（症状同样是"单跑绿、整批红"）。
+        synchronized(pendingDeleteLock) { deleteInFlight.clear() }
+        // ★ SP-04：`_deleting` 原先漏清（既有遗漏）。它是 UI 投影，残留会让下一条用例的
+        //   "deleting 最终为空"断言凭空失败，也会让 DshTasks 的投影多一行"删除中"。
+        _deleting.value = emptySet()
     }
 
     /** 读失败期间每改一次内存调一次（调用方先确认 [manifestLoadFailed] 为真） */
@@ -1048,8 +1085,14 @@ object DshInstances {
      *
      * @param onFinished 目录删完后回调（主线程/IO 线程不定，调用方自行切线程）。
      *                   写盘失败/拒绝时以 `false` 回调（且什么都没删）。
-     * @return false = 拒绝（清单读取失败中 / 同一 id 的删除已在途），**什么都没做**且已用 `false` 回调。
-     *         true = 已受理（真正的成败走 [onFinished]）。
+     * @return false = 拒绝（清单读取失败中 / 同一 id 的删除**事务仍在途**），**什么都没做**且已用
+     *         `false` 回调。true = 已受理（真正的成败走 [onFinished]）。
+     *
+     * ★ SP-04：「在途」的判据是 [deleteInFlight]，不是 [pendingDeletes]。后者的生命周期只到
+     *   "清单落盘成功"（[commitPendingDelete]），而收尾（删目录 / 删日志 / `_deleting` 清理 /
+     *   终态上报）全在提交之后；只有前者覆盖**整个事务**，闸门才真正满足"一个 id 一个事务"。
+     *   闸门在协程体的 `finally` 里释放 —— 正常完成、写盘失败回滚、异常、取消都走同一条。
+     *   另：`byId(id) == null`（删不在清单里的 id）同样占闸，重复调用会被拒。
      */
     fun delete(id: String, onFinished: ((Boolean) -> Unit)? = null): Boolean {
         if (_manifestLoadFailed.value) {
@@ -1062,21 +1105,22 @@ object DshInstances {
             return false
         }
         val inst = byId(id)
-        // 同一 id 的删除已在途：不重开第二个事务。两个事务会让**后者**的写盘替前者提交删除，
-        // 前者的写再失败就回到"内存有、盘上没有"的原缺陷（比"没删掉"更糟）。
-        // ★ fix-r31-104：旧写法 `return true` 却**永不回调**，与 KDoc"true = 已受理、成败走
-        //   [onFinished]"矛盾；改为明确拒绝（回调 true 也不行 —— 那等于替没开始的删除宣布结局）。
-        if (synchronized(pendingDeleteLock) { pendingDeletes.containsKey(id) }) {
+        // 记住原位置：写盘失败回滚时按原位放回去，别把用户熟悉的排序打乱。
+        // ★ 必须在 [beginDeleteTransaction] 摘内存**之前**取值（摘完就查不到了）。
+        val removedIndex = _instances.value.indexOfFirst { it.id == id }
+        val wasSelected = _selectedId.value == id
+        // ★ SP-04：闸门（旧 :1069，只看 [pendingDeletes]）与"摘内存 + 登记待删"（旧 :1079）合并成
+        //   一次原子调用 —— 检查与置位在同一临界区，[deleteInFlight] 覆盖到收尾之后。
+        //   同一 id 的删除已在途：不重开第二个事务。两个事务会让**后者**的写盘替前者提交删除，
+        //   前者的写再失败就回到"内存有、盘上没有"的原缺陷（比"没删掉"更糟）；更直接的坏处是
+        //   两条事务抢同一棵目录树、各上报一条 DONE 行。
+        // ★ fix-r31-104：拒绝时**必须**回调 —— 旧写法 `return true` 却永不回调，与 KDoc
+        //   "true = 已受理、成败走 [onFinished]"矛盾；改为明确拒绝（回调 true 也不行 ——
+        //   那等于替没开始的删除宣布结局）。
+        if (!beginDeleteTransaction(id, inst)) {
             onFinished?.invoke(false)
             return false
         }
-        // 记住原位置：写盘失败回滚时按原位放回去，别把用户熟悉的排序打乱。
-        val removedIndex = _instances.value.indexOfFirst { it.id == id }
-        val wasSelected = _selectedId.value == id
-        // ★ r31-s02-conc-03（G2-b）：摘内存与"待删登记"必须同一临界区（见 [pendingDeletes]）。
-        //   旧写法只摘内存 —— 下面的同步写盘要等进程离场之后才发生，这段窗口里任何别的改动
-        //   触发的 [saveAsync] 都会把这次摘除提前提交到盘上。
-        inst?.let { holdPendingDelete(id, it) } ?: _instances.update { list -> list.filterNot { it.id == id } }
         if (wasSelected) _selectedId.value = _instances.value.firstOrNull()?.id
         _deleting.update { it + id }
         // 只有"确实改了内存"才计改动（读失败期间的删除会被上面的闸门直接拒掉，走不到这里）。
@@ -1084,280 +1128,305 @@ object DshInstances {
         // ★ 这里**不再** saveAsync()（老代码在摘内存后立刻异步写一次）：那次写的失败没人接，
         //   而真正的顺序要求是"清单落盘成功之后才允许删目录"——见协程里的同步写。
         DshAppScope.scope.launch {
-            // 先停掉可能还在跑的进程（不然删目录会留下活着的 node）。
-            // ★ 必须等进程真正退出再删：stop() 是异步的（TERM→5s→KILL），
-            // 若不等它，node 可能还在往 node_modules 写文件，deleteRecursively 就会留下
-            // 一堆 300MB 级残留且无提示（界面早已把实例从列表里移除）。
-            // 等待上限 [DELETE_WAIT_TIMEOUT_MS]（与 DshRuntime.stopAndWait 的预算一致），
-            // 超时也硬删并靠日志提示。
-            //
-            // ★ 归属校验（BL-036 重写；旧判据 `runningInstanceId() == id` 漏掉了 Stopping）：
-            // DshRuntime 是单实例策略，stop() 停的是**当前正在运行的那个实例**，与传入的 id 无关。
-            // 无条件调用会"删除没在跑的 B 却杀掉正在跑的 A"（用户只点了删除 B，A 的会话却断了）。
-            // 所以先只对**本实例**发 [DshRuntime.stopIf]（幂等：Starting/Running 拉进 Stopping；
-            // 已在 Stopping 或没在跑则 no-op、返回 false —— 返回 false 不代表"停完了"，所以
-            // 不看返回值，统一由下面的轮询做"是否真的离场"的唯一判据），
-            // 再轮询 [DshRuntime.activeInstanceId]（含 Stopping）直到 != id。
-            // 旧实现跳过"已经在 Stopping"的实例不等待，于是停止窗口内删实例会与 node 收尾
-            // 抢写盘 —— 这正是要修的 BL-036。
-            // 若 activeInstanceId() 返回的是**别的实例**（单实例策略下罕见）：不等它、也不停它，
-            // 直接删本实例（保留原有归属校验思想）。
-            // ★ BL-151（R18 = K13②/P5-6/P1-4）：删除实例必须先取消**进行中的安装**。
-            // 旧实现只停运行时（下面的 stopIf + 轮询），安装（npm 在 DshAppScope 里跑）完全没被
-            // 通知：npm 继续写 node_modules，随后 deleteRecursively() 与它抢盘 → 目录残留；
-            // 更糟的是残留目录会在"清单为空"的启动路径上被 adoptOrphanInstanceDirs 收编——
-            // 已删实例"复活"。cancel 与 stopIf 相互独立（cancel 杀的是 tag=id 的安装 proot，
-            // 见 DshInstaller.killActive→ProotProcessExecutor.destroyActive；运行期 proot 不在
-            // ProotProcessExecutor 的 actives 表里，不会被误杀），所以先 cancel 再 stopIf。
-            //
-            // ★ 实读结论（写这段代码前核对过 DshInstaller.cancel()，:528-577）：它**同步**发完
-            // 取消信号（标 cancelled + 取消 job + 放掉单飞闸门 + SIGQUIT 安装 proot 并挂一个
-            // 非阻塞的强杀升级线程）就返回 —— **不等待 npm 退出**。因此下面的等待循环必须在
-            // "运行时离场"之外再加"安装收尾"判据（见循环处注释）。
-            // cancel 可能抛（守卫竞态等）——runCatching 包住；失败也不中止删除。
-            //
-            // ★ 任务区关联影响（已核实：可接受，且不改 DshTask.kt）：cancel 收尾会向
-            // DshTasks.finished 上报一条 CANCELLED 行（DshInstaller.cancel :566-576），而此刻实例
-            // 已被摘出清单（byId == null → 标题回落到 version/id）——即"删除一个正在安装的实例"
-            // 会在任务区留下一条指向**已删实例**的"已取消"历史行。这在任务语义上是对的：
-            // finished 是**事件**历史而不是状态表，"这次删除顺带取消了安装"本身就是该留下的事件；
-            // 且它不会失控：上限 MAX_FINISHED=20 自动淘汰最老的，终态行在任务区一律无动作按钮、
-            // 整行无点击监听（TaskAdapter 对终态强制 Action.NONE 并清监听），点不出指向已删实例的界面。
-            val appCtx = DshAppContextHolder.context
-            val installer = appCtx?.let { DshServices.installer(it) }
-            // ★ BL-244（步骤 2）：取消之前先把**这一次**安装任务的 Job 抓在手里。
-            //   为什么必须在 cancel 之前：cancel 之后紧接着可能就有新一次安装接管登记表
-            //   （`running[id] = jobB`），那时再读就抓到别人的 job 了。
-            val installJob = installer?.installJobOf(id)
-            val cancelNote = if (installer == null) {
-                "skipped (no app context)"
-            } else {
-                // "请求时有没有可取消的任务"只进日志：cancel 自身有守卫（无任务时 no-op 并记
-                // "[install] cancel ignored …"），这里先记下请求时的状态，便于排障时区分
-                // "本来就没有安装"与"cancel 没生效"。
-                val hadActiveInstall = installer.isInstalling(id) || installer.statusOf(id) != null
-                runCatching { installer.cancel(id) }.fold(
-                    onSuccess = {
-                        if (hadActiveInstall) "requested (in-flight install signalled)"
-                        else "no active install"
-                    },
-                    onFailure = { e -> "failed: ${e.message}" }
-                )
-            }
-            // ★ 保持全局（与 stopTimedOut 同一理由：该实例正在被删除，写进它的实例流没人能再看）。
-            DshLogBus.append("[instances] install cancel for ${inst?.name ?: id}: $cancelNote")
-            val reason = DshAppContextHolder.context?.getString(R.string.dsh_reason_deleted)
-                ?: "Instance deleted"
-            runCatching { DshRuntime.stopIf(id, reason) }.onFailure { e ->
-                // stopIf 设计上不该抛；万一抛了也不能让删除协程死掉（那样 _deleting 永远清不掉），
-                // 继续走下面的等待循环 —— 进程若真在跑，还会被等到超时才硬删。
-                DshLogBus.append("[instances] stopIf failed for $id: ${e.message}")
-            }
-            var stopTimedOut = false
-            // ★ BL-151：等待条件 = "运行时离场" **或** "安装收尾完成"（两者共用同一个 deadline，
-            // 总预算与旧实现完全相同，不叠加）。两条安装侧判据的分工：
-            // · [DshInstaller.isInstalling]（= 单飞闸门）在 cancel() 返回那一刻就被放掉 ——
-            //   拿它做唯一判据等于没等（cancel 不等 npm 退出，见上）。保留它只覆盖"取消没生效 /
-            //   删除期间又有任务占闸"这类窗口，是廉价的第一道检查；
-            // · "npm 真退了吗"由 [installProotStillAlive] 回答：读安装的 dsh-install.pid，
-            //   pid 存活且 cmdline 里同时有 proot 与本实例 id（与 BL-041 的孤儿清理
-            //   cleanupStaleInstallProcess 同一判据）。该文件在"pid 解析成功"时写入、
-            //   在 runInstall 的 finally（一切终态）compare-and-delete —— 文件还在且进程
-            //   活着 ⇔ npm 还在写盘；SIGQUIT→proot 退出→finally 删文件后循环自然退出。
-            //   连"App 上次被杀、留了活着的孤儿 npm"这种跨进程残留也一并挡住（它同样在写盘，
-            //   且不在本进程的 actives 里、cancel 杀不到它）。
-            // 超时处理沿用既有口径（硬删 + 全局日志），不是新语义。
-            val waitDeadline = System.currentTimeMillis() + DELETE_WAIT_TIMEOUT_MS
-            // ★ BL-244（步骤 2）：等**刚刚被取消的那一次安装任务**真正收尾，再进下面的轮询。
-            //
-            // ## 为什么这是必须的（三条件循环单独不够）
-            // [DshInstaller.cancel] 只能杀"已经存在的进程"，而任务体在 fork 之前有一整段没有
-            // 挂起点的耗时活。cancel 之后 body 照旧往下走、仍会 fork npm —— 而那时三条件里的
-            // `isInstalling` 已被 cancel 自己放掉（闸门），`installProotStillAlive` 在 pid 文件
-            // 还没写（fork 未发生）或 pid 解析失败的机型上**恒为 false**。于是循环第一轮就退出，
-            // `deleteRecursively()` 与刚 fork 出来的 npm 抢同一个 node_modules。
-            // 配合 `DshInstaller.runInstall` 的 fork 前取消检查点，这里的 join 把"取消 → 目录被删"
-            // 这段顺序钉住：任务体（含它的 finally 与 pid 文件清理）先收尾，目录才可能被删。
-            //
-            // ## ★ 硬约束 1：等待必须在安装器那把所有权锁**之外**
-            // 本函数全程不取安装器那把对象监视器（它不碰安装器的任何所有权状态），join 也不取
-            // 任何锁。反过来做（持那把锁等 job）会成环：任务体的 finally 要拿同一把锁才能
-            // `running.remove` + 放闸；持锁等待 ⇒ job 永远收不了尾 ⇒ 白等满 deadline。
-            // 更糟的是 `install()` 在**主线程**被调用（实例列表页的"重试"/设置页的"重新安装"），
-            // 对象监视器会把主线程阻塞住 —— 那就是 ANR。
-            // 同理，**join 也不许阻塞线程**：`Job.join()` 是挂起而非阻塞，且本函数跑在
-            // [DshAppScope] 的 IO 弹性线程池上，等待期间不占线程。
-            //
-            // ## ★ 硬约束 2：与下面的轮询**共用同一条** [waitDeadline]
-            // 不新增第二个预算（与 BL-151 "总预算不叠加"同一口径）：用户看到的"删除中"最长仍是
-            // [DELETE_WAIT_TIMEOUT_MS]。join 超时即走既有硬删路径，行为与修复前等价 ——
-            // 也就是说这一改**只会更早放行**（任务提前收尾就立刻进循环），不会更晚。
-            //
-            // 用捕获的 [installJob] 而不是"等 running 表清空"：表会被"取消后秒重装"覆盖成新任务，
-            // 而且未调度即取消的 job 会永久残留在表里（见 [DshInstaller.installJobOf] 的说明）。
-            // `join()` 对"已完成"与"从未被调度"的 job 都立即返回。
-            if (DshInstaller.shouldWaitForInstallTask(installJob)) {
-                val remaining = waitDeadline - System.currentTimeMillis()
-                if (remaining > 0) {
-                    val joined = withTimeoutOrNull(remaining) { installJob?.join() }
-                    // 保持全局：这是"删除事务等了安装任务 / 是不是等到了"的唯一证据。
-                    DshLogBus.append(
-                        "[instances] install task for ${inst?.name ?: id} " +
-                            if (joined != null) "finished before delete" else "still running at deadline"
+            // ★ SP-04：整个事务体包在 try/finally 里 —— `finally` 是**闸门唯一的释放点**，
+            //   也是 `_deleting` 的兜底移除点。为什么必须这样：
+            //   ① 闸门 [deleteInFlight] 由 [beginDeleteTransaction] 在同步段占下，必须在**收尾之后**
+            //      才放（否则第二次 delete 又能挤进"提交之后、收尾未完"那段窗口）；
+            //   ② 事务体里有多处未被 runCatching 包住的调用（[DshLogBus.append]、
+            //      `DshAppContextHolder.context?.getString`、[DshLogBus.removeStream] …），
+            //      任何一处抛出都会让协程带着异常结束 —— 没有 finally 的话闸门**永久不释放**
+            //      （该 id 从此再也删不掉，比原来的"卡片卡在删除中"更硬的死锁），
+            //      `_deleting` 也会**永久残留**（卡片永远"删除中"、任务区永远挂一行）——
+            //      后者是 SP-04 之前就存在的窄风险，这里一并收口。
+            //   ③ 正常完成 / 写盘失败回滚 / `return@launch` / 异常 / 取消，五种出路走同一条释放路径，
+            //      不需要在每个出口各写一遍"别忘了放闸"。
+            try {
+                // 先停掉可能还在跑的进程（不然删目录会留下活着的 node）。
+                // ★ 必须等进程真正退出再删：stop() 是异步的（TERM→5s→KILL），
+                // 若不等它，node 可能还在往 node_modules 写文件，deleteRecursively 就会留下
+                // 一堆 300MB 级残留且无提示（界面早已把实例从列表里移除）。
+                // 等待上限 [DELETE_WAIT_TIMEOUT_MS]（与 DshRuntime.stopAndWait 的预算一致），
+                // 超时也硬删并靠日志提示。
+                //
+                // ★ 归属校验（BL-036 重写；旧判据 `runningInstanceId() == id` 漏掉了 Stopping）：
+                // DshRuntime 是单实例策略，stop() 停的是**当前正在运行的那个实例**，与传入的 id 无关。
+                // 无条件调用会"删除没在跑的 B 却杀掉正在跑的 A"（用户只点了删除 B，A 的会话却断了）。
+                // 所以先只对**本实例**发 [DshRuntime.stopIf]（幂等：Starting/Running 拉进 Stopping；
+                // 已在 Stopping 或没在跑则 no-op、返回 false —— 返回 false 不代表"停完了"，所以
+                // 不看返回值，统一由下面的轮询做"是否真的离场"的唯一判据），
+                // 再轮询 [DshRuntime.activeInstanceId]（含 Stopping）直到 != id。
+                // 旧实现跳过"已经在 Stopping"的实例不等待，于是停止窗口内删实例会与 node 收尾
+                // 抢写盘 —— 这正是要修的 BL-036。
+                // 若 activeInstanceId() 返回的是**别的实例**（单实例策略下罕见）：不等它、也不停它，
+                // 直接删本实例（保留原有归属校验思想）。
+                // ★ BL-151（R18 = K13②/P5-6/P1-4）：删除实例必须先取消**进行中的安装**。
+                // 旧实现只停运行时（下面的 stopIf + 轮询），安装（npm 在 DshAppScope 里跑）完全没被
+                // 通知：npm 继续写 node_modules，随后 deleteRecursively() 与它抢盘 → 目录残留；
+                // 更糟的是残留目录会在"清单为空"的启动路径上被 adoptOrphanInstanceDirs 收编——
+                // 已删实例"复活"。cancel 与 stopIf 相互独立（cancel 杀的是 tag=id 的安装 proot，
+                // 见 DshInstaller.killActive→ProotProcessExecutor.destroyActive；运行期 proot 不在
+                // ProotProcessExecutor 的 actives 表里，不会被误杀），所以先 cancel 再 stopIf。
+                //
+                // ★ 实读结论（写这段代码前核对过 DshInstaller.cancel()，:528-577）：它**同步**发完
+                // 取消信号（标 cancelled + 取消 job + 放掉单飞闸门 + SIGQUIT 安装 proot 并挂一个
+                // 非阻塞的强杀升级线程）就返回 —— **不等待 npm 退出**。因此下面的等待循环必须在
+                // "运行时离场"之外再加"安装收尾"判据（见循环处注释）。
+                // cancel 可能抛（守卫竞态等）——runCatching 包住；失败也不中止删除。
+                //
+                // ★ 任务区关联影响（已核实：可接受，且不改 DshTask.kt）：cancel 收尾会向
+                // DshTasks.finished 上报一条 CANCELLED 行（DshInstaller.cancel :566-576），而此刻实例
+                // 已被摘出清单（byId == null → 标题回落到 version/id）——即"删除一个正在安装的实例"
+                // 会在任务区留下一条指向**已删实例**的"已取消"历史行。这在任务语义上是对的：
+                // finished 是**事件**历史而不是状态表，"这次删除顺带取消了安装"本身就是该留下的事件；
+                // 且它不会失控：上限 MAX_FINISHED=20 自动淘汰最老的，终态行在任务区一律无动作按钮、
+                // 整行无点击监听（TaskAdapter 对终态强制 Action.NONE 并清监听），点不出指向已删实例的界面。
+                val appCtx = DshAppContextHolder.context
+                val installer = appCtx?.let { DshServices.installer(it) }
+                // ★ BL-244（步骤 2）：取消之前先把**这一次**安装任务的 Job 抓在手里。
+                //   为什么必须在 cancel 之前：cancel 之后紧接着可能就有新一次安装接管登记表
+                //   （`running[id] = jobB`），那时再读就抓到别人的 job 了。
+                val installJob = installer?.installJobOf(id)
+                val cancelNote = if (installer == null) {
+                    "skipped (no app context)"
+                } else {
+                    // "请求时有没有可取消的任务"只进日志：cancel 自身有守卫（无任务时 no-op 并记
+                    // "[install] cancel ignored …"），这里先记下请求时的状态，便于排障时区分
+                    // "本来就没有安装"与"cancel 没生效"。
+                    val hadActiveInstall = installer.isInstalling(id) || installer.statusOf(id) != null
+                    runCatching { installer.cancel(id) }.fold(
+                        onSuccess = {
+                            if (hadActiveInstall) "requested (in-flight install signalled)"
+                            else "no active install"
+                        },
+                        onFailure = { e -> "failed: ${e.message}" }
                     )
                 }
-            }
-            while (DshRuntime.activeInstanceId() == id ||
-                installer?.isInstalling(id) == true || installProotStillAlive(id)
-            ) {
-                if (System.currentTimeMillis() >= waitDeadline) {
-                    stopTimedOut = true
-                    break
+                // ★ 保持全局（与 stopTimedOut 同一理由：该实例正在被删除，写进它的实例流没人能再看）。
+                DshLogBus.append("[instances] install cancel for ${inst?.name ?: id}: $cancelNote")
+                val reason = DshAppContextHolder.context?.getString(R.string.dsh_reason_deleted)
+                    ?: "Instance deleted"
+                runCatching { DshRuntime.stopIf(id, reason) }.onFailure { e ->
+                    // stopIf 设计上不该抛；万一抛了也不能让删除协程死掉（那样 _deleting 永远清不掉），
+                    // 继续走下面的等待循环 —— 进程若真在跑，还会被等到超时才硬删。
+                    DshLogBus.append("[instances] stopIf failed for $id: ${e.message}")
                 }
-                delay(DELETE_WAIT_POLL_MS) // 协程里轮询：让出线程，别阻塞
-            }
-            if (stopTimedOut) {
-                // ★ 保持全局（不进该实例自己的日志）：这个实例正在被**删除**，写进它的实例流
-                // 等于刚写完就要被丢弃/重建，谁也看不到。而"删除时进程没停干净"恰恰是排障
-                // 要的（残留 300MB），所以必须留在全局流里。
-                DshLogBus.append(
-                    "[instances] stop timed out for ${inst?.name ?: id}, deleting directory anyway"
-                )
-            }
-            // ★ fix12（E2-N-8）：**先让清单落盘，成功之后才允许删目录**。
-            //   顺序不能反：目录一旦删掉就无法回滚（300MB 的用户 home/workspace 也在里面），
-            //   而清单写失败是**可回滚**的（把内存里的实例放回去即可）。
-            //   写盘必须同步等结果（writeMutex 内 writeNow），不能用 saveAsync 那种 fire-and-forget
-            //   —— 旧实现正是"异步写 + 无条件删"，写失败时实例在下次冷启原样复活、点进去是空目录。
-            val manifestWritten = writeMutex.withLock {
-                runCatching { writeNow(excludeId = id) }.fold(
-                    onSuccess = {
-                        _manifestWriteFailed.value = false
-                        // ★ r31-s02-conc-03：提交必须**在本临界区之内**。放到 withLock 之后会留一个
-                        //   窗口：排队等锁的 saveAsync 可能在"本次写已成功"与"撤销待删登记"之间拿到锁，
-                        //   把待删记录重新补回快照并落盘 —— 那就变成"界面说删了、盘上还在"，冷启复活。
-                        commitPendingDelete(id)
-                        true
-                    },
-                    onFailure = { e ->
-                        _manifestWriteFailed.value = true
-                        // 全局日志：与 saveAsync 的失败同一口径（影响所有实例的索引，不是某个实例的运行问题）。
-                        DshLogBus.append("[instances] failed to write instances.json before delete: ${e.message}")
-                        false
-                    }
-                )
-            }
-            if (!manifestWritten) {
-                // 回滚内存：实例回到列表（按原位），否则界面会显示"已删除"而磁盘上它还在。
+                var stopTimedOut = false
+                // ★ BL-151：等待条件 = "运行时离场" **或** "安装收尾完成"（两者共用同一个 deadline，
+                // 总预算与旧实现完全相同，不叠加）。两条安装侧判据的分工：
+                // · [DshInstaller.isInstalling]（= 单飞闸门）在 cancel() 返回那一刻就被放掉 ——
+                //   拿它做唯一判据等于没等（cancel 不等 npm 退出，见上）。保留它只覆盖"取消没生效 /
+                //   删除期间又有任务占闸"这类窗口，是廉价的第一道检查；
+                // · "npm 真退了吗"由 [installProotStillAlive] 回答：读安装的 dsh-install.pid，
+                //   pid 存活且 cmdline 里同时有 proot 与本实例 id（与 BL-041 的孤儿清理
+                //   cleanupStaleInstallProcess 同一判据）。该文件在"pid 解析成功"时写入、
+                //   在 runInstall 的 finally（一切终态）compare-and-delete —— 文件还在且进程
+                //   活着 ⇔ npm 还在写盘；SIGQUIT→proot 退出→finally 删文件后循环自然退出。
+                //   连"App 上次被杀、留了活着的孤儿 npm"这种跨进程残留也一并挡住（它同样在写盘，
+                //   且不在本进程的 actives 里、cancel 杀不到它）。
+                // 超时处理沿用既有口径（硬删 + 全局日志），不是新语义。
+                val waitDeadline = System.currentTimeMillis() + DELETE_WAIT_TIMEOUT_MS
+                // ★ BL-244（步骤 2）：等**刚刚被取消的那一次安装任务**真正收尾，再进下面的轮询。
                 //
-                // ★ R3b-B3-5（fix12 收尾）：回滚必须**幂等**。等待写盘的这段时间里
-                //   `retryManifestLoad()` 可能已经把磁盘真相整份替换进来（`_instances.value =
-                //   parsed.instances`），而磁盘上这条记录**还在**（本次写盘正是失败的）——
-                //   无脑插回就会得到"同一 id 两份"，`_instances` 是 List 不是 Set，
-                //   `byId`/`firstOrNull` 只取第一份，`updateConfig` 的 map 却会同时改两份。
-                //   所以插回前先查：已经在列表里（说明重读已经把它放回来了）就不重复插。
-                // ★ r31-s02-conc-03：撤销待删登记必须与回滚**同一临界区**，且要先回到内存再撤销
-                //   （反了会露出一个"内存和待删表里都没有它"的窗口，那一刻的并发写照样会丢记录）。
-                rollbackPendingDelete(id) {
-                    _instances.update { list ->
-                        if (list.any { it.id == id }) list
-                        else {
-                            val back = mutableListOf<DshInstance>()
-                            var inserted = false
-                            val at = removedIndex.coerceIn(0, list.size)
-                            list.forEachIndexed { i, it ->
-                                if (!inserted && i == at) {
-                                    inst?.let { back += it }
-                                    inserted = true
+                // ## 为什么这是必须的（三条件循环单独不够）
+                // [DshInstaller.cancel] 只能杀"已经存在的进程"，而任务体在 fork 之前有一整段没有
+                // 挂起点的耗时活。cancel 之后 body 照旧往下走、仍会 fork npm —— 而那时三条件里的
+                // `isInstalling` 已被 cancel 自己放掉（闸门），`installProotStillAlive` 在 pid 文件
+                // 还没写（fork 未发生）或 pid 解析失败的机型上**恒为 false**。于是循环第一轮就退出，
+                // `deleteRecursively()` 与刚 fork 出来的 npm 抢同一个 node_modules。
+                // 配合 `DshInstaller.runInstall` 的 fork 前取消检查点，这里的 join 把"取消 → 目录被删"
+                // 这段顺序钉住：任务体（含它的 finally 与 pid 文件清理）先收尾，目录才可能被删。
+                //
+                // ## ★ 硬约束 1：等待必须在安装器那把所有权锁**之外**
+                // 本函数全程不取安装器那把对象监视器（它不碰安装器的任何所有权状态），join 也不取
+                // 任何锁。反过来做（持那把锁等 job）会成环：任务体的 finally 要拿同一把锁才能
+                // `running.remove` + 放闸；持锁等待 ⇒ job 永远收不了尾 ⇒ 白等满 deadline。
+                // 更糟的是 `install()` 在**主线程**被调用（实例列表页的"重试"/设置页的"重新安装"），
+                // 对象监视器会把主线程阻塞住 —— 那就是 ANR。
+                // 同理，**join 也不许阻塞线程**：`Job.join()` 是挂起而非阻塞，且本函数跑在
+                // [DshAppScope] 的 IO 弹性线程池上，等待期间不占线程。
+                //
+                // ## ★ 硬约束 2：与下面的轮询**共用同一条** [waitDeadline]
+                // 不新增第二个预算（与 BL-151 "总预算不叠加"同一口径）：用户看到的"删除中"最长仍是
+                // [DELETE_WAIT_TIMEOUT_MS]。join 超时即走既有硬删路径，行为与修复前等价 ——
+                // 也就是说这一改**只会更早放行**（任务提前收尾就立刻进循环），不会更晚。
+                //
+                // 用捕获的 [installJob] 而不是"等 running 表清空"：表会被"取消后秒重装"覆盖成新任务，
+                // 而且未调度即取消的 job 会永久残留在表里（见 [DshInstaller.installJobOf] 的说明）。
+                // `join()` 对"已完成"与"从未被调度"的 job 都立即返回。
+                if (DshInstaller.shouldWaitForInstallTask(installJob)) {
+                    val remaining = waitDeadline - System.currentTimeMillis()
+                    if (remaining > 0) {
+                        val joined = withTimeoutOrNull(remaining) { installJob?.join() }
+                        // 保持全局：这是"删除事务等了安装任务 / 是不是等到了"的唯一证据。
+                        DshLogBus.append(
+                            "[instances] install task for ${inst?.name ?: id} " +
+                                if (joined != null) "finished before delete" else "still running at deadline"
+                        )
+                    }
+                }
+                while (DshRuntime.activeInstanceId() == id ||
+                    installer?.isInstalling(id) == true || installProotStillAlive(id)
+                ) {
+                    if (System.currentTimeMillis() >= waitDeadline) {
+                        stopTimedOut = true
+                        break
+                    }
+                    delay(DELETE_WAIT_POLL_MS) // 协程里轮询：让出线程，别阻塞
+                }
+                if (stopTimedOut) {
+                    // ★ 保持全局（不进该实例自己的日志）：这个实例正在被**删除**，写进它的实例流
+                    // 等于刚写完就要被丢弃/重建，谁也看不到。而"删除时进程没停干净"恰恰是排障
+                    // 要的（残留 300MB），所以必须留在全局流里。
+                    DshLogBus.append(
+                        "[instances] stop timed out for ${inst?.name ?: id}, deleting directory anyway"
+                    )
+                }
+                // ★ fix12（E2-N-8）：**先让清单落盘，成功之后才允许删目录**。
+                //   顺序不能反：目录一旦删掉就无法回滚（300MB 的用户 home/workspace 也在里面），
+                //   而清单写失败是**可回滚**的（把内存里的实例放回去即可）。
+                //   写盘必须同步等结果（writeMutex 内 writeNow），不能用 saveAsync 那种 fire-and-forget
+                //   —— 旧实现正是"异步写 + 无条件删"，写失败时实例在下次冷启原样复活、点进去是空目录。
+                val manifestWritten = writeMutex.withLock {
+                    runCatching { writeNow(excludeId = id) }.fold(
+                        onSuccess = {
+                            _manifestWriteFailed.value = false
+                            // ★ r31-s02-conc-03：提交必须**在本临界区之内**。放到 withLock 之后会留一个
+                            //   窗口：排队等锁的 saveAsync 可能在"本次写已成功"与"撤销待删登记"之间拿到锁，
+                            //   把待删记录重新补回快照并落盘 —— 那就变成"界面说删了、盘上还在"，冷启复活。
+                            commitPendingDelete(id)
+                            true
+                        },
+                        onFailure = { e ->
+                            _manifestWriteFailed.value = true
+                            // 全局日志：与 saveAsync 的失败同一口径（影响所有实例的索引，不是某个实例的运行问题）。
+                            DshLogBus.append("[instances] failed to write instances.json before delete: ${e.message}")
+                            false
+                        }
+                    )
+                }
+                if (!manifestWritten) {
+                    // 回滚内存：实例回到列表（按原位），否则界面会显示"已删除"而磁盘上它还在。
+                    //
+                    // ★ R3b-B3-5（fix12 收尾）：回滚必须**幂等**。等待写盘的这段时间里
+                    //   `retryManifestLoad()` 可能已经把磁盘真相整份替换进来（`_instances.value =
+                    //   parsed.instances`），而磁盘上这条记录**还在**（本次写盘正是失败的）——
+                    //   无脑插回就会得到"同一 id 两份"，`_instances` 是 List 不是 Set，
+                    //   `byId`/`firstOrNull` 只取第一份，`updateConfig` 的 map 却会同时改两份。
+                    //   所以插回前先查：已经在列表里（说明重读已经把它放回来了）就不重复插。
+                    // ★ r31-s02-conc-03：撤销待删登记必须与回滚**同一临界区**，且要先回到内存再撤销
+                    //   （反了会露出一个"内存和待删表里都没有它"的窗口，那一刻的并发写照样会丢记录）。
+                    rollbackPendingDelete(id) {
+                        _instances.update { list ->
+                            if (list.any { it.id == id }) list
+                            else {
+                                val back = mutableListOf<DshInstance>()
+                                var inserted = false
+                                val at = removedIndex.coerceIn(0, list.size)
+                                list.forEachIndexed { i, it ->
+                                    if (!inserted && i == at) {
+                                        inst?.let { back += it }
+                                        inserted = true
+                                    }
+                                    back += it
                                 }
-                                back += it
+                                if (!inserted && inst != null) back += inst
+                                back
                             }
-                            if (!inserted && inst != null) back += inst
-                            back
                         }
                     }
+                    if (wasSelected) _selectedId.value = id
+                    _deleting.update { it - id }
+                    // 任务区不留终态行：这次删除**没有发生**（连目录都没动），留一条 DONE/FAILED
+                    // 反而像是在说"删除执行过了"，与实例仍在列表里的事实冲突；`_deleting` 移除后
+                    // 投影里那条"删除中"自然消失。
+                    onFinished?.invoke(false)
+                    return@launch
                 }
-                if (wasSelected) _selectedId.value = id
-                _deleting.update { it - id }
-                // 任务区不留终态行：这次删除**没有发生**（连目录都没动），留一条 DONE/FAILED
-                // 反而像是在说"删除执行过了"，与实例仍在列表里的事实冲突；`_deleting` 移除后
-                // 投影里那条"删除中"自然消失。
-                onFinished?.invoke(false)
-                return@launch
-            }
-            // ★ r31-s02-conc-03：清单已落盘 = 删除**已提交**，待删登记已在上面那次写的临界区内撤销。
-            //   之后任何写都不会再把该实例补回快照（否则删目录失败留下墓碑时，并发的 saveAsync
-            //   会把它写回盘上 —— 与下面 R3b-B3-6 的墓碑语义正好相反）。
-            val ok = runCatching { DshPaths.instanceDir(id).deleteRecursively() }.getOrDefault(false)
-            // ★ R3b-B3-6（fix12 收尾）：目录删不干净时留下墓碑。
-            //   实例记录已经从清单里摘掉，但残留目录会让下次冷启的 adoptOrphanInstanceDirs
-            //   **原样收养回来**（它只按"目录存在且不在清单里"判）——用户看到"删掉的实例又回来了"，
-            //   而且是个空壳（state=NOT_INSTALLED）。这里记下 id，收养时跳过。
-            //   只影响按目录扫描的收养路径：如果用户之后真的新建了一个同名 id（几乎不可能，
-            //   id 带时间戳+序号+随机后缀），也不会被这条挡住（`create` 走的是 newId，不经过收养）。
-            if (!ok) {
-                tombstonedInstanceIds.update { it + id }
+                // ★ r31-s02-conc-03：清单已落盘 = 删除**已提交**，待删登记已在上面那次写的临界区内撤销。
+                //   之后任何写都不会再把该实例补回快照（否则删目录失败留下墓碑时，并发的 saveAsync
+                //   会把它写回盘上 —— 与下面 R3b-B3-6 的墓碑语义正好相反）。
+                val ok = runCatching { DshPaths.instanceDir(id).deleteRecursively() }.getOrDefault(false)
+                // ★ R3b-B3-6（fix12 收尾）：目录删不干净时留下墓碑。
+                //   实例记录已经从清单里摘掉，但残留目录会让下次冷启的 adoptOrphanInstanceDirs
+                //   **原样收养回来**（它只按"目录存在且不在清单里"判）——用户看到"删掉的实例又回来了"，
+                //   而且是个空壳（state=NOT_INSTALLED）。这里记下 id，收养时跳过。
+                //   只影响按目录扫描的收养路径：如果用户之后真的新建了一个同名 id（几乎不可能，
+                //   id 带时间戳+序号+随机后缀），也不会被这条挡住（`create` 走的是 newId，不经过收养）。
+                if (!ok) {
+                    tombstonedInstanceIds.update { it + id }
+                    DshLogBus.append(
+                        "[instances] delete $id dir left files behind; marked as tombstoned so the " +
+                            "orphan adoption will not resurrect it"
+                    )
+                }
+                // ★ 保持全局：同上，删除结果是"实例管理"这件事的结论，不是该实例运行期间的输出。
+                //   实例页此刻正在被关掉，写实例流没有接收方（实例日志文件也不在实例目录里，
+                //   见下方删除块 —— 旧注释"日志文件也已被删"的表述一并更正）。
                 DshLogBus.append(
-                    "[instances] delete $id dir left files behind; marked as tombstoned so the " +
-                        "orphan adoption will not resurrect it"
+                    "[instances] delete ${inst?.name ?: id} dir: ${if (ok) "done" else "leftover files"}"
                 )
-            }
-            // ★ 保持全局：同上，删除结果是"实例管理"这件事的结论，不是该实例运行期间的输出。
-            //   实例页此刻正在被关掉，写实例流没有接收方（实例日志文件也不在实例目录里，
-            //   见下方删除块 —— 旧注释"日志文件也已被删"的表述一并更正）。
-            DshLogBus.append(
-                "[instances] delete ${inst?.name ?: id} dir: ${if (ok) "done" else "leftover files"}"
-            )
-            // 实例已删：回收它的内存流（buffer / StateFlow / 文件句柄缓存）。
-            // ⚠️ 残余窗口（BL-080 复核）：DshLogBus.appendFor 对未知 id 会**按需重建**内存流，
-            //    删除收尾阶段唯一还可能迟到的写方是停止协程的 "[runtime] … 已停止" 收尾行
-            //    （见 DshRuntime.stop 的 synchronized 块，Idle 落状态与 appendFor 只隔几微秒）。
-            //    最坏后果：重建一条内存流（后续被 MAX_STREAMS=32 的 LRU 自然淘汰）+ 在极窄竞态下
-            //    重写一份 ≤1MB 实例日志文件 —— 与 BL-076 原症状同级、有界，故接受；彻底闭环需要
-            //    DshLogBus 侧加删除墓碑（不在本文件职责内，登记于报告）。
-            DshLogBus.removeStream(id)
-            // BL-080/BL-076：实例日志文件是 `<filesDir>/dsh/logs/instance-<id>.log`（由
-            // DshPaths.LOG_FILE 的父目录推导，见 DshLogBus.instanceLogFile），**不在实例目录里**，
-            // 上面 deleteRecursively() 带不走它 —— 全仓原先没有别的删除方（旧注释"它的目录与
-            // 日志文件紧接着就要 deleteRecursively()"是错的：日志文件不在实例目录内），
-            // 不删就每删一个实例留一份 ≤1MB 孤儿。放在 removeStream **之后**：removeStream 清掉
-            // 内存流与文件句柄缓存后，之后即使再有迟到的 appendFor(id, …) 也只会重建内存流、落盘
-            // 是惰性的（再凑满一次 flush 才会重写文件，删除收尾阶段没有这种写入方）；
-            // 若反过来先删文件再 removeStream，还挂在 pendingForFile 里的行下一次 flush
-            // 就会把文件原地写回来。delete() 返回 false（文件本就不存在）时不打日志，避免噪音。
-            runCatching {
-                if (DshLogBus.instanceLogFile(id).delete()) {
-                    DshLogBus.append("[instances] removed instance log file for $id")
+                // 实例已删：回收它的内存流（buffer / StateFlow / 文件句柄缓存）。
+                // ⚠️ 残余窗口（BL-080 复核）：DshLogBus.appendFor 对未知 id 会**按需重建**内存流，
+                //    删除收尾阶段唯一还可能迟到的写方是停止协程的 "[runtime] … 已停止" 收尾行
+                //    （见 DshRuntime.stop 的 synchronized 块，Idle 落状态与 appendFor 只隔几微秒）。
+                //    最坏后果：重建一条内存流（后续被 MAX_STREAMS=32 的 LRU 自然淘汰）+ 在极窄竞态下
+                //    重写一份 ≤1MB 实例日志文件 —— 与 BL-076 原症状同级、有界，故接受；彻底闭环需要
+                //    DshLogBus 侧加删除墓碑（不在本文件职责内，登记于报告）。
+                DshLogBus.removeStream(id)
+                // BL-080/BL-076：实例日志文件是 `<filesDir>/dsh/logs/instance-<id>.log`（由
+                // DshPaths.LOG_FILE 的父目录推导，见 DshLogBus.instanceLogFile），**不在实例目录里**，
+                // 上面 deleteRecursively() 带不走它 —— 全仓原先没有别的删除方（旧注释"它的目录与
+                // 日志文件紧接着就要 deleteRecursively()"是错的：日志文件不在实例目录内），
+                // 不删就每删一个实例留一份 ≤1MB 孤儿。放在 removeStream **之后**：removeStream 清掉
+                // 内存流与文件句柄缓存后，之后即使再有迟到的 appendFor(id, …) 也只会重建内存流、落盘
+                // 是惰性的（再凑满一次 flush 才会重写文件，删除收尾阶段没有这种写入方）；
+                // 若反过来先删文件再 removeStream，还挂在 pendingForFile 里的行下一次 flush
+                // 就会把文件原地写回来。delete() 返回 false（文件本就不存在）时不打日志，避免噪音。
+                runCatching {
+                    if (DshLogBus.instanceLogFile(id).delete()) {
+                        DshLogBus.append("[instances] removed instance log file for $id")
+                    }
+                }.onFailure { e ->
+                    // 删不掉也只是残留一个日志文件，不该拖垮删除收尾 —— 但得留痕（否则是静默孤儿）。
+                    DshLogBus.append("[instances] failed to remove instance log file for $id: ${e.message}")
                 }
-            }.onFailure { e ->
-                // 删不掉也只是残留一个日志文件，不该拖垮删除收尾 —— 但得留痕（否则是静默孤儿）。
-                DshLogBus.append("[instances] failed to remove instance log file for $id: ${e.message}")
-            }
-            _deleting.update { it - id }
-            // ★ 终态上报要在 `_deleting` 移除**之后**，但要注意它不能改写"删除是否成功"的判定 ——
-            //   失败（有文件残留）在**任务语义**里算 DONE 还是 FAILED？这里选 DONE + 把残留写进 stage：
-            //   "删除"这个动作本身确实执行完了（目录删到不能再删），失败的是文件系统层面的残留，
-            //   实例记录已经从清单里摘掉、用户也不会再看到它 —— 把它标成 FAILED 反而像"删除没发生"。
-            //   真正需要追残留的人看的是上面那行日志（全局流）与实例卡片。
-            //   还有一处**必须**这么做：`_deleting` 已移除 → 投影（DshTasks.tasks）里那条"删除中"
-            //   已经消失，若终态上报还标 CANCELLED/FAILED，界面会出现"删着删着突然说被取消"的怪状态。
-            DshTasks.report(
-                DshTask(
-                    id = DshTasks.deleteTaskId(id),
-                    kind = DshTask.Kind.DELETE,
-                    title = inst?.name ?: id,
-                    stage = if (ok) {
-                        DshAppContextHolder.context?.getString(R.string.dsh_task_deleted) ?: "Deleted"
-                    } else {
-                        DshAppContextHolder.context?.getString(R.string.dsh_task_deleted_with_leftover)
-                            ?: "Deleted (some files remain)"
-                    },
-                    action = DshTask.Action.NONE,
-                    state = DshTask.State.DONE,
-                    instanceId = id
+                _deleting.update { it - id }
+                // ★ 终态上报要在 `_deleting` 移除**之后**，但要注意它不能改写"删除是否成功"的判定 ——
+                //   失败（有文件残留）在**任务语义**里算 DONE 还是 FAILED？这里选 DONE + 把残留写进 stage：
+                //   "删除"这个动作本身确实执行完了（目录删到不能再删），失败的是文件系统层面的残留，
+                //   实例记录已经从清单里摘掉、用户也不会再看到它 —— 把它标成 FAILED 反而像"删除没发生"。
+                //   真正需要追残留的人看的是上面那行日志（全局流）与实例卡片。
+                //   还有一处**必须**这么做：`_deleting` 已移除 → 投影（DshTasks.tasks）里那条"删除中"
+                //   已经消失，若终态上报还标 CANCELLED/FAILED，界面会出现"删着删着突然说被取消"的怪状态。
+                DshTasks.report(
+                    DshTask(
+                        id = DshTasks.deleteTaskId(id),
+                        kind = DshTask.Kind.DELETE,
+                        title = inst?.name ?: id,
+                        stage = if (ok) {
+                            DshAppContextHolder.context?.getString(R.string.dsh_task_deleted) ?: "Deleted"
+                        } else {
+                            DshAppContextHolder.context?.getString(R.string.dsh_task_deleted_with_leftover)
+                                ?: "Deleted (some files remain)"
+                        },
+                        action = DshTask.Action.NONE,
+                        state = DshTask.State.DONE,
+                        instanceId = id
+                    )
                 )
-            )
-            onFinished?.invoke(ok)
+                onFinished?.invoke(ok)
+            } finally {
+                // ★ SP-04：`_deleting` 的幂等兜底移除。
+                //   两个正常出口（成功 :~1301、回滚 :~1248）各减过一次，这条只在**异常路径**上
+                //   真正生效 —— 目标是既有的"永久残留"（卡片永远删除中、任务区永远挂一行），
+                //   而不是改变正常路径的时序：`_deleting` 仍在终态上报**之前**移除，
+                //   上方那段顺序注释（"上报要在 `_deleting` 移除之后"）与既有决定一字未动。
+                //   这里减的必然是**本次事务的 id**（闭包捕获），不会误伤别的实例。
+                _deleting.update { it - id }
+                // 闸门最后释放：必须在 `_deleting` 之后，保证"第二次 delete 能进来"时
+                // UI 上这一次的收尾痕迹已经清掉。
+                endDeleteTransaction(id)
+            }
         }
         return true
     }
@@ -2037,7 +2106,45 @@ object DshInstances {
         }
     }
 
+    /**
+     * 原子地「查闸门 + 占闸门 + 摘内存 + 登记待删」：返回 true 表示**本次事务归调用方**。
+     *
+     * 四步必须在**同一次** [pendingDeleteLock] 临界区里（理由见 [deleteInFlight]）：
+     * - 查闸门：[deleteInFlight]（事务在途，覆盖到收尾之后）或 [pendingDeletes]（待删登记，
+     *   覆盖"已摘内存、还没落盘"这一段并发写盘的回补需要）任一命中即拒；
+     * - 占闸门：**无条件** `deleteInFlight.add(id)` —— ghost id（[byId] 为 null）也要占，
+     *   否则"删一个不存在/已删完的 id"可以无限次重入；
+     * - 摘内存 + 登记待删：有实例时走 [holdPendingDelete] 的两步（本就在同一临界区内做），
+     *   没有实例时只做 `filterNot`（对不存在的 id 是 no-op，保留旧行为）。
+     *
+     * 拒绝时**什么都没改**（不占闸、不动内存），调用方按 fix-r31-104 的契约
+     * `onFinished(false)` + `return false`。
+     */
+    private fun beginDeleteTransaction(id: String, inst: DshInstance?): Boolean {
+        synchronized(pendingDeleteLock) {
+            if (id in deleteInFlight || pendingDeletes.containsKey(id)) return false
+            deleteInFlight.add(id)
+            // 复用 [holdPendingDelete]（同线程可重入，同一把监视器 ⇒ 仍然是同一个临界区）：
+            // 它内部就是"先摘内存、再登记待删"这两步，见 r31-s02-conc-03 的论证。
+            if (inst != null) holdPendingDelete(id, inst)
+            else _instances.update { list -> list.filterNot { it.id == id } }
+            return true
+        }
+    }
+
+    /**
+     * 释放闸门（[delete] 协程体的 `finally` 里调，也是测试复位的一部分）。
+     *
+     * 幂等：正常出口与回滚出口都会走到，重复调用无副作用。
+     * ★ 只清 [deleteInFlight]，**不碰** [pendingDeletes]（它有自己的提交/回滚语义，见
+     *   [commitPendingDelete] / [rollbackPendingDelete]）与 `_deleting`（UI 投影，由调用方管）。
+     */
+    private fun endDeleteTransaction(id: String) {
+        synchronized(pendingDeleteLock) { deleteInFlight.remove(id) }
+    }
+
     /** 摘内存 + 登记待删：两步在同一临界区（中间漏一次写就会丢掉该实例）。 */
+
     private fun holdPendingDelete(id: String, inst: DshInstance) {
         synchronized(pendingDeleteLock) {
             _instances.update { list -> list.filterNot { it.id == id } }
