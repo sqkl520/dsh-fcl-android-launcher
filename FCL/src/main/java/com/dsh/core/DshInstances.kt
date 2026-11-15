@@ -785,7 +785,31 @@ object DshInstances {
         _deleting.value = emptySet()
     }
 
-    /** 读失败期间每改一次内存调一次（调用方先确认 [manifestLoadFailed] 为真） */
+    /**
+     * 读失败期间每改一次内存调一次（调用方先确认 [manifestLoadFailed] 为真）。
+     *
+     * ## ⚠️ 已知的「看起来像 bug、实际结构不可达」—— 别去修它
+     *
+     * [updateConfig] / [markState] / [update] 都是**调用即计**，不看这次调用是否真的改了东西。
+     * 对**不存在的 id**，它们的 `_instances.update { list.map { ... } }` 是恒等变换，
+     * 但计数照样自增。而 [retryManifestLoad] 一旦计数 > 0 就永久拒绝 ——
+     * 单看这两点，会得出「一次空写永久废掉唯一恢复出口」的结论（round34 审计 SP-03 原文）。
+     *
+     * **但那个前置条件在当前结构下不可达**，理由是一条完整的互斥链：
+     *
+     * 1. 把一个 id 从 `_instances` 移除只有两条路：[delete]（经 [beginDeleteTransaction]
+     *    的 `filterNot`）与 [loadFrom] 的整份替换；其余写点全是 `map`/追加，长度不减。
+     * 2. [delete] 在 [manifestLoadFailed] 为真时**直接拒绝**（见 `delete()` 开头的守卫），
+     *    连内存都不摘。
+     * 3. [loadFrom] 的**每一个**成功出口都先调 [markManifestLoadSucceeded] 把位清掉。
+     * 4. 该位在进程内只能被置位两次（init + 用户点重试），且 init 自带一次自动重试。
+     *
+     * ⇒ 「位为 true 期间出现第一个不存在的 id」不可能发生。
+     *
+     * **什么情况下这条会变成真缺陷**：若将来给 [delete] 加一条绕过拒写的路径，或给
+     * `_instances` 加一条不经过上述两条路的移除方式 —— 那时请回来读这段，并按 SP-03
+     * 的方案（把计数挪进 `update{}` 内部、只在真的改了东西时计）修。
+     */
     private fun countMutationWhileLoadFailed() {
         if (_manifestLoadFailed.value) mutationsWhileLoadFailed.incrementAndGet()
     }
