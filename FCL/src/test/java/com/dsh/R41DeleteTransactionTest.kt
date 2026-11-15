@@ -293,7 +293,16 @@ class R41DeleteTransactionTest {
             )
 
             val returnedToEmpty = awaitDeletingEmpty(id, 30_000)
-            assertTrue("前置：回调确实被调用过（否则本用例是空转）", callbackCalls.get() == 1)
+            // ★ 判据修正（与 t5 同一个坑）：必须先等**回调真的到达**，再断言它被调用过。
+            //   原来直接 `callbackCalls.get() == 1`，而 awaitDeletingEmpty 可能在协程开始跑
+            //   之前就看到 `_deleting` 不含该 id（它还没被加进去）而立刻返回 —— 那时回调当然
+            //   还没执行，于是偶发红「回调确实被调用过」。
+            //   这里显式轮询回调计数，把"等"和"断言"分开。
+            var waited = 0L
+            while (callbackCalls.get() == 0 && waited < 30_000) {
+                Thread.sleep(5); waited += 5
+            }
+            assertEquals("前置：回调必须恰好被调用一次（否则本用例是空转）", 1, callbackCalls.get())
             assertTrue(
                 "★ 证伪条件（前半）：异常后 deleting 必须被 finally 兜底清空（否则卡片永远「删除中」）",
                 returnedToEmpty
