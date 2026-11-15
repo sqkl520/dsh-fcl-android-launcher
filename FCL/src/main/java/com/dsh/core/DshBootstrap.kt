@@ -74,6 +74,243 @@ internal fun shouldDropBackup(extractComplete: Boolean, newTreeUsable: Boolean):
     extractComplete && newTreeUsable
 
 /**
+ * 一次 rootfs 目录替换的**结论**（R38 / RE-05）。值域见下面的 [SwapResult]。
+ *
+ * ## 为什么失败要带 [SwapResult.SwapStep] 而不是一个布尔
+ *
+ * 四个失败步骤的现场与用户指引**完全不同**：
+ * - [SwapResult.SwapStep.CLEAN_OLD]：上一轮遗留的 `.old` 清不掉（多半是磁盘满/被占）。此时
+ *   `dest` 与 `tmp` 一个字节都没动，重试或腾空间即可；
+ * - [SwapResult.SwapStep.BACKUP_OLD]：`dest → .old` 改名失败。`dest` 仍是那份完好的旧底座，
+ *   属于文件系统层故障（重试/换设备）；
+ * - [SwapResult.SwapStep.PROMOTE_NEW]：新树上位失败，但**已经回滚**到替换前，用户手上的底座
+ *   还是旧的、可用的；
+ * - [SwapResult.SwapStep.ROLLBACK]：**最坏的一种** —— 新树没上位、旧树也没能挪回 `dest`，
+ *   旧底座只剩 `backup` 里那一份。用户唯一的自救手段是手工把它挪回去，所以 detail 里必须带
+ *   绝对路径。
+ *
+ * 压成一个布尔，界面与日志就只能说一句"替换失败"，而这四种现场该做的事没有一件相同。
+ */
+internal sealed class SwapResult {
+    /** 新树已上位，且 `.old` 已按 [shouldDropBackup] 的决策**删掉**（正常升级路径）。 */
+    object Replaced : SwapResult()
+
+    /**
+     * 新树已上位，但 `.old` **被保留**。两种成因合并成同一个值是有意的（对调用方都是
+     * "替换完了、备份还在"）：
+     * - 新树不可用（`newTreeUsable(dest)` 为假）⇒ 调用方必须走回滚，**绝不能删** `.old`；
+     * - 新树可用、只是 `.old` 删不掉 ⇒ 不致命，下一轮开头的预清理会再试一次。
+     * 调用方用同一个 [shouldDropBackup] 判据就能分辨这两种（见 `extractRootfs`）。
+     */
+    object ReplacedBackupKept : SwapResult()
+
+    /**
+     * 替换失败。[step] 指明**卡在哪一步**，[detail] 是给日志/排障看的英文细节（含绝对路径），
+     * [destUsable] 回答"用户现在手上的底座还能不能用"。
+     */
+    data class Failed(
+        val step: SwapStep,
+        val detail: String,
+        val destUsable: Boolean
+    ) : SwapResult()
+
+    /** 失败发生在哪一步。顺序即执行顺序。 */
+    enum class SwapStep {
+        /** 预清理遗留的 `.old` —— 删不干净的话，下一步 `dest→.old` 必然撞 `ENOTEMPTY`。 */
+        CLEAN_OLD,
+
+        /** `dest → .old`：把旧底座整体挪开。这一步失败时**一个字节都不许删**。 */
+        BACKUP_OLD,
+
+        /** `tmp → dest`：新树上位。失败即回滚。 */
+        PROMOTE_NEW,
+
+        /** 上位失败后的回滚（`.old → dest`）。 */
+        ROLLBACK
+    }
+}
+
+/**
+ * 原子替换 rootfs 目录（R38 / RE-05）：`tmp` 上位成 `dest`，旧 `dest` 整体挪进 `backup`。
+ *
+ * ## 缺陷本体（为什么必须重写这一段）
+ *
+ * 旧实现在 `tmp→dest` 的 `renameTo` 失败后"退化为逐个搬子项"：
+ *
+ * ```kotlin
+ * if (!tmpDir.renameTo(destDir)) {
+ *     destDir.mkdirs()
+ *     tmpDir.listFiles()?.forEach { f -> f.renameTo(File(destDir, f.name)) }  // ← 每个返回值都不判
+ *     tmpDir.deleteRecursively()                                             // ← 没搬成功的在这里被删掉
+ * }
+ * ```
+ *
+ * 后果：`dest` 变成「一部分新 + 一部分旧 + 一部分空」的混合体，而**没搬成功的新内容随 `tmp`
+ * 一起没了**；紧接着"删备份"的判据只要 `bin/sh` 还在（它很可能正是搬成功的那几个之一）就会
+ * 返回 true ⇒ **可用的旧备份被删**，回滚路径永久消失。
+ *
+ * ## 为什么整段删掉 fallback，而不是"补上返回值判断"
+ *
+ * 那个 fallback 是为**不存在的成因**写的。`rootfs` / `rootfs.tmp` / `rootfs.old` 是同一父目录
+ * 的三个兄弟（`DshPaths.kt:85` 只定义 `ROOTFS_DIR = "$ROOT_DIR/rootfs"`，另两个由本文件拼出同
+ * 前缀）⇒ 必然同挂载点 ⇒ `EXDEV`（跨文件系统）**不可能**发生，而旧注释说的正是"某些文件系统上
+ * 跨目录 rename 失败"。真会让 `tmp→dest` 失败的是 `dest` 此刻仍是个**非空目录**
+ * （`ENOTEMPTY`），而那种情况下"逐个搬子项"也**必然**全部撞同名条目 —— 它是一条注定失败的分支，
+ * 留着它只会把"失败"变成"一半成功"。
+ *
+ * ## 回滚策略（每步都是强制步，每步都判返回值）
+ *
+ * | 失败点 | 就地状态 | 处理 |
+ * |---|---|---|
+ * | [SwapResult.SwapStep.CLEAN_OLD] | `dest` 与 `tmp` 都没动 | 直接返回失败，**不碰任何东西** |
+ * | [SwapResult.SwapStep.BACKUP_OLD] | `dest` 原封不动（rename 失败即源未动） | 直接返回失败，**不删旧内容** |
+ * | [SwapResult.SwapStep.PROMOTE_NEW] | 旧树在 `backup`，新树在 `tmp` | `backup → dest` 搬回来；成功后即"回到替换前" |
+ * | [SwapResult.SwapStep.ROLLBACK] | 旧树**只在** `backup` 里 | 保留 `backup`，detail 写明绝对路径 |
+ *
+ * **任何失败路径都不删 `tmp`**：哪怕 `tmp→dest` 失败了，`tmp` 里也是完整的、刚解压好的新树，
+ * 留着下一轮就能复用/重试；删掉它等于让用户重下 142MB 的 tar.xz。清理是**下一轮开头**的事
+ * （`extractRootfs` 的第一行），不是失败路径该做的决定。
+ *
+ * ## `extractComplete` 为什么在这里恒为 true
+ *
+ * R35 的删备份判据是"完整性 ∧ 布局可用"。本函数拿到的 `tmp` 已经过了 R35 的两道门
+ * （`PARTIAL_FAILURES` / `LAYOUT_BAD` 都在动 `dest` 之前就删 tmp 并抛了），且 promote 是
+ * **整体原子**的 rename ⇒ "新树完整但只搬了一半"这个形态在结构上**不可能存在**。
+ * 所以这里 `extractComplete = true` 不是偷懒，而是被结构保证的常量；本轮的调用方
+ * （`extractRootfs`）另外还把真正的 `verdict` 带进了"保留备份后怎么办"的处置里。
+ *
+ * ## 可测性（为什么抽成顶层函数 + 三个注入点）
+ *
+ * 纯 `java.io`，不碰 `Context` / `DshPaths` ⇒ 能在 JVM 单测里用真临时目录端到端跑。
+ * [rename] / [deleteTree] 注入只为**制造每个分支**（真机上要造 `ENOTEMPTY` 得先有 fs 故障），
+ * 生产调用点一律用默认实现。见 `R38RootfsSwapTest`。
+ *
+ * @param newTreeUsable 判"上位后的新树能不能用"。口径由调用方注入（生产传 `looksUsable`），
+ *   本函数不自己判断布局 —— "什么样的树算可用"只该有一份定义。
+ */
+internal fun swapRootfsDirs(
+    tmp: File,
+    dest: File,
+    backup: File,
+    newTreeUsable: (File) -> Boolean,
+    rename: (File, File) -> Boolean = { a, b -> a.renameTo(b) },
+    deleteTree: (File) -> Boolean = { it.deleteRecursively() }
+): SwapResult {
+    // ── 第 1 步：清掉上一轮遗留的 .old ─────────────────────────────────────────
+    // 判"删完还在不在"而不是只信布尔：deleteRecursively() 在某一条 unlink 不掉时返回 false，
+    // 但**已经把其余内容删了**，此时 .old 是个半空的目录。继续往下走，第 2 步的 dest→backup
+    // 会撞 ENOTEMPTY 必然失败。与其让它以一个更难懂的方式失败，不如在这里就报出去。
+    if (backup.exists()) {
+        deleteTree(backup)
+        if (backup.exists()) {
+            return SwapResult.Failed(
+                SwapResult.SwapStep.CLEAN_OLD,
+                "cannot remove stale backup ${backup.absolutePath}",
+                destUsable = newTreeUsable(dest)
+            )
+        }
+    }
+
+    // ── 第 2 步：dest → .old（把旧底座完整地挪开）──────────────────────────────
+    // 这一步失败时**什么都不删**：rename 的语义是"要么整个成功、要么源原封不动"，
+    // 所以 dest 此刻仍是那份完好的旧底座。旧实现正是在这里 `deleteRecursively()` 之后
+    // "猜着搬"，把旧底座毁掉的。
+    val hadOld = dest.exists()
+    if (hadOld && !rename(dest, backup)) {
+        return SwapResult.Failed(
+            SwapResult.SwapStep.BACKUP_OLD,
+            "cannot move ${dest.absolutePath} to ${backup.absolutePath}",
+            destUsable = newTreeUsable(dest)
+        )
+    }
+
+    // ── 第 3 步：tmp → dest（新树上位）────────────────────────────────────────
+    if (!rename(tmp, dest)) {
+        // 首装（本来就没有旧树）：没有可回滚的东西，直接报失败。tmp 原样保留。
+        if (!hadOld) {
+            return SwapResult.Failed(
+                SwapResult.SwapStep.PROMOTE_NEW,
+                "cannot move ${tmp.absolutePath} to ${dest.absolutePath}",
+                destUsable = newTreeUsable(dest)
+            )
+        }
+        // 有旧树 ⇒ 立刻回滚到"替换前"的样子。**不删 tmp**（见 KDoc）。
+        return if (rename(backup, dest)) {
+            SwapResult.Failed(
+                SwapResult.SwapStep.PROMOTE_NEW,
+                "cannot move ${tmp.absolutePath} to ${dest.absolutePath}; " +
+                    "rolled back to the previous rootfs",
+                destUsable = newTreeUsable(dest)
+            )
+        } else {
+            // 最坏的一种：旧树只在 backup 里了。**绝不能删 backup** —— 它是唯一能用的底座。
+            // detail 带绝对路径，是因为用户唯一的自救手段是手工把它挪回去。
+            SwapResult.Failed(
+                SwapResult.SwapStep.ROLLBACK,
+                "cannot move ${tmp.absolutePath} to ${dest.absolutePath} and the rollback failed too; " +
+                    "the previous rootfs is still at ${backup.absolutePath} " +
+                    "(move it back to ${dest.absolutePath} manually)",
+                destUsable = newTreeUsable(dest)
+            )
+        }
+    }
+
+    // ── 第 4 步：备份去留 ─────────────────────────────────────────────────────
+    // 到这一步 dest 已经是完整的新树（rename 是原子的），"新树完整但只搬了一半"在结构上不可能
+    // 存在 —— 这正是 `extractComplete = true` 可以接受的理由（见 KDoc）。
+    if (!hadOld) return SwapResult.Replaced   // 首装：本来就没有备份
+    if (!shouldDropBackup(extractComplete = true, newTreeUsable = newTreeUsable(dest))) {
+        // 新树不可用 ⇒ **保留** .old 作为回滚路径，交给调用方处置（它会用同一个判据走回滚）。
+        return SwapResult.ReplacedBackupKept
+    }
+    // 删不掉不致命：下一轮第 1 步会再试一次。所以只看"删完还在不在"来决定返回值，
+    // 不把"备份删不掉"升级成失败 —— 那会让一次**已经成功**的替换变成红字。
+    deleteTree(backup)
+    return if (backup.exists()) SwapResult.ReplacedBackupKept else SwapResult.Replaced
+}
+
+/**
+ * 把 [only] 里的顶层条目逐个搬进 [target]，然后删掉 [only]（R38 / RE-05，`hoistSingleTopLevelDir`
+ * 的判据内核，纯 `java.io`）。
+ *
+ * ## 为什么必须判每个子项的返回值
+ *
+ * 原实现是 `only.listFiles()?.forEach { f -> f.renameTo(File(dir, f.name)) }` + 无条件
+ * `only.delete()`：搬失败的那几个子项**留在 only 里**，紧接着 `only.delete()` 只在目录为空时
+ * 才成功 —— 而一旦它成功（或调用方忽略了失败），那些内容就永久消失了。更糟的是 `tmp` 变成
+ * "上提了一半"的树，随后 `looksUsable(tmpDir)` 只要 `bin/sh` 搬成功就判 true ⇒ 残缺树进了替换环节。
+ *
+ * 所以：**任何一个子项搬不动就不删 `only`**，把失败详情返回给调用方去报警。
+ *
+ * ## 为什么失败时连 [only] 也不删
+ *
+ * 它是"还没搬进去的新内容"唯一的副本。留着它，用户/下一轮至少还有得救；删掉就等于把
+ * 刚解压出来的东西扔了（与 [swapRootfsDirs] 的"失败绝不删 tmp"同一条不变式）。
+ *
+ * @return null = 全部搬成功；非 null = 英文失败详情（含首个失败条目的绝对路径与计数）
+ */
+internal fun hoistEntriesInto(
+    target: File,
+    only: File,
+    rename: (File, File) -> Boolean = { a, b -> a.renameTo(b) },
+    deleteDir: (File) -> Boolean = { it.delete() }
+): String? {
+    val children = only.listFiles()
+        ?: return "cannot list ${only.absolutePath} while hoisting the extra top-level directory"
+    val failed = children.filter { !rename(it, File(target, it.name)) }
+    if (failed.isNotEmpty()) {
+        return "cannot hoist ${only.absolutePath}: ${failed.size}/${children.size} entries not moved " +
+            "(first: ${failed[0].absolutePath})"
+    }
+    // 全部搬完，内层目录此时应为空。删不掉说明"里面还有东西"（并发写入 / 隐藏条目），
+    // 同样属于"上提了一半"—— 报出去，而不是当成功。
+    if (!deleteDir(only)) {
+        return "hoisted every entry but cannot remove ${only.absolutePath} (still not empty?)"
+    }
+    return null
+}
+
+/**
  * 盘上是否**已经有一份旧 rootfs**（决定空间门槛用哪一档，见 [DshBootstrap.requiredFreeBytes]）。
  *
  * ## 为什么不是 `DshPaths.rootfsLooksUsable()`
@@ -814,7 +1051,20 @@ object DshBootstrap {
         }
 
         // 布局校验 / 自动上提单层顶层目录
-        hoistSingleTopLevelDir(tmpDir)
+        // ★ R38 / RE-05：**返回值必须判**。hoist 搬不动子项时，tmp 里是"上提了一半"的树 ——
+        //   内层目录还留着没搬走的条目，而 `looksUsable(tmpDir)` 只要 `bin/sh` 恰好是搬成功的
+        //   那几个之一就会判 true ⇒ 残缺树被放行进替换环节（这正是本缺陷的"新树不完整却当成功"
+        //   那半）。所以有失败就 fail-fast：**不碰 dest、不删 tmp**（tmp 里既有已搬成功的条目
+        //   也有没搬的，删掉等于丢新内容；下一轮开头 `:1035` 会清）。
+        val hoistFailure = hoistSingleTopLevelDir(tmpDir)
+        if (hoistFailure != null) {
+            DshLogBus.append("[bootstrap] rootfs 包内多层目录上提失败：$hoistFailure")
+            throw IllegalStateException(
+                (DshUiText.contextOrNull() ?: context).getString(
+                    R.string.dsh_state_failed, hoistFailure
+                )
+            )
+        }
 
         // ★ R35 / RE-04 的第一道门（新增）：这一轮解压有没有把每一条子项都落实。
         //   判据是 `report.hasFailures()`，**不是** `describe() == "all entries applied"`，
@@ -850,54 +1100,94 @@ object DshBootstrap {
             .bufferedReader().use { it.readText().trim() }
         File(tmpDir, "version").writeText(version)
 
-        // 原子替换（★ 本轮加固）：先把旧 rootfs 挪到 .old 再让新内容上位。
-        // 原实现是 \"先 deleteRecursively 旧目录，再 rename 新目录\"——删除与 rename 之间若失败
-        // （磁盘满 / 被系统杀 / rename 异常），用户会**同时失去新旧两份 rootfs**：升级失败 = 底座全没了。
-        // 现在失败可回滚到旧的（至少还能用），成功后再删备份。
+        // 原子替换（★ R38 / RE-05 重写）：旧实现把 `.old` 预清理、`dest→.old`、`tmp→dest`、
+        // 删备份四步全写成裸调用 + 一条"rename 失败就逐个搬子项"的 fallback，于是：
+        //   · `:801` `.old` 删不干净 → `:803` dest→.old 撞 ENOTEMPTY → `:806` 删 dest 后
+        //     "猜着搬"，`bin/sh` 之外的新内容一半在 dest、一半随 `:812` 的 deleteRecursively 消失；
+        //   · `dest` 变成「一部分新 + 一部分旧」的混合体，而紧接的删备份判据只要 `bin/sh` 还在
+        //     就判 true ⇒ **可用的旧备份被删**，回滚路径永久消失。
+        // 现在整段替换的唯一入口是 [swapRootfsDirs]（每步强制步 + 每步判返回值 + 失败必回滚），
+        // 本方法只负责**处置它的结论**，不再自己搬目录。
+        //
+        // ★ 严重性口径（r35 之后）：这不是常态，而是**故障触发**。r35 的 `hasFailures()` 门在
+        //   上面就已经把「解压部分失败 → 混合体」变成不可达（非 CLEAN 都在动 dest 之前删 tmp 后
+        //   抛了）。仍然可达的只剩「解压完整 + 同文件系统 rename 失败」这条 fs 故障链。
         val backupDir = File("${DshPaths.ROOTFS_DIR}.old")
-        if (backupDir.exists()) backupDir.deleteRecursively()
-        val hadOld = destDir.exists()
-        if (hadOld && !destDir.renameTo(backupDir)) {
-            // 挪不动旧目录（少见）：退化为原行为，但记一行日志便于排查
-            DshLogBus.append("[bootstrap] 旧 rootfs 无法改名备份，退化为直接覆盖")
-            destDir.deleteRecursively()
-        }
-        if (!tmpDir.renameTo(destDir)) {
-            // 某些文件系统上跨目录 rename 失败：退化为移动内容
-            destDir.mkdirs()
-            tmpDir.listFiles()?.forEach { f -> f.renameTo(File(destDir, f.name)) }
-            tmpDir.deleteRecursively()
-        }
-        if (backupDir.exists()) {
-            // ★ R35 / RE-04 的第二道门：删备份的条件收紧为"新树解压完整 ∧ 布局可用"。
-            //   原来只看 `looksUsable(destDir)` —— 部分失败的树（bin/sh 在、但 1049 条符号链接
-            //   没建出来）也能让它为 true，于是**可用的旧备份被删掉**，回滚路径永久消失。
-            //   现在完整性与布局两条同时成立才删；不成立就回滚到备份（旧树回到 dest，
-            //   .old 随 rename 消失 —— 所以不会出现"备份永不删除"把磁盘吃满的情况）。
-            if (shouldDropBackup(extractComplete = verdict == ExtractVerdict.CLEAN, newTreeUsable = looksUsable(destDir))) {
-                backupDir.deleteRecursively()
-            } else {
-                // 新内容不可用 → 回滚旧的，别让用户连旧底座都没了
-                DshLogBus.append("[bootstrap] 新 rootfs 不可用，回滚到备份")
-                destDir.deleteRecursively()
-                backupDir.renameTo(destDir)
+        when (val swap = swapRootfsDirs(tmpDir, destDir, backupDir, this::looksUsable)) {
+            is SwapResult.Replaced -> {
+                DshLogBus.append("[bootstrap] rootfs 原子替换完成")
+            }
+
+            is SwapResult.ReplacedBackupKept -> {
+                // ★ R35 / RE-04 的第二道门（判据一个字没改）：删备份的条件是"新树解压完整 ∧
+                //   布局可用"。这里用**同一个** [shouldDropBackup] 分辨 [swapRootfsDirs] 留下的
+                //   两种"备份还在"：
+                //   · 判据为真 ⇒ 新树可用、只是 `.old` 没删掉（不致命）→ 再试一次删除；
+                //   · 判据为假 ⇒ 新树布局不可用 → 必须回滚到备份，别让用户连旧底座都没了。
+                if (shouldDropBackup(extractComplete = verdict == ExtractVerdict.CLEAN, newTreeUsable = looksUsable(destDir))) {
+                    DshLogBus.append("[bootstrap] .old 未删净，重试删除")
+                    backupDir.deleteRecursively()
+                } else {
+                    // 新内容不可用 → 回滚旧的。同样判返回值（R38 / RE-05：原来这两行都是裸调用，
+                    // `destDir.deleteRecursively()` 可能只删了一半，rename 失败也没人知道）。
+                    DshLogBus.append("[bootstrap] 新 rootfs 不可用，回滚到备份")
+                    destDir.deleteRecursively()
+                    if (!backupDir.renameTo(destDir)) {
+                        DshLogBus.append(
+                            "[bootstrap] 回滚失败：旧 rootfs 仍在 ${backupDir.absolutePath}"
+                        )
+                        throw IllegalStateException(
+                            (DshUiText.contextOrNull() ?: context).getString(
+                                R.string.dsh_state_failed,
+                                "cannot restore the previous rootfs; it is still at " +
+                                    backupDir.absolutePath
+                            )
+                        )
+                    }
+                }
+            }
+
+            is SwapResult.Failed -> {
+                // 失败必须响亮（R38 / RE-05 的 I-4）：只写一行日志然后落到 Progress.Done，用户看到的
+                // 就是"准备成功"——那正是本缺陷的症状之一。detail 是英文技术细节（含绝对路径），
+                // 走日志总线；用户可见文案套现有的 "失败：%1$s" 外壳，本包不新增文案资源。
+                DshLogBus.append("[bootstrap] rootfs 替换失败（${swap.step}）：${swap.detail}")
+                throw IllegalStateException(
+                    (DshUiText.contextOrNull() ?: context).getString(
+                        R.string.dsh_state_failed, "${swap.step}: ${swap.detail}"
+                    )
+                )
             }
         }
         DshPaths.loadPaths(context) // 重建目录（rootfs 被换过）
     }
 
-    /** tar.xz 里若只有一个顶层目录，把其内容上提一层（rootfs 必须是"根"的形态） */
-    private fun hoistSingleTopLevelDir(dir: File) {
-        val entries = dir.listFiles() ?: return
+    /**
+     * tar.xz 里若只有一个顶层目录，把其内容上提一层（rootfs 必须是"根"的形态）。
+     *
+     * ★ R38 / RE-05：原来这里也是"逐个 `renameTo` 不判返回值 + 无条件 `only.delete()`"——
+     * 搬失败的那几个子项会随内层目录一起被删掉，`tmp` 变成"上提了一半"的树，而随后的
+     * `looksUsable(tmpDir)` 又可能因为 `bin/sh` 恰好搬成功而侥幸通过，把残缺树放行到替换环节。
+     *
+     * 现在把"搬内层条目"抽成 [hoistEntriesInto]（顶层函数，可测）：**一个都不许失败**；
+     * 有失败就**不删内层目录**、返回失败详情，由调用方抛错（`tmp` 原样留着 —— 里面既有已搬
+     * 成功的条目也有没搬的，删掉等于丢新内容；下一轮开头会清）。
+     *
+     * 与 [swapRootfsDirs] 的语义差别（所以没有复用它）：这里搬的是**同一棵树内部**的父子条目，
+     * 不涉及"旧树/新树"的备份与回滚，失败时也没有可回滚的目标 —— 硬套那个函数只会给它塞进
+     * 一个它不需要的语义（以及一个它用不上的 `CLEAN_OLD` 步）。
+     *
+     * @return null = 无需上提或上提成功；非 null = 英文失败详情（调用方负责本地化外壳）
+     */
+    private fun hoistSingleTopLevelDir(dir: File): String? {
+        val entries = dir.listFiles() ?: return null
         val visible = entries.filter { it.name != "version" }
-        if (visible.size != 1) return
+        if (visible.size != 1) return null
         val only = visible[0]
-        if (!only.isDirectory) return
-        if (looksUsable(only)) {
-            DshLogBus.append("[bootstrap] rootfs 包内多了一层目录 ${only.name}，已自动上提")
-            only.listFiles()?.forEach { f -> f.renameTo(File(dir, f.name)) }
-            only.delete()
-        }
+        if (!only.isDirectory) return null
+        if (!looksUsable(only)) return null
+        DshLogBus.append("[bootstrap] rootfs 包内多了一层目录 ${only.name}，已自动上提")
+        return hoistEntriesInto(dir, only)
     }
 
     private fun looksUsable(dir: File): Boolean =
