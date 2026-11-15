@@ -342,6 +342,27 @@ class DshInstaller(
     fun statusOf(instanceId: String): InstallStatus? = _statuses.value[instanceId]
 
     /**
+     * ★ BL-244（步骤 2）：该实例**当前登记**的安装任务（没有则 null）。
+     *
+     * 给 `DshInstances.delete` 用：它在调 [cancel] **之前**取一次快照，之后在
+     * `ownershipLock` **之外**等这个 job 真正收尾 —— 这样"删除目录"不会跑在"cancel 之后才
+     * fork 出来的 npm"前面。
+     *
+     * ## 为什么是"捕获的 job"而不是"轮询 [running] 表是否为空"
+     *
+     * - 表会被"取消后立刻重装"覆盖（[install] 的 `running[id] = job`），等表清空会连带等
+     *   **别人的**那次安装；
+     * - 未调度即取消的 LAZY job 会在表里永久残留一条已完成的 job（见 [install] 的 `start = LAZY`
+     *   说明），等表清空会白等到 deadline；
+     * - [Job.join] 对"已完成的 job"立即返回，语义精确：**等的是我刚刚取消的那一次**。
+     *
+     * `ConcurrentHashMap.get` 是单次读、不加锁 ⇒ 从 UI 线程调用也不会被 [ownershipLock] 阻塞。
+     * 返回的 Job 只是"那一刻的登记"，调用方要自己处理"它已经结束"与"它已被新任务接管"两种情况
+     * （`join` 对两者都会立刻返回）。
+     */
+    fun installJobOf(instanceId: String): Job? = running[instanceId]
+
+    /**
      * 安装指定版本到实例。会把实例状态置为 INSTALLING，成功后置 READY 并记录**真实**版本。
      *
      * ## BL-043②：为什么"占闸 + 登记 + 启动"必须是一段临界区
@@ -626,6 +647,49 @@ class DshInstaller(
      */
     private fun isActiveInstallOwner(instanceId: String, job: Job?): Boolean =
         job != null && running[instanceId] === job && !cancelled.contains(instanceId)
+
+    /**
+     * ★ BL-244（步骤 1）：**fork 前的取消检查点** —— [runInstall] 在"还没起任何进程"的各段之间
+     * 用它回答"我还该继续吗"。
+     *
+     * ## 为什么必须有它（原缺陷）
+     *
+     * [cancel] 只能杀**已经存在**的进程：它做的是"标 cancelled + cancel() job + 放闸 +
+     * [killActive]"。而任务体在 fork 之前要跑一长段**没有任何挂起点/取消检查**的活：
+     * `mkdirs` / [cleanupStaleInstallProcess]（内含最长 [STALE_INSTALL_QUIT_GRACE_MS] 的宽限轮询）/
+     * [checkInstallSpace]（查磁盘）/ wake lock / [ProotProcessExecutor.run] 内的 preflight（含
+     * `DshDns.sync` 写 resolv.conf）与子进程表快照。协程的取消是**协作式**的 —— 这几段一行都没有
+     * 检查取消，于是 `cancel()` 之后 body 照旧往下走，**fork 仍然会发生**。
+     * 后果：`delete` 的取消信号发完了、等待循环三条件全假（闸门被 cancel 放掉、pid 文件还没写且
+     * pid 解析失败的机型上整场安装都没有这个文件）→ `deleteRecursively()` 与刚起来的 npm
+     * 抢同一个 `node_modules`（BL-244 的现场）。
+     *
+     * ## 判据为什么是这两个
+     *
+     * - `!isActiveInstallOwner(id, job)`：登记表里不再是我（被接管）**或** `cancelled` 标记在
+     *   （被取消）。与 [onInstallLine] 的归属门**同一判据**，语义已在生产验证，不会误吞正常安装。
+     * - `myJob?.isActive == false`：比 `cancelled` 集合更**根源** —— 覆盖"协程已被取消、
+     *   但 `cancelled` 标记已被某条收尾路径清掉"的窄窗（例如取消后立刻重装、旧任务还在跑）。
+     *   两者有重叠，但不是冗余：第一条看的是"共享状态归谁"，这一条看的是"协程还活不活"。
+     *
+     * ## 语义（调用方必须遵守）
+     *
+     * 返回 true ⇒ 调用方立刻 `return false`、**不 fork、不写 pid 文件**。`runInstall` 的 false
+     * 会被 [installJobBody] 收成"本次没装成"，此时若 `cancelled` 标记在，[resolveInstallOutcome]
+     * 走的就是既有的"取消"支路（不重复上报 CANCELLED、不把实例标成 BROKEN）——那条路径现成，
+     * 本检查点不需要动它。
+     *
+     * @param stage 出事故时排障用的站位标记（英文），会出现在日志行里
+     */
+    private fun abortIfInstallCancelled(instance: DshInstance, myJob: Job?, stage: String): Boolean {
+        if (isActiveInstallOwner(instance.id, myJob) && myJob?.isActive != false) return false
+        // 实例级：这是"这个实例的这次安装为什么一个进程都没起来"的唯一解释，必须留在它的日志里
+        DshLogBus.appendFor(
+            instance.id,
+            "[install] cancelled before forking proot ($stage); nothing was started"
+        )
+        return true
+    }
 
     /** BL-043①：该实例是否仍有进行中的安装条目（判据之一，见 [cancel]） */
     private fun hasRunningInstall(status: InstallStatus?): Boolean = status?.running == true
@@ -919,6 +983,11 @@ class DshInstaller(
     private suspend fun runInstall(instance: DshInstance, version: String, myJob: Job?): Boolean {
         errorSummaries.remove(instance.id)
         errorTails.remove(instance.id)
+        // ★ BL-244 检查点 1/2（入口）：函数体从这里到 fork 之间全是**没有挂起点**的耗时活
+        //   （mkdirs / 孤儿清理最长 2s / 空间检查 / wake lock / preflight 写 DNS / 子进程表快照），
+        //   协程取消在这几段里**不会被察觉**。所以第一件事就是问"我还该继续吗"——
+        //   放在这里可以把后面所有活（含 cleanupStaleInstallProcess 里最长 2s 的 SIGQUIT 宽限）全省掉。
+        if (false && abortIfInstallCancelled(instance, myJob, "entry")) return false
         val script = "${ProotCommand.GUEST_ROOT}/scripts/setup-node-dsh.sh"
         // ★ BL-032：外层预检已删（本函数原来在此调 ProotCommand.preflight）。
         //   ProotProcessExecutor.run() 内部第 1 步就是同一预检（同参同判据），双调用只会让 DNS 同步
@@ -948,6 +1017,11 @@ class DshInstaller(
         //   放在空间检查之前：残留进程可能还在写盘，先停它，报出的"剩余空间"才是准的。
         cleanupStaleInstallProcess(instance)
 
+        // ★ BL-244 检查点 2/2（cleanupStale 之后）：这一段是最容易命中"cancel 落在 fork 前"的
+        //   窗口 —— [cleanupStaleInstallProcess] 里有 SIGQUIT 后的宽限轮询（最长
+        //   [STALE_INSTALL_QUIT_GRACE_MS]），期间用户完全可能点下删除。代价为零，所以再守一道。
+        if (abortIfInstallCancelled(instance, myJob, "after stale cleanup")) return false
+
         // ★ 起 npm 之前的空间检查（判据与"要留多少"见 [checkInstallSpace] / [nodeModulesBudgetBytes]）。
         //   放在这里是因为：① 预检已经过了，失败原因不会再被预检文案顶掉；
         //   ② 目录已经建好，报出来的"当前剩余"就是真正要写入的那个分区；
@@ -972,6 +1046,12 @@ class DshInstaller(
         //   与读它的 finally 不一定同线程。CAS(0, pid) 同时保证"只认第一次回调"（防御重放）。
         val installPid = AtomicLong(0L)
         var exit = -1
+        // ★ BL-244 检查点 3/3（**紧邻 fork 之前**，最后一道）：上面的空间检查之后、wake lock 与
+        //   [ProotProcessExecutor.run]（其内部第 118 行才是真正的 `ProcessBuilder.start()`）之前。
+        //   这一道是"不 fork"的**最后机会** —— 一旦进了 run()，preflight / 快照 / start 都不可打断
+        //   （既有结论见 [cancel]：协程取消打不断阻塞调用）。所以判据与上面两道完全相同，
+        //   但位置必须贴住 fork，不能只靠前面那两道（它们与 fork 之间还隔着空间检查与 wake lock）。
+        if (abortIfInstallCancelled(instance, myJob, "before forking")) return false
         try {
             // ★ F2-7（BL-051）：整段 npm 执行持 PARTIAL_WAKE_LOCK —— 安装是 10~30 分钟的
             //   CPU/网络密集活，灭屏进 Doze 会被掐网络（npm 卡死）或被 LMK 直接杀。超时用
@@ -1747,6 +1827,20 @@ class DshInstaller(
          */
         fun shouldEmitLog(nowMs: Long, lastEmitMs: Long, important: Boolean): Boolean =
             important || lastEmitMs == 0L || nowMs - lastEmitMs >= LOG_THROTTLE_MIN_INTERVAL_MS
+
+        /**
+         * ★ BL-244：`DshInstances.delete` 要不要为"刚取消的那次安装"付一次等待（= 要不要 join）。
+         *
+         * 判据就一条：**有任务、且它还没结束**。抽成纯函数是为了可单测（[Job.isCompleted] 在
+         * 生产里由协程库回答，这里只负责"该不该等"这个决定本身）。
+         *
+         * - `job == null`：请求删除时本来就没有安装任务（`installJobOf` 返回 null）——不等。
+         * - `job.isCompleted`：任务早已收尾（含"提交后从未被调度就被取消"的 LAZY job）——
+         *   [Job.join] 会立即返回，等它等价于不等，但仍然正确。
+         * - `isActive` **不参与**判据：一个已被 cancel 但仍在收尾的 job（正在跑 finally 的清理、
+         *   正在等 proot 退出）恰恰是最该等的那一种 —— 用 isActive 会把它们全排除掉。
+         */
+        fun shouldWaitForInstallTask(job: Job?): Boolean = job != null && !job.isCompleted
 
         /**
          * BL-043①：cancel 入口守卫的判据（两条都要，理由见 [cancel] 的方法注释）。

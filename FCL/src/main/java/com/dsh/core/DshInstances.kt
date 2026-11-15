@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -1124,6 +1125,10 @@ object DshInstances {
             // 整行无点击监听（TaskAdapter 对终态强制 Action.NONE 并清监听），点不出指向已删实例的界面。
             val appCtx = DshAppContextHolder.context
             val installer = appCtx?.let { DshServices.installer(it) }
+            // ★ BL-244（步骤 2）：取消之前先把**这一次**安装任务的 Job 抓在手里。
+            //   为什么必须在 cancel 之前：cancel 之后紧接着可能就有新一次安装接管登记表
+            //   （`running[id] = jobB`），那时再读就抓到别人的 job 了。
+            val installJob = installer?.installJobOf(id)
             val cancelNote = if (installer == null) {
                 "skipped (no app context)"
             } else {
@@ -1163,6 +1168,45 @@ object DshInstances {
             //   且不在本进程的 actives 里、cancel 杀不到它）。
             // 超时处理沿用既有口径（硬删 + 全局日志），不是新语义。
             val waitDeadline = System.currentTimeMillis() + DELETE_WAIT_TIMEOUT_MS
+            // ★ BL-244（步骤 2）：等**刚刚被取消的那一次安装任务**真正收尾，再进下面的轮询。
+            //
+            // ## 为什么这是必须的（三条件循环单独不够）
+            // [DshInstaller.cancel] 只能杀"已经存在的进程"，而任务体在 fork 之前有一整段没有
+            // 挂起点的耗时活。cancel 之后 body 照旧往下走、仍会 fork npm —— 而那时三条件里的
+            // `isInstalling` 已被 cancel 自己放掉（闸门），`installProotStillAlive` 在 pid 文件
+            // 还没写（fork 未发生）或 pid 解析失败的机型上**恒为 false**。于是循环第一轮就退出，
+            // `deleteRecursively()` 与刚 fork 出来的 npm 抢同一个 node_modules。
+            // 配合 `DshInstaller.runInstall` 的 fork 前取消检查点，这里的 join 把"取消 → 目录被删"
+            // 这段顺序钉住：任务体（含它的 finally 与 pid 文件清理）先收尾，目录才可能被删。
+            //
+            // ## ★ 硬约束 1：等待必须在安装器那把所有权锁**之外**
+            // 本函数全程不取安装器那把对象监视器（它不碰安装器的任何所有权状态），join 也不取
+            // 任何锁。反过来做（持那把锁等 job）会成环：任务体的 finally 要拿同一把锁才能
+            // `running.remove` + 放闸；持锁等待 ⇒ job 永远收不了尾 ⇒ 白等满 deadline。
+            // 更糟的是 `install()` 在**主线程**被调用（实例列表页的"重试"/设置页的"重新安装"），
+            // 对象监视器会把主线程阻塞住 —— 那就是 ANR。
+            // 同理，**join 也不许阻塞线程**：`Job.join()` 是挂起而非阻塞，且本函数跑在
+            // [DshAppScope] 的 IO 弹性线程池上，等待期间不占线程。
+            //
+            // ## ★ 硬约束 2：与下面的轮询**共用同一条** [waitDeadline]
+            // 不新增第二个预算（与 BL-151 "总预算不叠加"同一口径）：用户看到的"删除中"最长仍是
+            // [DELETE_WAIT_TIMEOUT_MS]。join 超时即走既有硬删路径，行为与修复前等价 ——
+            // 也就是说这一改**只会更早放行**（任务提前收尾就立刻进循环），不会更晚。
+            //
+            // 用捕获的 [installJob] 而不是"等 running 表清空"：表会被"取消后秒重装"覆盖成新任务，
+            // 而且未调度即取消的 job 会永久残留在表里（见 [DshInstaller.installJobOf] 的说明）。
+            // `join()` 对"已完成"与"从未被调度"的 job 都立即返回。
+            if (DshInstaller.shouldWaitForInstallTask(installJob)) {
+                val remaining = waitDeadline - System.currentTimeMillis()
+                if (remaining > 0) {
+                    val joined = withTimeoutOrNull(remaining) { installJob?.join() }
+                    // 保持全局：这是"删除事务等了安装任务 / 是不是等到了"的唯一证据。
+                    DshLogBus.append(
+                        "[instances] install task for ${inst?.name ?: id} " +
+                            if (joined != null) "finished before delete" else "still running at deadline"
+                    )
+                }
+            }
             while (DshRuntime.activeInstanceId() == id ||
                 installer?.isInstalling(id) == true || installProotStillAlive(id)
             ) {
