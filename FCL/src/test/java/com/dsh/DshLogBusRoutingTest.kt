@@ -272,8 +272,18 @@ class DshLogBusRoutingTest {
     }
 
     /**
-     * id 里若含路径分隔符/盘符字符，落盘必须被转义：否则会写到别的目录或与别的实例互相覆盖。
+     * id 里若含路径分隔符，落盘必须被转义：否则会写到别的目录或与别的实例互相覆盖。
      * 正常 id（`inst-1700000000000-3-7f2a`）全是安全字符，这里只是把防御行为钉住。
+     *
+     * ★ R43 / SP-05：**`:` 那条断言已显式改写**（原来是 `assertFalse(name.contains(':'))`）。
+     *   新规则是「日志文件名与目录名同一个折叠」（[com.dsh.core.DshPaths.safeInstanceDirName]，
+     *   只折 `/` `\` NUL），所以 `:` 不再被折 —— 它在安卓内部存储是合法字符。
+     *   为了与目录名逐字节一致，**不能**只折日志文件名里的 `:`：
+     *   要折就得连 `safeInstanceDirName` 一起折，那等于改**目录名**，
+     *   直接打断 `id ↔ 目录` 的 identity 映射（`DshInstances` / `DshInstaller` / `DshRuntime`
+     *   全按 id 拼路径，其中三处还是手拼 guest 路径、绕过 `DshPaths`）。
+     *   **不串台**由「日志与目录用同一个折叠函数」保证（两者不再分叉），不依赖字符白名单 ——
+     *   但那个函数本身不单射，`a\b` 与 `a_b` 这类可达目录名仍会相撞（R43 已单独登记）。
      */
     @Test
     fun instanceLogFileEscapesUnsafeIdCharacters() {
@@ -286,8 +296,9 @@ class DshLogBusRoutingTest {
             f.parentFile
         )
         assertFalse("文件名里不能出现 '/'", f.name.contains('/'))
-        assertFalse("文件名里不能出现 ':'", f.name.contains(':'))
         assertFalse("文件名里不能出现 '\\'", f.name.contains('\\'))
+        // R43：':' 保留（理由见 KDoc）—— 它不再是"不安全字符"，而是与目录名一致的普通字符
+        assertTrue("':' 保留（与目录名同口径）: ${f.name}", f.name.contains(':'))
         assertTrue(f.name.startsWith("instance-"))
         assertTrue(f.name.endsWith(".log"))
     }

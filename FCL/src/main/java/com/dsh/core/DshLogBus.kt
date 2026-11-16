@@ -730,17 +730,63 @@ object DshLogBus {
      *   `LOG_FILE.parentFile` 就是那个目录 —— 全局日志文件改路径时，实例日志跟着走，不会分叉。
      *   （代价：读起来多一层推导，所以在这里写清楚。）
      *
-     * ⚠️ 实例 id 目前由 `DshInstances.newId()` 生成，形如 `inst-1700000000000-3-7f2a`，
-     *   全是文件安全字符；但这里仍做一次白名单转义（见 [safeFileId]）作为防御，
-     *   万一将来 id 生成方式变了（含 `/`、`\`、`:`），落盘会写到别的目录或互相覆盖，
-     *   那种 bug 极难查。
+     * ## ★ SP-05：文件名折叠必须与**目录名**用的是同一个规则
+     *
+     * 这里委托 [DshPaths.safeInstanceDirName]（只折 `/`、`\`、NUL），**不再**用私有白名单。
+     *
+     * 旧实现的 `safeFileId` 把除 `isLetterOrDigit` / `-` / `_` 之外的一切字符折成 `_`，于是一批
+     * **不同**的合法 id 折到**同一个**文件名：
+     *
+     * ```
+     * instances/my app   → id "my app"  ┐
+     * instances/my.app   → id "my.app"  ┼→ instance-my_app.log   ← 三条流写同一个文件
+     * instances/my_app   → id "my_app"  ┘
+     * ```
+     *
+     * 这些 id 是真实存在的：`rebuildMissingInstances` 原样用目录名当 id（零校验），而
+     * `instances/` 通过 `--bind=<ROOT_DIR>:$GUEST_ROOT` 对 rootfs 可写 —— rootfs 里 `mkdir` 一个
+     * 含空格/点的目录，冷启就会被收编成实例。后果是**日志串台**，且 `DshInstances.delete` 删一个
+     * 实例会把另一个实例的日志文件一起 `delete()` 掉。
+     *
+     * ## 为什么"与目录名同规则"就够了（与目录名同口径，但折叠函数本身**不单射**）
+     *
+     * 先说清 SP-05 到底修了什么、没修什么 —— **别把这里读成"碰撞已被消灭"**：
+     *
+     * **修掉的**：日志文件名与实例目录名现在用**同一个**折叠函数
+     * （[DshPaths.safeInstanceDirName]），所以两者**不可能再分叉**。
+     * 可断言的不变量：`instanceLogFile(id).name` 去掉 `instance-` / `.log`
+     * **恒等于** `DshPaths.instanceDir(id).name`。
+     *
+     * **没修的**：那个函数本身**不单射**。`a\b` 与 `a_b` 是两个不同且**都可达**的目录名
+     * （Android/Linux 内核只禁止文件名里的 `/` 与 NUL，反斜杠是合法普通字符），
+     * 但都折成 `a_b`。所以 SP-05 的效果是**把日志的碰撞降到与目录同等级**，
+     * 而不是消灭碰撞 —— 日志这一层**不可能**单独消灭它，那要改折叠规则本身
+     * （改它等于改所有已存在目录名的解析结果，是破坏性迁移）。
+     * ⇒ 残留缺陷已单独登记：`docs/BUGLEDGER.md` 的「SP-05 修复中暴露的新缺陷（round43）
+     *   —— `safeInstanceDirName` 在可达目录名上**不单射**」，**不在 SP-05 范围**。
+     *
+     * 收编来的正常 id **逐字节等于目录名**（`File.name` 永不含 `/`、NUL ⇒ `safeInstanceDirName`
+     * 对其恒等），`buildId` 生成的 `inst-<ms>-<seq>-<hex>` 也是该函数的不动点 ——
+     * 这两类 id 不受上述缺陷影响。
+     *
+     * ## 代价（已评估，接受）
+     *
+     * 含空格/点/括号的 id 会得到含这些字符的文件名（如 `instance-my app.log`）。这是**与目录名一致**
+     * 的必然结果：想折掉它们就必须连目录名一起折，而那会打断 `id ↔ 目录` 的 identity 映射
+     * （`DshInstances` / `DshInstaller` / `DshRuntime` 全按 id 拼路径）。中文本来就在文件名里
+     * （`Char.isLetterOrDigit('中') == true`，旧白名单也不折叠它），不是新增风险。
+     * 另：日志文件名**没有读取方**（只有 [appendToFile] / [rotateIfTooBig] 两处写 IO），
+     * 所以改名的实际影响仅是 `logs/` 里多一个旧名字的孤儿文件。
+     *
+     * ⚠️ 同族既存问题（不在 SP-05 范围）：文件名长度不设上界，≥243 字节的目录名会撞 `NAME_MAX`。
      */
     fun instanceLogFile(instanceId: String): File {
         // 未初始化（[DshPaths.loadPaths] 还没跑）时不能崩：正常流程下 Application 启动时就已就绪，
         // 走到兜底分支只可能是单测或异常时序，此时落到临时目录比抛异常好。
+        // 注意 [DshPaths.safeInstanceDirName] 只读入参、不碰任何 lateinit 字段，两个分支都不会抛。
         val logDir = runCatching { File(DshPaths.LOG_FILE).parentFile }.getOrNull()
             ?: File(System.getProperty("java.io.tmpdir") ?: ".", "dsh/logs")
-        return File(logDir, "instance-${safeFileId(instanceId)}.log")
+        return File(logDir, "instance-${DshPaths.safeInstanceDirName(instanceId)}.log")
     }
 
     /**
@@ -1041,15 +1087,6 @@ object DshLogBus {
     private fun fileFor(instanceId: String): File {
         if (!DshPaths.isLoaded) return instanceLogFile(instanceId)
         return instanceFiles.getOrPut(instanceId) { instanceLogFile(instanceId) }
-    }
-
-    /** 文件名白名单：只允许字母/数字/`-`/`_`，其余一律换成 `_`（理由见 [instanceLogFile]） */
-    private fun safeFileId(instanceId: String): String {
-        val sb = StringBuilder(instanceId.length)
-        for (c in instanceId) {
-            sb.append(if (c.isLetterOrDigit() || c == '-' || c == '_') c else '_')
-        }
-        return sb.toString()
     }
 
     // --- 内部：合并刷新 -----------------------------------------------------
