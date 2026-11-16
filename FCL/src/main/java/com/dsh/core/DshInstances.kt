@@ -2091,7 +2091,14 @@ object DshInstances {
         loadFrom(f)
         if (_manifestLoadFailed.value) return false
         // 读成功了：补跑一次状态校准（理由见 KDoc）。
-        repair()
+        // ★ SP-06：repair() 是 O(N) 的文件 IO（逐实例 cleanupLegacyCredentialFiles 每次 2 次
+        //   exists + 每实例 2 次 readInstallFacts（各含 2 次 stat，命中时再读一次 package.json
+        //   并解析），合计 ≥4N 次文件系统调用 + 最多 N 次 JSON 解析），而本函数由
+        //   横幅「重试」在主线程直接调用（DshInstancesUI.kt:688-691）—— 慢存储 + 实例多时
+        //   有 ANR 风险。它**不影响本函数的返回值**（repair 返回 Unit），正常启动路径
+        //   （init()，:756）本来就是在 IO 上 `DshAppScope.scope.launch { repair() }` ——
+        //   这里与之一致即可，UI 侧与 manifestRetryPlan 的文案分叉（C-06-01）一个字都不用动。
+        DshAppScope.scope.launch { repair() }
         return true
     }
 
