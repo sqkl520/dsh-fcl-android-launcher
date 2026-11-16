@@ -18,6 +18,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.lang.reflect.Field
@@ -53,8 +54,8 @@ import kotlin.coroutines.EmptyCoroutineContext
  * |---|---|---|
  * | 纯判据 | [shouldWaitForInstallTask*] | `delete` 该不该为一次安装付等待 |
  * | 只读访问器 | [installJobOf*] | 没任务时必须是 null（不能拿 `containsKey` 之类的近似糊过去） |
- * | **端到端（真跑生产代码）** | [cancelledInstallNeverForksProot] | 反射真调 `runInstall`：替身的 `run` **一次都没被调用**、日志出现检查点行 |
- * | 结构钉子 | [checkpointPrecedesFork] / [deleteJoinsOutsideTheInstallerLock] 等 | 防"哪天有人把检查点挪到 fork 之后 / 把 join 挪进锁里" |
+ * | **端到端（真跑生产代码）** | [cancelledInstallNeverForksProot] | 反射真调 `runInstall`：替身的 `run` **一次都没被调用**、日志出现**入口**检查点行（钉 `(entry)`） |
+ * | 结构钉子 | [checkpointPrecedesFork] / [entryCheckpointPrecedesFirstDiskWork] / [deleteJoinsOutsideTheInstallerLock] 等 | 防"哪天有人把检查点挪到 fork 之后 / 删掉入口那道 / 把 join 挪进锁里" |
  *
  * ## 为什么端到端那条**不需要任何时序运气**
  *
@@ -71,6 +72,32 @@ class R40InstallForkGuardTest {
     private val savedPaths = HashMap<String, Any?>()
     private var savedAppContext: Any? = null
     private var appContextSaved = false
+
+    /**
+     * ★ 每个用例开始前**重建**本类实例的日志流。
+     *
+     * 缺陷：`DshLogBus` 有 `MAX_STREAMS = 32` 的 LRU 流淘汰（[DshLogBus.streams] 是
+     * accessOrder=true 的 LinkedHashMap，[DshLogBus.streamFor] 建新流时若超限就淘汰最久未用的）。
+     * 本类用一个**常量** id（[INSTANCE_ID]），而全量套件里被 `appendFor` / `snapshotFor` 触碰过的
+     * 实例 id 有 37 个以上 —— 于是这条流可能在**别的用例跑的时候**被挤出去。
+     *
+     * 为什么只有 [resetInstanceLogStream] 不够、[@After] 里的清理也不够：`@After` 保证的是
+     * "本用例跑完把自己清干净"，保证不了"本用例**开始**时流还在"。淘汰是**别人**触发的，
+     * 发生在两次用例之间，`@After` 那行 `removeStream` 根本没机会看到。
+     *
+     * 为什么"重建"就够（而不是改随机 id）：`appendFor` 对**已淘汰**的 id 本来就会重建流
+     * （[DshLogBus.streamFor] 的 get-or-create），所以真正要防的不是"读的时候流不存在"，
+     * 而是"**本用例写的行还没落进快照，流就被后续的写挤掉了**"。在用例开始前先删一次，
+     * 让本用例写的行落在一个**刚刚新建**的流上，这条流就是 LRU 里最新的那个 —— 用例自己
+     * 不再碰别的 id，它就不会在 append→读取这段窗口里被挤出去。
+     *
+     * ⚠️ 这是**测试**在自建前置，不是产品缺陷：全局流是进程级单例、容量有限是设计
+     * （K10 的 backstop）。生产代码不动。
+     */
+    @Before
+    fun resetInstanceLogStream() {
+        runCatching { DshLogBus.removeStream(INSTANCE_ID) }
+    }
 
     @After
     fun restoreGlobalState() {
@@ -251,9 +278,18 @@ class R40InstallForkGuardTest {
             File(DshPaths.instanceDir(INSTANCE_ID), DshInstaller.INSTALL_PID_FILE_NAME).isFile
         )
         val lines = instanceLogLines(INSTANCE_ID)
+        // ★ BL-245：这里必须钉住**完整 stage 后缀**，不能只 contains 前缀。
+        //   `abortIfInstallCancelled` 给三道检查点打的日志前缀**完全相同**
+        //   （`cancelled before forking proot`），只有 `($stage)` 不同 —— 只匹配前缀时，
+        //   三道里**任意一道**生效它就绿。实测代价：入口那道被写成 `if (false && ...)`
+        //   （永不执行）时，本用例**仍然 PASS**，整整一轮都没人发现（假绿，真事故）。
+        //   钉住 `(entry)` 之后，这条证明的是"**入口**那道真的生效了"。
+        val entryLine = "cancelled before forking proot (entry)"
         assertTrue(
-            "★ 实例日志里必须能看出「这次没 fork 是因为被取消」（排障唯一入口），实际：$lines",
-            lines.any { it.contains("cancelled before forking proot") }
+            "★ 实例日志里必须出现**入口**检查点这一条：「$entryLine」。" +
+                "三道检查点日志前缀相同、只有 stage 后缀不同，所以必须钉完整字符串（只 contains 前缀 " +
+                "会让入口那道失效也照样绿 —— BL-245 就是这么漏的）。实际：$lines",
+            lines.any { it.contains(entryLine) }
         )
         // 未初始化路径系统的兜底：确认上面确实用的是临时目录（防止用了宿主真实路径）
         assertTrue("前置：临时根目录必须真的被用上", root.isDirectory)
@@ -269,29 +305,106 @@ class R40InstallForkGuardTest {
      * 为什么只能做源码形状断言：一旦进了 `ProotProcessExecutor.run`，`preflight` / 子进程表快照 /
      * `ProcessBuilder.start()` 都不可打断（协程取消打不断阻塞调用）。所以"检查点晚于 fork"等价于
      * "检查点不存在"，而这件事在运行期看不出来（进程已经起来了）。
+     *
+     * ★ BL-245：原来用 `lastIndexOf("abortIfInstallCancelled(")` 取"最后一道"，比的是"**某一道**
+     * 在 fork 之前" —— 入口那道被删掉照样绿。现在改成：**每一道**检查点（可执行代码里枚举出来的
+     * 全部调用）都必须在 fork 之前，一条都不许例外。同时剥掉注释：KDoc 里成段提到这个函数名与
+     * `proot.run(`，裸 indexOf 会命中注释（本文件 [deleteJoinsOutsideTheInstallerLock] 实测踩过）。
      */
     @Test
     fun checkpointPrecedesFork() {
-        val body = sliceFun(installerSource(), "private suspend fun runInstall(", "private fun onInstallLine(")
-        val checkpointAt = body.lastIndexOf("abortIfInstallCancelled(")
-        assertTrue("★ runInstall 里必须至少调用一次取消检查点", checkpointAt >= 0)
+        val body = stripComments(
+            sliceFun(installerSource(), "private suspend fun runInstall(", "private fun onInstallLine(")
+        )
+        val checkpointAts = Regex("abortIfInstallCancelled\\(").findAll(body).map { it.range.first }.toList()
+        assertTrue("★ runInstall 里必须至少调用一次取消检查点", checkpointAts.isNotEmpty())
 
         val directAt = body.indexOf("(proot as? ProotProcessExecutor)?.run(")
         val fallbackAt = body.indexOf("proot.run(")
         val forkAt = listOf(directAt, fallbackAt).filter { it >= 0 }.minOrNull() ?: -1
         assertTrue("前置：runInstall 里必须能定位到 proot 调用点", forkAt >= 0)
 
-        assertTrue(
-            "★ 取消检查点必须出现在**所有** proot 调用点之前（检查点晚于 fork = 没检查点）" +
-                "：checkpointAt=$checkpointAt forkAt=$forkAt",
-            checkpointAt < forkAt
-        )
+        checkpointAts.forEach { at ->
+            assertTrue(
+                "★ **每一道**取消检查点都必须出现在**所有** proot 调用点之前（检查点晚于 fork = " +
+                    "没检查点）：at=$at forkAt=$forkAt all=$checkpointAts",
+                at < forkAt
+            )
+        }
         // wake lock 段落里就是 fork —— 检查点也必须在它之前，否则"起了进程才判断"没有意义
         val wakeLockAt = body.indexOf("withRuntimeBusyWakeLock(")
         assertTrue("前置：runInstall 里必须能定位到 wake lock 段", wakeLockAt >= 0)
+        checkpointAts.forEach { at ->
+            assertTrue(
+                "★ 每一道检查点都必须在 wake lock（= npm 执行段）之前：at=$at wakeLockAt=$wakeLockAt " +
+                    "all=$checkpointAts",
+                at < wakeLockAt
+            )
+        }
+    }
+
+    /**
+     * ★ BL-245：**入口**检查点必须存在，且必须在 `mkdirs` / `cleanupStaleInstallProcess` 之前。
+     *
+     * ## 为什么非有这条（不是重复上一条）
+     *
+     * 上一条 [checkpointPrecedesFork] 用的是 `lastIndexOf("abortIfInstallCancelled(")` —— 它只要
+     * "某一道在 fork 之前"，把**入口那道整行删掉**照样绿（另外两道还在）。实测：入口那道被写成
+     * `if (false && abortIfInstallCancelled(...))` 时，`cancelledInstallNeverForksProot` 与
+     * `checkpointPrecedesFork` 双双 PASS（前者靠"后 stale cleanup"那道兜住日志，后者靠它兜住
+     * 位置）。于是"cancel 落在入口到清理残留之间"这段（含最长 2s 的 SIGQUIT 宽限）仍然无检查点，
+     * 正是 BL-244 要省掉的那一段。
+     *
+     * ## 为什么锚**可执行代码**而不是 contains
+     *
+     * 本仓有实测教训：`runInstall` 的 KDoc/行注释里成段提到 `abortIfInstallCancelled` 与
+     * `mkdirs`（第 986~989 行那段就在讲它们），裸 `contains` 命中注释 ⇒ 把调用删掉、注释留着
+     * 的变异照样绿（[deleteJoinsOutsideTheInstallerLock] 就是这么踩到过一次）。所以先
+     * [stripComments] 剥掉注释，再在**剥完的**骨架上找调用点。
+     *
+     * ## 为什么还要比"早于 mkdirs"
+     *
+     * "入口检查点"的全部价值就是省掉它后面的活。挪到第一个 `mkdirs`（或
+     * [cleanupStaleInstallProcess]）之后 = 用户取消时那段活已经干完了，检查点只剩个名字。
+     */
+    @Test
+    fun entryCheckpointPrecedesFirstDiskWork() {
+        val body = stripComments(
+            sliceFun(installerSource(), "private suspend fun runInstall(", "private fun onInstallLine(")
+        )
+        val entryCall = "abortIfInstallCancelled(instance, myJob, \"entry\")"
+        val entryAt = body.indexOf(entryCall)
         assertTrue(
-            "★ 检查点必须在 wake lock（= npm 执行段）之前：checkpointAt=$checkpointAt wakeLockAt=$wakeLockAt",
-            checkpointAt < wakeLockAt
+            "★ runInstall 的可执行代码里必须有**入口**检查点：`$entryCall`。" +
+                "找不到 ⇒ 入口那道被删了（另外两道还在，所以别的用例不会红；这一段" +
+                "「进函数 → 清理残留」之间的活就重新变成无检查点，BL-244 的成因照旧）。",
+            entryAt >= 0
+        )
+        // 第一处磁盘活：mkdirs 或 孤儿清理，取最早的那个
+        val mkdirsAt = body.indexOf("mkdirs()")
+        val staleAt = body.indexOf("cleanupStaleInstallProcess(")
+        val firstWorkAt = listOf(mkdirsAt, staleAt).filter { it >= 0 }.minOrNull() ?: -1
+        assertTrue("前置：runInstall 里必须能定位到 mkdirs / cleanupStaleInstallProcess", firstWorkAt >= 0)
+        assertTrue(
+            "★ 入口检查点必须在**第一处磁盘活之前**（mkdirs / cleanupStaleInstallProcess 含最长 2s " +
+                "的 SIGQUIT 宽限；检查点放在它们之后就等于没省掉任何东西）：" +
+                "entryAt=$entryAt firstWorkAt=$firstWorkAt mkdirsAt=$mkdirsAt staleAt=$staleAt",
+            entryAt < firstWorkAt
+        )
+        // 三道的 stage 必须是**三个不同**的值：日志前缀相同，stage 是唯一能区分"哪一道生效"的东西。
+        // 有人复制粘贴把 stage 写成同一个值时，运行期就再也分不出三道了（BL-245 的盲区正是这个）。
+        val stages = Regex("""abortIfInstallCancelled\(instance, myJob, "([^"]+)"\)""")
+            .findAll(body).map { it.groupValues[1] }.toList()
+        assertEquals(
+            "★ runInstall 里应有三道取消检查点（入口 / 清理残留之后 / fork 紧前面），实际 stage=$stages",
+            3,
+            stages.size
+        )
+        assertEquals(
+            "★ 三道的 stage 必须互不相同 —— 日志前缀相同，stage 是唯一能区分「哪一道生效」的标识：" +
+                "实际 stage=$stages",
+            3,
+            stages.toSet().size
         )
     }
 

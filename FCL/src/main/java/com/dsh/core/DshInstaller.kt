@@ -983,11 +983,15 @@ class DshInstaller(
     private suspend fun runInstall(instance: DshInstance, version: String, myJob: Job?): Boolean {
         errorSummaries.remove(instance.id)
         errorTails.remove(instance.id)
-        // ★ BL-244 检查点 1/2（入口）：函数体从这里到 fork 之间全是**没有挂起点**的耗时活
+        // ★ BL-244 检查点 1/3（入口）：函数体从这里到 fork 之间全是**没有挂起点**的耗时活
         //   （mkdirs / 孤儿清理最长 2s / 空间检查 / wake lock / preflight 写 DNS / 子进程表快照），
         //   协程取消在这几段里**不会被察觉**。所以第一件事就是问"我还该继续吗"——
         //   放在这里可以把后面所有活（含 cleanupStaleInstallProcess 里最长 2s 的 SIGQUIT 宽限）全省掉。
-        if (false && abortIfInstallCancelled(instance, myJob, "entry")) return false
+        // ★ BL-245：这一行曾被写成 `if (false && abortIfInstallCancelled(...))`（变异残留），
+        //   于是**入口检查点从不执行**、等于没有 —— 而编译通过、全量测试也全绿（当时的端到端用例
+        //   只 contains 前缀 "cancelled before forking proot"，另两道打同一前缀，任一道生效它就绿）。
+        //   现在由 R40 的 entry stage 断言 + R32 的"短路成常量"守卫双向钉住，别再让它退回去。
+        if (abortIfInstallCancelled(instance, myJob, "entry")) return false
         val script = "${ProotCommand.GUEST_ROOT}/scripts/setup-node-dsh.sh"
         // ★ BL-032：外层预检已删（本函数原来在此调 ProotCommand.preflight）。
         //   ProotProcessExecutor.run() 内部第 1 步就是同一预检（同参同判据），双调用只会让 DNS 同步
@@ -1017,7 +1021,7 @@ class DshInstaller(
         //   放在空间检查之前：残留进程可能还在写盘，先停它，报出的"剩余空间"才是准的。
         cleanupStaleInstallProcess(instance)
 
-        // ★ BL-244 检查点 2/2（cleanupStale 之后）：这一段是最容易命中"cancel 落在 fork 前"的
+        // ★ BL-244 检查点 2/3（cleanupStale 之后）：这一段是最容易命中"cancel 落在 fork 前"的
         //   窗口 —— [cleanupStaleInstallProcess] 里有 SIGQUIT 后的宽限轮询（最长
         //   [STALE_INSTALL_QUIT_GRACE_MS]），期间用户完全可能点下删除。代价为零，所以再守一道。
         if (abortIfInstallCancelled(instance, myJob, "after stale cleanup")) return false
