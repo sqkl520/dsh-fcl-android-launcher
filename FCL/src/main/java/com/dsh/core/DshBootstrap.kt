@@ -357,6 +357,85 @@ internal fun isReplacingExistingRootfs(rootfsDir: File): Boolean {
 }
 
 /**
+ * ★ RE-09：清掉上一轮中断遗留的 `rootfs.tmp`，**并且把"没清掉"这件事留痕**。
+ *
+ * ## 为什么清理失败必须留痕（而不是像旧代码那样静默）
+ *
+ * 这一步唯一的目的就是"把可回收空间还给下面那次空间检查"（BL-072：不清的话 `.tmp` 会被算进
+ * 已占用，中断遗留越多越被误拦）。而旧实现是裸的
+ * `runCatching { …deleteRecursively() }` —— 异常被吞、`Boolean` 返回值被当语句丢掉，于是：
+ * 真机上 SELinux 拒删 / 目录里有 root 属主文件 / 被别的进程占着 时，用户拿到的仍是
+ * **"空间不足，需要 X，现有 Y"**，而真实原因是 **"rootfs.tmp 没删掉"**；界面没有"删 rootfs.tmp"
+ * 按钮，日志里也没有这条线索 —— 排障者拿不到任何可操作的抓手。
+ *
+ * ## 三种结果分开处置（只有第三种才报警）
+ *
+ * | 结果 | 日志 |
+ * |---|---|
+ * | 本来就不存在 | **不记** —— 绝大多数启动都走这条，为它刷日志只会淹没真问题 |
+ * | 删干净了 | 不记（`deleteRecursively()` 报了 false 但路径确实已消失时才记一行 INFO） |
+ * | 抛异常 / 没删干净 | 记 ERROR：含**绝对路径**、异常摘要，以及"仍然存在时它占了多少" |
+ *
+ * ## 判"删完还在不在"而不是只信返回值
+ *
+ * `deleteRecursively()` 的布尔只在"每一条都删掉"时为 true；它返回 false 时**已经把能删的删了**。
+ * 决定空间门槛的其实是"这个路径还在不在"（[isReplacingExistingRootfs] 与
+ * `DshPaths.freeSpaceBytes()` 都读盘），所以这里以 `exists()` 为结论、把布尔只当诊断信息 ——
+ * 与 [swapRootfsDirs] 第 1/4 步同一口径（"只看删完还在不在"）。
+ *
+ * ## 那个体积扫描在哪个线程上跑（本仓对主线程 IO 有明确纪律，见 BUGLEDGER SP-06）
+ *
+ * 唯一生产调用点是 [DshBootstrap.install]，它的调用契约就是"在 IO 线程调用"
+ * （`DshSetupActivity.beginPrepare` 走 `DshAppScope.scope.launch`，即 `Dispatchers.IO`；
+ * 函数内还有数分钟的同步解压 + `runBlocking`，主线程上根本不可能跑得通）。
+ * 所以这里递归累加体积（[DshPaths.dirSize]，对近 4 万条目，不跟随目录符号链接）是安全的。
+ * 另外它**只在失败分支**执行 —— 正常启动一次都不会走到。
+ *
+ * ## 注入点（与 [swapRootfsDirs] 同一惯例）
+ *
+ * [log] / [sizeOf] / [deleteTree] 生产调用点一律用默认实现；测试靠它们**确定地**造出
+ * "抛异常 / 返回 false / 仍存在" 三种分支（真机上要造 ENOTEMPTY 得先有 fs 故障或 SELinux 策略）。
+ *
+ * @return `true` = 路径已不存在（含"本来就没有"）；`false` = 清理后**仍然存在**（空间检查会把它算进已占用）
+ */
+internal fun clearStaleRootfsTmp(
+    tmpDir: File,
+    log: (String) -> Unit = { DshLogBus.append(it) },
+    sizeOf: (File) -> Long = { DshPaths.dirSize(it) },
+    deleteTree: (File) -> Boolean = { it.deleteRecursively() }
+): Boolean {
+    // 本来就不存在 ⇒ 正常路径，一个字都不记（大多数启动都走这条）。
+    if (!tmpDir.exists()) return true
+    val path = tmpDir.absolutePath
+    val deleted = runCatching { deleteTree(tmpDir) }
+        .onFailure { e ->
+            log(
+                "[bootstrap] failed to clear stale $path: ${e.javaClass.simpleName}: ${e.message}; " +
+                    "the space check below will count its footprint as used " +
+                    "(remove it manually: rm -rf $path)"
+            )
+        }
+        .getOrDefault(false)
+    val stillThere = tmpDir.exists()
+    if (stillThere) {
+        // 体积是排障时唯一能把"空间不足"和"没删掉的 .tmp"对上号的数字：拿不到就如实说拿不到，
+        // 不猜一个 0（0 会被读成"它没占空间"，恰好把结论引向反面）。
+        val bytes = runCatching { sizeOf(tmpDir) }.getOrDefault(-1L)
+        val sizeText = if (bytes >= 0) DshPaths.formatSize(bytes) else "size unknown"
+        log(
+            "[bootstrap] failed to clear stale $path: still present after cleanup " +
+                "($sizeText, deleteRecursively=$deleted); the space check below will count it as used " +
+                "(remove it manually: rm -rf $path)"
+        )
+    } else if (!deleted) {
+        // 报 false 但路径确实没了：更可能是一条 unlink 失败后被并发删掉/或 root 先空掉。
+        // 不算失败（结论就是"没了"），但留一行 INFO，免得下次有人对着一个 false 猜。
+        log("[bootstrap] stale $path is gone (deleteRecursively reported false)")
+    }
+    return !stillThere
+}
+
+/**
  * 判定内核：按 `isReady()` 的 `&&` 短路顺序收集**全部**不满足项（空表 = 就绪）。
  *
  * 顺序与 [DshBootstrap.isReady] 一一对应：rootfs 版本 → scripts 版本 → scripts 版本
@@ -824,7 +903,12 @@ object DshBootstrap {
                 //   （"明明删 .tmp 就够"的假失败）。原清理在 extractRootfs 内部（更晚），
                 //   现在提前到此；extractRootfs 里那处保留（幂等，且防其它调用路径）。
                 //   注：`.old` 不跨启动残留（解压成功路径末尾即删），优先级低，不动。
-                runCatching { File("${DshPaths.ROOTFS_DIR}.tmp").deleteRecursively() }
+                // ★ RE-09：这一步的**唯一目的**就是"把可回收空间还给下面的空间检查"，
+                //   所以"没删掉"必须留痕 —— 否则用户看到的仍是"空间不足，需要 X，现有 Y"，
+                //   而真实原因是 "rootfs.tmp 没删掉"（界面没有对应按钮，日志里也没有线索）。
+                //   三种结果分别记录见 [clearStaleRootfsTmp]（不存在不记 / 删干净不记 /
+                //   抛异常与"仍然存在"记 ERROR，并带上绝对路径 + 仍占用多少）。
+                clearStaleRootfsTmp(File("${DshPaths.ROOTFS_DIR}.tmp"))
                 // ★ RE-07：replacing 的语义是「盘上**存在**旧 rootfs」，不是「旧 rootfs 看起来
                 //   可用」。用 rootfsLooksUsable() 当代理会让"存在但损坏"的现场（最需要重解压的
                 //   那一次）被判成首装，门槛反而抬到 1560MB —— 1.1GB 的真机当场死锁。判据见

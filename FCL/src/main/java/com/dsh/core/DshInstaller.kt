@@ -279,7 +279,21 @@ class DshInstaller(
      * （rootfs 内的 node/npm 会以宿主视图继续存活，正是"防双写"要拦的东西）；只有 SIGQUIT
      * 会让 proot 优雅收尾并带走全部 tracee（同 [ProotProcessExecutor] 的 destroyActive 口径）。
      * SIGQUIT 预算 2 秒，超时仍换 SIGKILL 兜底（它至少能保证 proot 本身死透）。
-     * 收尾后删 pid 文件 —— 不删文件会让下一次安装重复检查同一个死 pid。
+     *
+     * ## ★ RE-08：日志要如实、pid 文件的生命周期要跟进程走
+     *
+     * 1. **两个信号各自成败分开记**（`exceptionOrNull()`，与 [writeInstallPidFile] 同一口径）。
+     *    原来 `runCatching { sendSignal(pid, 3) }.isSuccess` 把 `SecurityException` 这类失败
+     *    折成 `false`，然后由于进程恰好已死，日志会说"exited within SIGQUIT grace" ——
+     *    **信号根本没发出去**，那句话是假的。现在三种状态各有一行，排障者能一眼分开：
+     *    发出并等到退出 / 发出但没退（换 SIGKILL）/ **压根没发出去**（SIGQUIT 那条带
+     *    `signal NOT delivered`，且不进入等待 —— 没发出去等也没有意义）。
+     * 2. **只有确认进程不在才删 pid 文件**。SIGQUIT 与 SIGKILL 都可能发不出去（`SecurityException`
+     *    / SELinux / 权限模型），那时文件是"还有残留进程在写 node_modules"的**唯一线索**，
+     *    删掉就等于下次安装再也认领不到它（防双写失效）。方向与 `DshRuntime.stop` 对
+     *    `dsh.pid` 的处理一致（那边也是**保留**）。
+     *    例外是 `cmdline` 不匹配那一支：那个 pid 与本实例无关，永远认领不到，留着只会让之后
+     *    每一次安装再误判一次 ⇒ 那里照旧删（见该分支内的说明）。
      */
     private suspend fun cleanupStaleInstallProcess(instance: DshInstance) {
         val f = dshInstallPidFile(instance.id)
@@ -300,25 +314,83 @@ class DshInstaller(
                 instance.id,
                 "[install] stale installer pid=$pid still running (proot for this instance); SIGQUIT then KILL fallback"
             )
-            // SIGQUIT：唯一能让 proot 带走 tracee（旧 npm）的信号（理由见方法头注释）
-            val quitSent = runCatching { android.os.Process.sendSignal(pid.toInt(), 3) }.isSuccess
-            if (quitSent) {
+            // SIGQUIT：唯一能让 proot 带走 tracee（旧 npm）的信号（理由见方法头注释）。
+            // ★ RE-08：成败必须分开 —— 原来 `.isSuccess` 把失败折成 false，紧接着的日志
+            //   会在"信号根本没发出去"的情况下说成"grace 内退出了"（假的证据）。
+            val quitFailure = runCatching {
+                android.os.Process.sendSignal(pid.toInt(), 3)
+            }.exceptionOrNull()
+            if (quitFailure != null) {
+                // 没发出去就不等待：等一个"没被通知"的进程没有任何意义，白花 2 秒。
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[install] stale installer pid=$pid SIGQUIT signal NOT delivered " +
+                        "(${quitFailure.javaClass.simpleName}: ${quitFailure.message ?: quitFailure}); " +
+                        "skipping the grace wait and going straight to SIGKILL"
+                )
+            } else {
                 val deadline = System.currentTimeMillis() + STALE_INSTALL_QUIT_GRACE_MS
                 while (System.currentTimeMillis() < deadline && ProcessUtil.isAlive(pid)) {
                     kotlinx.coroutines.delay(100)
                 }
             }
             if (ProcessUtil.isAlive(pid)) {
-                DshLogBus.appendFor(instance.id, "[install] stale installer pid=$pid survived SIGQUIT grace; SIGKILL fallback")
+                // 三种状态在这里必须可区分：SIGQUIT 发出但没退（换 SIGKILL）/ SIGQUIT 没发出去（也换 SIGKILL）
+                if (quitFailure == null) {
+                    DshLogBus.appendFor(instance.id, "[install] stale installer pid=$pid survived SIGQUIT grace; SIGKILL fallback")
+                } else {
+                    DshLogBus.appendFor(instance.id, "[install] stale installer pid=$pid still alive after SIGQUIT was NOT delivered; SIGKILL fallback")
+                }
+                // ★ RE-08：兜底信号失败原来完全静默（没有 onFailure）—— 那正是"进程没杀掉、
+                //   而排障者以为杀过了"的来源。这里必须留痕，并说清后果（它还会继续写 node_modules）。
                 runCatching { android.os.Process.sendSignal(pid.toInt(), 9) } // SIGKILL
-            } else {
+                    .onFailure { e ->
+                        DshLogBus.appendFor(
+                            instance.id,
+                            "[install] stale installer pid=$pid SIGKILL failed " +
+                                "(${e.javaClass.simpleName}: ${e.message ?: e}); " +
+                                "it may keep writing node_modules"
+                        )
+                    }
+            } else if (quitFailure == null) {
                 DshLogBus.appendFor(instance.id, "[install] stale installer pid=$pid exited within SIGQUIT grace")
+            } else {
+                // 不能说"grace 内退出"：SIGQUIT 从未送达，它是自己走的（或早已不在）。
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[install] stale installer pid=$pid is no longer alive (SIGQUIT was never delivered; it exited on its own)"
+                )
             }
         } else {
-            // pid 已被系统复用或属于别的进程：不动它
-            DshLogBus.appendFor(instance.id, "[install] pid=$pid in $INSTALL_PID_FILE_NAME is not this instance's proot (cmdline mismatch); left it alone")
+            // pid 已被系统复用或属于别的进程：不动它。
+            //
+            // ★ RE-08 决策（保留原有"删文件"）：这个 pid 文件记的是一个与本实例**无关**的进程 ——
+            //   它永远过不了上面的 cmdline 判据，也就永远不会被认领；留着只会在之后每一次安装
+            //   再走一遍这里、再误判一次"有个残留安装进程"，并把一个**陌生进程的 pid** 留给
+            //   后续任何按 pid 动作的代码（误杀面）。它的"防双写"价值为零（本来就杀不到它），
+            //   所以这里照旧删文件并 return，与"保留 pid 文件"的新规则并不冲突：
+            //   保留的理由是"进程仍可能写盘"，这一支恰恰说明它不是我们的写盘者。
+            DshLogBus.appendFor(instance.id, "[install] pid=$pid in $INSTALL_PID_FILE_NAME is not this instance's proot (cmdline mismatch); left the process alone and removed the stale pid file")
+            runCatching { f.delete() }
+            return
         }
-        runCatching { f.delete() }
+        // ★ RE-08：只有**确认进程不在**才删 pid 文件。SIGQUIT / SIGKILL 都可能发不出去
+        //   （SecurityException / SELinux / 权限模型），那时这个文件是"还有残留进程在写
+        //   node_modules"的唯一线索 —— 删掉就等于下次安装再也认领不到它（防双写失效）。
+        //   方向与 DshRuntime.stop 对 dsh.pid 的处理一致（那边也是保留）。
+        //   已知代价（刻意接受，不加新等待）：SIGKILL 刚发出去时 `/proc/<pid>` 可能还没被回收
+        //   （zombie / 内核宽限），于是这一轮判"还活着"→ 保留文件。下一次安装的清理会看到
+        //   `!isAlive` 并把文件删掉（走上面那条 "is not alive" 分支），只是多一次无害的检查；
+        //   反过来"提前删"就会在信号其实没生效时丢掉唯一线索 —— 两个方向不对称，取保守的那边。
+        if (!ProcessUtil.isAlive(pid)) {
+            runCatching { f.delete() }
+        } else {
+            DshLogBus.appendFor(
+                instance.id,
+                "[install] stale installer pid=$pid is STILL alive after cleanup attempts; " +
+                    "keeping $INSTALL_PID_FILE_NAME so a later cleanup (or the delete path) can still claim it"
+            )
+        }
     }
 
     /**
