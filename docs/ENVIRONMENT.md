@@ -1,3 +1,5 @@
+[English](ENVIRONMENT-EN.md) | 简体中文
+
 # 开发环境准备
 
 > 工具链（JDK / Android SDK / NDK）**不在本仓库里**，属于运行环境而非工程文件。

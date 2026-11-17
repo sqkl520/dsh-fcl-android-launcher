@@ -1,3 +1,5 @@
+[English](ROADMAP-EN.md) | 简体中文
+
 # dsh 安卓启动器 —— 未来路线规划（Roadmap）
 
 > 把散落在各轮报告与 `PLAN.md §8` 里的待办、真机联调、打磨项，整合成一条

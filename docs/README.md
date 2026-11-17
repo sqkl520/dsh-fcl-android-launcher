@@ -1,3 +1,5 @@
+[English](README-EN.md) | 简体中文
+
 # 文档总览
 
 > ## 📦 项目
@@ -48,7 +50,7 @@
   `launcher-assets.mjs` + 各级 `version` 标记；`rootfs.tar.xz` 不入 Git）· jniLibs 3 个
   （`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
-- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **513/513**；脚本自检 **28/28**
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **1037/1037**；脚本自检 **33/33**
 - **入口**：`SplashActivity` → 首启前置页（`DshSetupActivity`，底座未就绪时）→ **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
   无 MC 运行时门禁、无 EULA、无 MC 主界面）
 

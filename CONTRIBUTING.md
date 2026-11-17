@@ -1,3 +1,5 @@
+[English](CONTRIBUTING-EN.md) | 简体中文
+
 # 贡献指南
 
 ## 1. 先说清楚这是什么项目
