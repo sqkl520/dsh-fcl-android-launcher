@@ -348,9 +348,16 @@ fun writeLauncherPatchOverlay(
     return runCatching {
         hostInstance.mkdirs()
         tmp.writeText(body, Charsets.UTF_8)
-        // rename 覆盖已存在的目标：Java 的 File.renameTo 在 POSIX 上是原子的 rename(2)，
-        // Windows 上 renameTo 不会覆盖 —— 所以先删（失败也无所谓，下面会再试 rename）。
-        if (target.exists() && !target.delete()) return@runCatching null
+        // ★ SP-08：**不要**先 `target.delete()`。
+        //   目标平台只有 Android/Linux，POSIX 的 rename(2) 是原子覆盖 —— 旧实现那一步
+        //   （"先删再 rename"是为了绕开 Windows 上 renameTo 不覆盖）在真机上纯属多余，
+        //   却制造了一个毁数据的窗口：删掉旧 overlay 成功、rename 失败 ⇒ 目标位置
+        //   什么都没有，原本可用的一份也没了（两条优化在该实例上失效到下次写成功）。
+        //   同一文件的 [writeManifest]（`:2219`）走的就是纯 rename，是正确的那一侧。
+        //   ⚠️ 若将来真要支持 Windows 宿主，必须整段一起重新设计（备份 + 回滚），
+        //   不能再退回"先删再 rename"—— 那不是原子替换，那是在赌 rename 不会失败。
+        // ⚠️ 失败时**不是**干净的：rename 失败会让 `$LAUNCHER_PATCH_OVERLAY.tmp` 留在实例
+        //   目录里（不会无限增长，下次 writeText 直接覆盖；但它确实会留在那儿）。
         if (!tmp.renameTo(target)) return@runCatching null
         target
     }.getOrNull()
