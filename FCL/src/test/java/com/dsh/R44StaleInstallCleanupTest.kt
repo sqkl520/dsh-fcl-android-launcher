@@ -248,6 +248,34 @@ class R44StaleInstallCleanupTest {
             "★ 进程仍在时必须明确**保留**文件并留痕（说明「留着给下次认领」），不能静默跳过",
             tail.contains("keeping") || tail.contains("STILL alive")
         )
+
+        // ★★ 判据本身不许被"短路成常量"（BL-245 的同族）。
+        //
+        // 上面三条只证明 "`!isAlive` 出现过、后面跟了 delete、else 分支有留痕" ——
+        // 它们**挡不住** `if (!ProcessUtil.isAlive(pid) || true) { f.delete() }` 这种变异：
+        // 判据还在源码里（guardAt 命中）、delete 还在后面、else 分支文字也没被删，
+        // 三条断言全绿，而实际语义已经变成"无条件删"，正是 RE-08 要消灭的那个缺陷。
+        // （实测确认：用探针跑过这个形态，三条断言全部通过 ⇒ 形状钉存在漏报。）
+        //
+        // 所以这里额外要求：`if (` 到 `{` 之间的**条件表达式整体**只由这一条判据构成，
+        // 不允许再出现 `||` / `&&` 把结果钉死成常量，也不允许 `true` / `false` 字面量。
+        //
+        // ⚠️ 取条件的边界要用 `{`（块起始）而不是"第一个 `)`"：
+        //   `!ProcessUtil.isAlive(pid)` 自己就带一对括号，取 `)` 会把条件截成
+        //   `if (!ProcessUtil.isAlive(pid`，`|| true` 根本进不了比较范围 —— 这条断言就白写了
+        //   （实测踩过：`indexOf(")", guardAt)` 命中的是 isAlive 的右括号）。
+        val condStart = tail.lastIndexOf("if (", guardAt)
+        assertTrue("前置：必须能定位到包住存活判据的那个 if", condStart >= 0)
+        val braceAt = tail.indexOf("{", guardAt)
+        assertTrue("前置：必须能定位到 if 块的起始 `{`", braceAt > guardAt)
+        val cond = tail.substring(condStart + 4, braceAt).trim()   // 去掉 "if (" 前缀
+        assertFalse(
+            "★ 存活判据被短路成常量了：「if ($cond)」。`|| true` 会让 `f.delete()` 无条件执行、" +
+                "`&& false` 会让它永不执行 —— 两种都等于把 RE-08 的修复撤销掉，" +
+                "而上面三条形状断言都看不出来（实测过）。条件里只许有 `!ProcessUtil.isAlive(pid)`。",
+            Regex("""\|\||&&|(^|[^A-Za-z_])true([^A-Za-z_]|$)|(^|[^A-Za-z_])false([^A-Za-z_]|$)""")
+                .containsMatchIn(cond)
+        )
     }
 
     // ==================================================================
