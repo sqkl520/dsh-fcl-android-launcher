@@ -4,6 +4,8 @@ import com.dsh.fcl.androidlauncher.R
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import kotlinx.coroutines.delay
@@ -283,6 +285,77 @@ fun launcherPatchOverlayJson(pluginGuestPath: String): String = """
 """.trimStart()
 
 /**
+ * ★ BL-246：把启动器自己那两条 overlay 与**用户在同一个文件里写的条目**合并。
+ *
+ * ## 缺陷（真机发现，2026-11-19）
+ *
+ * `--patch` 指向的文件（实例根目录的 `launcher.patch.yml`）是 dsh 的**用户可见配置入口**
+ * —— 用户/文档都照着它加 provider、加插件。但 [writeLauncherPatchOverlay] 每次启动都
+ * 用 [launcherPatchOverlayJson] **整份覆盖**它，于是用户写进去的东西在下次启动时无声消失。
+ *
+ * 真机现场：按 dsh 文档把 `llm-pi-ai` 的 `providers.mygateway` 写进这个文件、
+ * 重启 dsh —— 文件被覆盖回两条内置条目，provider 消失，前端只能看到内置的 DeepSeek，
+ * 用户以为是"配置没生效"或"模型不支持"。
+ *
+ * ## 合并规则
+ *
+ * 启动器**拥有**这两条（按 `id` 认领）：
+ * - `{"id":"client-hmr", ...}` —— HMR 轮询间隔
+ * - `{"insert":[{"id":"launcher-assets", ...}]}` —— `/assets` 缓存头插件
+ *
+ * 其余条目**原样保留**，且排在启动器那两条**之后**（后写的条目在 dsh 的 patch 语义里
+ * 覆盖先写的同 id 配置，让用户的选择赢）。
+ *
+ * 文件不存在 / 解析失败 / 不是数组 ⇒ 直接用启动器那两条（**不能**因为用户文件坏了就让启动失败；
+ * 这与 [writeLauncherPatchOverlay] 既有的"overlay 是优化项，失败不影响启动"同一原则）。
+ *
+ * @param existing 现有文件内容（null = 文件不存在/读失败）
+ * @return 合并后的完整 JSON 文本
+ */
+fun mergeLauncherPatchOverlay(pluginGuestPath: String, existing: String?): String {
+    val launcherEntries = runCatching {
+        JsonParser.parseString(launcherPatchOverlayJson(pluginGuestPath)).asJsonArray
+    }.getOrNull()
+    // 启动器自己那两条生成失败是不可能的（纯字符串模板），真发生了就退回纯静态文本 ——
+    // 宁可丢掉用户的条目，也不能让 overlay 整个不可用。
+    if (launcherEntries == null) return launcherPatchOverlayJson(pluginGuestPath)
+
+    val userEntries = existing?.let { text ->
+        runCatching {
+            val root = JsonParser.parseString(text)
+            // 只接受数组：对象/标量的形态 dsh 也不认，保留它只会让 patch 加载报错。
+            if (root.isJsonArray) root.asJsonArray else null
+        }.getOrNull()
+    } ?: return launcherPatchOverlayJson(pluginGuestPath)
+
+    // 按 id 认领哪些属于启动器：用户文件里若已有同 id 的条目，丢弃它、用启动器这份
+    // （否则会重复注入同一个插件，dsh 加载时报 id 冲突）。
+    val ownedIds = setOf("client-hmr", "launcher-assets")
+    fun JsonElement.launcherOwnedId(): String? {
+        if (!isJsonObject) return null
+        val o = asJsonObject
+        o.get("id")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+            ?.let { if (it in ownedIds) return it }
+        // 形如 {"insert":[{"id":"launcher-assets"}]} 的插入条目
+        o.get("insert")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach { entry ->
+            if (entry.isJsonObject) {
+                entry.asJsonObject.get("id")
+                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                    ?.asString?.let { if (it in ownedIds) return it }
+            }
+        }
+        return null
+    }
+
+    val merged = JsonArray()
+    launcherEntries.forEach { merged.add(it) }
+    userEntries.forEach { entry ->
+        if (entry.launcherOwnedId() == null) merged.add(entry)
+    }
+    return Gson().toJson(merged)
+}
+
+/**
  * 把任意字符串变成一个 JSON 字符串字面量（含引号）。
  *
  * 只用于 [launcherPatchOverlayJson] 里那个路径 —— 它可能带 Windows 反斜杠或非 ASCII 字符。
@@ -342,7 +415,12 @@ fun writeLauncherPatchOverlay(
     ) ?: return null
     val target = File(hostInstance, LAUNCHER_PATCH_OVERLAY)
     val pluginGuest = "${ProotCommand.GUEST_ROOT}/scripts/$LAUNCHER_ASSETS_PLUGIN"
-    val body = launcherPatchOverlayJson(pluginGuest)
+    // ★ BL-246：**合并**，不是覆盖。这个文件是 dsh 的用户可见配置入口（`--patch` 指向它），
+    //   用户会照着 dsh 文档往里加 provider / 插件；整份覆盖会让那些条目在下次启动时无声消失
+    //   （真机现场：写进去的 llm-pi-ai provider 被覆盖回两条内置条目，用户以为"配置没生效"）。
+    //   读失败/内容坏 ⇒ existing 为 null ⇒ 退回纯启动器条目（不能让坏文件拖垮启动）。
+    val existing = runCatching { target.takeIf { it.isFile }?.readText(Charsets.UTF_8) }.getOrNull()
+    val body = mergeLauncherPatchOverlay(pluginGuest, existing)
 
     val tmp = File(hostInstance, "$LAUNCHER_PATCH_OVERLAY.tmp")
     return runCatching {
