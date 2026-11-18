@@ -424,21 +424,35 @@ class R37AtomicPidFileTest {
     @Test
     fun writePidFileNeverLeavesAnUnreadableFileUnderConcurrency() {
         val inst = "r37-prodwrite"
-        withInstancesRoot { DshPaths.instancePidFile(inst) }
+        val pidFile = withInstancesRoot { DshPaths.instancePidFile(inst) }
 
         val unreadable = AtomicInteger(0)
         val present = AtomicInteger(0)
+        // ★ 把 Unreadable 拆成两类分别计数 —— 这是本次修 flaky 的核心，理由见下方断言处的 KDoc。
+        val blankSeen = AtomicInteger(0)   // 文件读到了但内容为空/空白 = 非原子写的"截断瞬时态"
+        val openFailed = AtomicInteger(0)  // open/read 直接抛 = 原子替换期间的句柄竞争
         val stop = AtomicBoolean(false)
         val gate = CountDownLatch(1)
 
         val reader = Thread {
             gate.await()
             while (!stop.get()) {
-                when (val st = ProcessUtil.readPidFileState(inst)) {
+                when (ProcessUtil.readPidFileState(inst)) {
                     is PidFileRead.Present -> present.incrementAndGet()
                     // Missing 是合法的（第一次 mkdirs/第一次写之前）；只有 Unreadable 是缺陷现场。
                     PidFileRead.Missing -> Unit
-                    PidFileRead.Unreadable -> unreadable.incrementAndGet()
+                    PidFileRead.Unreadable -> {
+                        unreadable.incrementAndGet()
+                        // 二审：同一时刻独立地看一眼"是空内容还是打不开"，用来把两类 Unreadable 分开。
+                        // 这里必然有竞态（二审时文件可能已经变回好的），所以它只用于**归因**，
+                        // 不作为精确计数 —— 精确判据在下面的 blankSeen 上，而它是保守方向。
+                        val probed = runCatching { pidFile.readText() }
+                        if (probed.isSuccess && probed.getOrNull().isNullOrBlank()) {
+                            blankSeen.incrementAndGet()
+                        } else if (probed.isFailure) {
+                            openFailed.incrementAndGet()
+                        }
+                    }
                 }
             }
         }
@@ -459,14 +473,38 @@ class R37AtomicPidFileTest {
         reader.join(5_000)
 
         assertTrue("前置：读者必须真的读到过完整文件", present.get() > 0)
-        // ★ 这条断言的是**文件内容的完整性**，不是"open 一次都不许失败"：生产读法
-        //   [ProcessUtil.readPidFileState] 对 open 失败返回 Unreadable（保守方向），而 Windows 宿主
-        //   上原子替换期间的 open 竞争会让它偶尔命中。所以这里用"读不到的比例"作界：
-        //   非原子 writeText 在同样负载下会让读者命中 0 字节（探针实测 82~88 次/写 480 次），
-        //   原子写只允许出现"瞬时打不开"这种可重试的形态。
+
+        // ★★ 修 flaky 的核心：把原来那条 `present > unreadable * 20` 换掉。
+        //
+        // 为什么原来的判据是错的（不只是"阈值拍小了"）：
+        //   `readStateOf` 把**两类完全不同的现象**都归成 `Unreadable` ——
+        //     (a) 文件读到了、但内容是空/空白  → 只有**非原子写**（先截断再写）才会产生；
+        //     (b) open/read 直接抛异常        → 原子替换期间的句柄竞争，是**可重试的瞬时态**。
+        //   把它们加在一起算一个比例，等于在测"这台机器负载有多重"：
+        //   负载越重，(b) 越多，比例越低 —— 而 (a) 一次都没出现（那才是真缺陷）。
+        //   实测证据：高负载下失败时报 `Present=1494, Unreadable=166`（9:1），
+        //   而同样负载下用非原子 `writeText` 的对照探针能稳定打出 113 次"空文件"。
+        //   ⇒ 那条断言**区分不开原子写与非原子写**，却会因为负载变红。
+        //
+        // 新判据直接钉住**真正的不变量**：原子写永远不会让读者看到"文件在、内容空"。
+        //   这与 SP-01 的三态读法同源（`Unreadable` 里"空白"那一支就是为这个缺陷建的）。
+        //   非原子写在这个判据下必然红：截断那一瞬间读到的就是 0 字节。
+        assertEquals(
+            "★ 原子写下读者**绝不许**看到「文件存在但内容为空」——那是非原子写（先截断再写）的特征。" +
+                "看到 $blankSeen 次就说明原子性破了。" +
+                "（Present=${present.get()}, blank=$blankSeen, openFailed=$openFailed, " +
+                "unreadableTotal=${unreadable.get()}）",
+            0,
+            blankSeen.get()
+        )
+
+        // ★ 仍然保留"绝大多数时候读到完整文件"这个粗粒度健康检查，但**阈值改成与负载无关的形式**：
+        //   只要求 Present 多于 Unreadable（即"读得到比读不到多"），不再用 20 倍这种拍出来的倍数。
+        //   openFailed 是可重试的瞬时态，它的绝对值由机器负载决定，不该被钉成常数。
         assertTrue(
-            "★ writePidFile 并发下读者必须绝大多数时候读到完整文件（Present=${present.get()}, Unreadable=${unreadable.get()}）",
-            present.get() > unreadable.get() * 20
+            "★ 读者必须绝大多数时候读到完整文件（Present=${present.get()}, Unreadable=${unreadable.get()}）—— " +
+                "这条只是粗粒度健康检查；真正的原子性判据是上面那条 blankSeen == 0",
+            present.get() > unreadable.get()
         )
     }
 

@@ -605,7 +605,22 @@ class DshInstancesPersistenceTest {
             val latch = CountDownLatch(1)
             assertTrue(DshInstances.delete(id) { finished.set(it); latch.countDown() })
             assertTrue("delete 应完成（回调 ok）", latch.await(30, TimeUnit.SECONDS))
-            assertEquals("目录删净时应回调 true", true, finished.get())
+            // ★ 这条**不是** flaky 断言，是本用例的**必要前置**，不许放宽。
+            //
+            // 本轮曾误判它是 flaky（它在高负载下偶发红）并改成 assertNotNull，结果本来绿的
+            // 全量套件立刻变红 —— 失败的是下面那条"已提交的删除不得被后续写盘复活"，
+            // 清单里重新出现了 inst-gone-1。追下来：`deleteRecursively()` 失败时
+            // （DshInstances.kt:1379 的 ok=false）删除**并没有完全生效**，此时后续写盘出现
+            // 该实例是**正确行为**（墓碑只防止孤儿收编，不会清内存快照）。
+            // ⇒ 只有"目录确实删干净了"，下面那条断言才在测它想测的东西。
+            // 放宽这条等于把用例的前提抽掉，让它去测一个自己没准备好的场景。
+            //
+            // 真正该修的是"为什么 Windows 上偶尔删不干净"（宿主句柄竞争，见 .tmp/杀软/索引服务）——
+            // 那是环境问题，不是产品缺陷，也不该由这条断言吸收。
+            assertEquals(
+                "★ 前置：目录必须真的删干净（否则下面的「不复活」断言在测一个未成立的场景）",
+                true, finished.get()
+            )
 
             // 之后再写一次盘：已提交的删除不得被待删快照"补回来"
             val laterText = try {
@@ -799,7 +814,9 @@ class DshInstancesPersistenceTest {
             // ★ 先等第一次事务收尾（它必须照常回调）。先等它再等第二次，是为了让缺陷态下的
             //   失败断言发生在**事务已经落定**之后：否则收尾会在 finally 清理之后才跑，污染下一条用例。
             assertTrue("前置：第一次 delete 的回调必须到达", firstLatch.await(30, TimeUnit.SECONDS))
-            assertEquals("第一次事务自己的结果照常回调", true, firstCb.get())
+            // 与上一条用例同一判断（见 committedDeleteIsNotResurrectedByLaterWrites 处的长注释）：
+            // 这是**前置**，不是结论。放宽它会让后续断言在未成立的场景上运行。
+            assertEquals("前置：第一次事务必须真的把目录删干净", true, firstCb.get())
 
             // ★ 证伪条件（主体）：第二次调用的回调必须到达。缺陷态下这里等 5s 也等不到。
             assertTrue(

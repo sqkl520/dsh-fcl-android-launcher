@@ -40,6 +40,22 @@ class R31Fix240Test {
          * 20 万次实测约 0.15s/家族；少了会退化成解释执行，多花不了多少时间。
          */
         const val WARMUP = 200_000
+
+        /**
+         * ★ 握手预算（读者线程"进入自旋循环"的最长等待）。
+         *
+         * 原来的 2 秒在**高负载**机器上不够：套件里别的并发测试、或同时跑着编译任务时，
+         * 新起的读者线程可能迟迟抢不到 CPU，于是 [oneSpinTrial] 返回 -1 ⇒
+         * 「握手必须每次都发生」那条元断言报 `expected <20> but was <19>`。
+         *
+         * 放宽到 20 秒**不削弱判别力**：这里等的是"读者进循环"，而缺陷判定是
+         * publish 之后 `t.isAlive`（楔死）—— 两者毫不相干。真进不了循环时，
+         * 20 秒后仍然返回 -1、元断言仍然红，只是失败来得晚一些。
+         *
+         * 代价：只有在**真的卡死**时才会多花这 20 秒；正常路径下读者几毫秒就进循环，
+         * 一次试验 20 次握手合计仍是毫秒级。
+         */
+        const val HANDSHAKE_TIMEOUT_NANOS = 20_000_000_000L
     }
 
     // ==================================================================================
@@ -367,9 +383,23 @@ class R31Fix240Test {
         ready.set(false)
         val t = Thread { spin() }
         t.isDaemon = true
+        // ★ 握手线程提优先级：本用例在高负载机器上会偶发 `expected <20> but was <19>`
+        //   （实测：同时跑多个编译任务时）。失败的从来不是"楔死"那条断言，而是
+        //   「握手必须每次都发生」——新起的读者线程在 2s 预算内抢不到 CPU，返回 -1。
+        //   那是**测试自己的预算问题**，不是产品缺陷（产品侧 `valid` 的发布边没变）。
+        t.priority = Thread.MAX_PRIORITY
         t.start()
-        val deadline = System.nanoTime() + 2_000_000_000L    // 最多等 2s 让读者进循环
-        while (!ready.get() && System.nanoTime() < deadline) Thread.yield()
+        // ★ 握手预算 2s → 20s。为什么放宽是安全的：这里等的是"读者进循环"这一件事，
+        //   放宽只会让**抢不到 CPU** 的窗口变小；它不会掩盖任何真缺陷 ——
+        //   "楔死"的判定在下面（publish 之后 `t.isAlive`），与本超时完全无关。
+        //   反过来说，如果读者真的因为别的原因进不了循环（例如 spin 方法本身写坏），
+        //   放宽只会让失败来得更晚，仍然会失败（返回 -1 → 元断言红）。
+        val deadline = System.nanoTime() + HANDSHAKE_TIMEOUT_NANOS
+        while (!ready.get() && System.nanoTime() < deadline) {
+            // onSpinWait 比对空 Thread.yield() 更礼貌：它给超线程让出执行资源但不放弃时间片，
+            // 在负载下反而更容易让新线程被调度进来（实测空转 yield 会一直霸占 CPU）。
+            Thread.onSpinWait()
+        }
         if (!ready.get()) {
             t.interrupt()
             return -1
