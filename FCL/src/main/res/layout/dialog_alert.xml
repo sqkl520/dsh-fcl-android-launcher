@@ -33,13 +33,28 @@
 
     </androidx.appcompat.widget.LinearLayoutCompat>
 
+    <!-- ★ BL-231：正文必须能滚动。
+         旧写法是 `layout_height="0dp"` + `layout_weight="1"` —— 那在 `wrap_content` 的父容器里
+         不成立：weight 只在父容器**有确定高度**时才分配剩余空间，这里父容器按内容撑开，
+         于是 0dp 要么塌成 0、要么被内容撑到「刚好放得下前 N 行」，**多出来的正文直接被切掉，
+         而且滚不动**。实测（1.3 倍字号 / 1080x2280）：正文断在「也可以点「复制链接」自己」，
+         被切掉的正是最关键那句「在这台设备上点「仍要继续」不会让这些功能恢复。」
+         —— 那句是 BL-229 特意加的，字号一调大就看不见，等于没修。
+
+         改成 `wrap_content` + 滚动条：正常长度时按内容自适应（与旧版视觉一致），
+         超高时由 `FCLAlertDialog.checkHeight()` 在运行时把它收到可用高度，从而产生真正的滚动区。
+         ⚠️ 这里**不要**加 `android:maxHeight` —— 那会让 `message.getMeasuredHeight()` 在
+         checkHeight 里读到被截断的值，"内容到底要多少高度"就算不准了（实测踩过：
+         加了 maxHeight 反而只多显示 4 行、且仍然滚不动）。高度只由代码控制。
+         ⚠️ 也不要改回 0dp+weight。-->
     <ScrollView
         android:id="@+id/text_scroll"
         android:layout_marginTop="15dp"
         android:layout_marginBottom="15dp"
-        android:layout_weight="1"
         android:layout_width="match_parent"
-        android:layout_height="0dp">
+        android:layout_height="wrap_content"
+        android:scrollbars="vertical"
+        android:fadeScrollbars="false">
 
         <com.tungsten.fcllibrary.component.view.FCLTextView
             android:id="@+id/text"

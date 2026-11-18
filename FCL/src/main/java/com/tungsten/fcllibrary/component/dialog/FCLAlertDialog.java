@@ -22,6 +22,13 @@ import com.tungsten.fcllibrary.util.ConvertUtils;
 
 public class FCLAlertDialog extends FCLDialog implements View.OnClickListener {
 
+    /**
+     * ★ BL-231：对话框里"正文以外"的固定开销（dp）—— 父容器 padding 15×2、正文上下 margin 15×2、
+     * 标题行（24dp 图标 / 18sp 单行）、按钮行（约 40dp）。取一个略保守的上界，
+     * 让长正文在极端字号下仍能滚到底，而不是又被裁掉最后一行。
+     */
+    private static final int DIALOG_CHROME_DP = 150;
+
     private String titleString;
 
     private ButtonListener positiveListener;
@@ -83,14 +90,43 @@ public class FCLAlertDialog extends FCLDialog implements View.OnClickListener {
             Point point = new Point();
             wm.getDefaultDisplay().getSize(point);
             int maxHeight = point.y - ConvertUtils.dip2px(getContext(), 30);
-            if (parent.getMeasuredHeight() < maxHeight) {
+
+            // ★ BL-231：判断"放不放得下"必须用**内容所需的完整高度**，不能用 parent 的测量值。
+            //   parent 是 wrap_content，它的 measuredHeight 就是"内容全放下的高度"——
+            //   但窗口本身可能已经被限制到屏幕内，于是 parent 的测量值恒等于可用高度，
+            //   `parent.getMeasuredHeight() < maxHeight` 这条判据**几乎总是成立**，
+            //   永远走"放得下"那一支，长正文因此被静默裁掉。
+            //
+            //   正确算法：内容需要的高度 = 正文完整高度 + 其它部件开销。
+            //   正文没有高度限制时的自然高度就是 message.getMeasuredHeight()（它在 ScrollView 里
+            //   已经按宽度折行测量过一遍）。
+            int chrome = ConvertUtils.dip2px(getContext(), DIALOG_CHROME_DP);
+            int neededHeight = message.getMeasuredHeight() + chrome;
+
+            if (neededHeight <= maxHeight) {
+                // 放得下：正常按内容撑开（与旧视觉一致）
                 ViewGroup.LayoutParams layoutParams = scrollView.getLayoutParams();
                 layoutParams.height = message.getMeasuredHeight();
                 scrollView.setLayoutParams(layoutParams);
                 getWindow().setLayout(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT);
-            } else {
-                getWindow().setLayout(WindowManager.LayoutParams.WRAP_CONTENT, maxHeight);
+                return;
             }
+
+            // ★ 放不下：把 ScrollView 收到"屏幕可用高度 − 其它部件"，于是它**有滚动余量**。
+            //   旧实现只限制窗口高度、ScrollView 仍是 0dp+weight（在 wrap_content 容器里不成立），
+            //   结果正文被裁、且滚不动。实测（1.3 倍字号 / 1080x2280）：门禁框正文断在
+            //   「也可以点「复制链接」自己」，被切掉的正是最关键那句
+            //   「在这台设备上点「仍要继续」不会让这些功能恢复。」—— 那句是 BL-229 特意加的，
+            //   字号一调大就看不见，等于没修。
+            int available = maxHeight - chrome;
+            if (available > 0) {
+                ViewGroup.LayoutParams layoutParams = scrollView.getLayoutParams();
+                layoutParams.height = available;
+                scrollView.setLayoutParams(layoutParams);
+            }
+            // 窗口跟着 ScrollView 走 WRAP_CONTENT：容器会重新撑到 available + chrome，
+            // 既不溢出屏幕，也不会在按钮和正文之间留白（旧实现写死 maxHeight 会留白）。
+            getWindow().setLayout(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT);
         }));
     }
 
