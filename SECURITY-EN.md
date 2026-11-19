@@ -236,10 +236,12 @@ Three things limit how far it spreads:
 
 1. **Log redaction.** Every line entering the log bus (including files written to disk) has
    `token=XXXX` replaced with `token=***`, plus a second pass that replaces any registered token
-   value. Registration has a lower bound (≥8 chars, so a single character cannot redact an entire
-   log) and upper bounds (≤16 entries, ≤256 chars each), and **over-limit registrations are rejected
-   rather than evicting old entries** — eviction would turn a real token that already leaked into a
-   log back into plaintext.
+   value. Registering a secret must pass **five gates**: a lower length bound (≥8, so a single
+   character cannot redact an entire log), an upper bound (≤256), token shape (base64url characters
+   only), not shadowing contract vocabulary (which would silently break log attribution), and
+   capacity (≤16 entries). **When capacity is full, new registrations are rejected rather than old
+   entries evicted** — eviction would turn a real token that already leaked into a log back into
+   plaintext.
 2. **Start-log rotation.** `dsh-start-*.log` is a **token-bearing** startup log; it is rotated and
    pruned before each start so it cannot accumulate without bound.
 3. **The hand-off trace omits the token.** When handing off to the system browser, the log records
