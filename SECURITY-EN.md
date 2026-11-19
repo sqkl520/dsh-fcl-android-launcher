@@ -202,6 +202,12 @@ entirely — where they connect is decided by npm's and dsh's configuration, not
 network namespace, so **any app on the device can connect to `127.0.0.1:<port>`**. The real
 protection is the access token; see the next section.
 
+A detail worth knowing: dsh's session cookie name is `dsh-auth-` + the base64url of
+`sha256(authority)`, and **the authority includes the port** (`127.0.0.1:38501`). Changing ports
+therefore changes the whole cookie name — that is both the root cause of "immediately 401 after a
+port change" and the reason **credentials cannot be reused across ports**: an attacker on a
+different port does not inherit the previous session's cookie.
+
 ### Cleartext HTTP policy
 
 `network_security_config.xml` defaults to **`cleartextTrafficPermitted="false"`**, with an exception

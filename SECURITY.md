@@ -183,6 +183,11 @@ dsh 的配置决定，不由启动器决定。
 ⚠️ **但这不等于"局域网上别人连不上"就万事大吉**：安卓上所有 App 共享同一个网络命名空间，
 **本机任何 App 都能连 `127.0.0.1:<port>`**。真正的保护是访问 token，见下节。
 
+一个值得一提的细节：dsh 的会话 cookie 名是 `dsh-auth-` + `sha256(authority)` 的 base64url，
+而 **authority 含端口**（`127.0.0.1:38501`）。因此换端口会让 cookie 名整体变掉 —— 这既是
+"换端口后立刻 401"这类问题的根源，也意味着**凭据不能跨端口复用**，攻击者换一个端口拿不到上一条
+会话的 cookie。
+
 ### 明文 HTTP 策略
 
 `network_security_config.xml` 里默认 **`cleartextTrafficPermitted="false"`**，只对
