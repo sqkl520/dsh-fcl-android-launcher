@@ -9,15 +9,23 @@
 > How to read it: **from top to bottom is the suggested order of work**. M1 is the prerequisite for everything
 > that follows (without a working real device, everything is on paper).
 >
-> **Revision record (2026-10-30)**: the project has reached **fix22** (`dshVersionCode=128`, unit tests 513/513,
-> script self-check 28/28); before this, the document had been stuck at the fix1 state. This pass only
+> **Revision record (2026-10-30)**: the project has reached **fix22** (`dshVersionCode=128`, unit tests 1060/1060,
+> script self-check 33/33); before this, the document had been stuck at the fix1 state. This pass only
 > **annotates and corrects**: achieved milestones are ticked with the date noted, outdated "plans" are rewritten to
 > match the code and what was actually delivered, and **historical milestones and original acceptance steps are kept
 > in full** (delete them and you can no longer see why the order was chosen).
 
 ---
 
-## Where we are now (as of 2026-10-30, fix22 / code 128)
+## Where we are now (as of 2026-11-19: **code fix26 / code 132**; **public releases still stop at fix22**)
+
+> ⚠️ **These two numbers differ — do not conflate them**:
+> - **The code** has reached **fix26** (`dshVersionCode=132`, unit tests 1060/1060, script self-check 33/33);
+> - **Public releases** stop at **`v0.1.6-SNAPSHOT-fix22`** (code 128) — fix23–fix26 have **not been
+>   published to the Releases page** and have no tags. They currently exist only on this machine and in
+>   the `output/` directory.
+>
+> So: **if you want a publicly downloadable build, install fix22**; fix23–26 must wait for a release.
 
 **The shell rework (M0) is fully complete** (phases 0~4, including the de-Material wrap-up, see `design/app-shell.md`):
 the app goes straight into the dsh shell on launch, the main menu has three switchable pages (Instances / Versions / Settings), and there is no MC runtime gate.
@@ -55,7 +63,7 @@ M5's "distributable signed APK" was achieved by fix6 (T-D1 brought forward). For
 | **M1 First light on a real device** | Get end to end working once on one real device | Must do, **achieved (2026-10-11, 0.1.6)** | base code in place, real device working |
 | **M2 Stability** | Install/start/stop repeatedly on a real device without crashing, hanging or crosstalk | Must do, **code hardening essentially complete (around 2026-10-06), on-device criteria not met** | M1 |
 | **M3 Experience polish** | From "usable" to "comfortable" | Should do, **partial** (read-only size display / retry on first run done) | M2 |
-| **M4 Testability and engineering** | Defects get caught by automation instead of manual review | Should do, **partial** (513 unit tests + contract tests; service layer and CI still missing) | parallel to M2/M3 |
+| **M4 Testability and engineering** | Defects get caught by automation instead of manual review | Should do, **partial** (1060 unit tests + contract tests; service layer and CI still missing) | parallel to M2/M3 |
 | **M5 Distribution and ecosystem** | Ship it to other people; keep up with dsh upstream | Could do, **partial** (signed APK + fixN channel in use; rootfs distribution/compatibility matrix not done) | M3 |
 | **M6 Capability expansion** | More device form factors, more profiles/plugins | Long term, **not started** | M5 |
 
@@ -233,7 +241,7 @@ This milestone digests the reliability items from the earlier round reports that
 **Goal**: turn defects that "only show up when a human reviews the code" into ones "automation can catch". Several P0s in the first four rounds were
 only found by manually checking the Android documentation (such as the foreground service that always crashes); that class should be caught by tests.
 
-> **Current state (2026-10-30)**: unit tests have grown from **148 cases** then to **513 cases / all 513 green**, script self-check 28/28.
+> **Current state (2026-10-30)**: unit tests have grown from **148 cases** then to **1060 cases / all 1060 green**, script self-check 33/33.
 > **What was actually done is "making the decision core testable"**: the decisions inside fixes were extracted into top-level pure functions with no Android
 > dependencies, pinned down by `DshRuntimeRaceTest` / `R24StateMachineTest` etc.; from R26 on, "pure function + pipeline assertions"
 > were added (`reconcileInstalling` etc.). **What was not done is the service layer itself** (`DshRuntimeService`'s
@@ -248,7 +256,7 @@ only found by manually checking the Android documentation (such as the foregroun
 - **Inject "process/time/Context" into the `DshRuntime` state machine** ◐ Half done: the decision core (state ownership, reuse criteria,
   pid file ownership) has been extracted into pure functions with unit tests; but "process/time/Context" themselves are still not injected, so the
   on-device timing (stopping fully before starting, kill races) can only be verified on a real device, and unit tests cannot cover it.
-- **Move to CI** ❌ Not done: wire the three verifications (full `compileDebugKotlin`, script self-check **28 items**, JVM unit tests **513 cases**)
+- **Move to CI** ❌ Not done: wire the three verifications (full `compileDebugKotlin`, script self-check **33 items**, JVM unit tests **1060 cases**)
   into CI; the Gradle ksp stall under the offline sandbox remains (`run-compile.sh` now works around it with `--offline`).
 - **Fix the aapt2 errors in `strings.xml`** ❌ Not done (**low priority**, does not block releases): `values-de/fa/ja/pt-rBR/ru` etc. report
   `multiple substitutions in non-positional format`. **The fifth round confirmed these are "warnings", not "errors", and do not block
@@ -258,7 +266,7 @@ only found by manually checking the Android documentation (such as the foregroun
 
 **Completion criteria**
 - [ ] `DshRuntimeService` / `DshRuntime` critical paths have unit tests — **half**: the `DshRuntime` side has extracted pure functions that
-      are pinned down (`DshRuntimeRaceTest` / `R24StateMachineTest` etc., the 513 cases include R28's call-site contract tests);
+      are pinned down (`DshRuntimeRaceTest` / `R24StateMachineTest` etc., the 1060 cases include R28's call-site contract tests);
       the `DshRuntimeService` side **has none** (no Robolectric, `startForeground` timing still relies on code review)
 - [ ] CI runs the three lines compile + scripts + unit tests (**there is no `.github/workflows`**; currently only `release.sh` run by hand)
 - [x] `assembleDebug` is no longer blocked by strings resource errors (the fifth round confirmed they are only warnings; `output/` has accumulated 22 fix builds, fix1~fix22)

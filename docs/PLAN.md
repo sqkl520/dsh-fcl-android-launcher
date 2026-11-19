@@ -180,7 +180,7 @@
 
 ### 4.3 已写的 Kotlin 文件（`com.dsh.core` 17 个 + `com.dsh.ui` 7 个 ≈ 4310 行）
 
-> ⚠️ **过时（数量与清单）**：这是 2026-09-22 的快照，当前 `com/dsh/` 已涨到 **43 个文件**
+> ⚠️ **过时（数量与清单）**：这是 2026-09-22 的快照，当前 `com/dsh/` 已涨到 **44 个文件**
 > （`core` 21 + `ui` 22，含 `shell/` 外壳与 `setup/` 前置页），且 `DshCredentials.kt` 已删除、
 > `DshDownloadViewModel.kt` 已搬到 `core`。当前清单见 `README.md`「当前状态」。
 
@@ -222,7 +222,7 @@
 
 ### 4.4 脚本
 
-早期 PoC 脚本目录（当时与 `FCL/src/main/assets/dsh/scripts/` 同源，脚本版本号 2；现脚本版本已到 7）：
+早期 PoC 脚本目录（当时与 `FCL/src/main/assets/dsh/scripts/` 同源，脚本版本号 2；现脚本版本已到 13）：
 - `setup-node-dsh.sh` — rootfs 内备 Node（校验 ^22.19||>=24）+ 装指定版 dsh 到实例目录；
   打印 `STAGE=...` 供界面显示进度；共享 npm 缓存；装完硬校验
 - `start-dsh.sh` — rootfs 内起 `dsh web`；**主动探测就绪**并打印 `READY url=/port=`，

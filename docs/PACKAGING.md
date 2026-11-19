@@ -50,7 +50,7 @@ cd <仓库根>
 
 | 位置 | 用途 | 是否入 Git |
 |---|---|---|
-| `<仓库根>/output/` | **本机交付 / 取件**目录；只放当前版本 | 否（.gitignore 忽略） |
+| `<仓库根>/output/` | **本机交付 / 取件**目录；累积保留历史包，**永不删**（见 REPOS.md） | 否（.gitignore 忽略） |
 | `<仓库根>/apk-archive/<version>/` | **版本记录**：只有 `SHA256SUMS`（指纹） | **是** |
 | `<仓库根>/FCL/build/outputs/apk/` | Gradle 原始产物；打包脚本会把它 **move** 到 `output/` | 否 |
 
@@ -69,7 +69,7 @@ cd <仓库根>
 > 早期打包曾把 APK 放那里，后来统一改到 `output/`。
 
 第二轮加固（2026-09-22）后，assets 里的 `version` 与 `scripts/version` 已提到 **2**
-（子项版本变化会触发增量重解压）。**之后脚本又迭代多次，当前 `scripts/version` = 12**；
+（子项版本变化会触发增量重解压）。**之后脚本又迭代多次，当前 `scripts/version` = 13**；
 rootfs 的 `version` 已改为版本串形式（`debian-…-slim1`，见 `ROOTFS.md`），不再是整数。
 
 > **fix22（code 128）** 新增了 `scripts/launcher-assets.mjs`，`scripts/version` 11 → 12 ——
@@ -100,7 +100,7 @@ dsh/
     version            rootfs 子项版本（版本串形式，如 `debian-…-slim1`）
     rootfs.tar.xz      [已就位·不入 Git] Debian 12 bookworm arm64 + Node 22 + 预装 dsh（瘦身后 142MB，见 ROOTFS.md）
   scripts/
-    version            （当前 12）
+    version            （当前 13）
     setup-node-dsh.sh  已放入（打印 STAGE=... 进度；装完硬校验）
     start-dsh.sh       已放入（打印 READY url=/FAILED reason=...；信号转发；支持 PORT=0；
                        有 launcher.patch.yml 时用 `--patch` 传给 dsh，带 --patch 起不来则去掉重试一次）

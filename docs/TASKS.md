@@ -19,8 +19,8 @@
 |---|---|
 | 对外版本 | `0.1.6-SNAPSHOT`（`gradle.properties` 的 `dshVersion`） |
 | 版本号 / fix 标签 | `dshVersionCode=132` · `dshFixLabel=fix26` |
-| 当前验证包 | `0.1.6-SNAPSHOT-fix26`（当前验证包） |
-| 质量基线 | 单测 **513/513**；脚本自检 **28/28** |
+| 代码最新轮次 | `0.1.6-SNAPSHOT-fix26`（**未发布**；公开最新包是 fix22） |
+| 质量基线 | 单测 **1060/1060**；脚本自检 **33/33** |
 | 真机端到端 | 0.1.6（批 A）已点亮；此后逐版真机反馈驱动修复（fix1~fix26） |
 
 > 版本号唯一真源是 `gradle.properties`；`RELEASES.md` / `README.md` 的"当前版本"必须与它一致。
@@ -66,6 +66,12 @@
 | fix20 | API Key 暴露面提示、typo 空目录可诊断 | R28 三轮 |
 | fix21 | 空目录自动告警 `WARN home-has-no-subdir`、更正三处错误说明 | R28 C3 |
 | fix22 | 复制链接成功后不再重摆门禁（BL-221）；`--patch` overlay + `/assets` 缓存头插件（BL-222） | R29 C3 第 6/8 条 |
+| fix23 | URL 采信门（scheme 白名单 + 回环 host）、`registerSecret` 拒绝过短 secret、页面回收后重建 | R31+R32 |
+| fix24 | 可靠性收口：孤儿清理/rootfs.tmp 不再静默失败、日志文件名与目录名同口径、pid/overlay/rootfs 全原子写 | R33~R44 |
+| fix25 | 门禁框正文在高字号下不再被裁掉，且能滚动（BL-231） | R45 |
+| fix26 | `launcher.patch.yml` 不再整份覆盖，保留用户配的 provider（BL-246） | R45 |
+
+> ⚠️ **fix23~fix26 尚未发布到 Releases 页**（也无 tag），只在本机与 `output/` 里。
 
 ## P1 · UI 还原
 

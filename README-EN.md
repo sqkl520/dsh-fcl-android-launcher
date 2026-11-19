@@ -26,11 +26,15 @@ A dsh launcher built on top of [Fold Craft Launcher](https://github.com/FCL-Team
 > If you find it useful, a star means a lot ⭐
 >
 > **The [Releases page](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) is the source of truth for versions.**
-> The most recently verified build is `0.1.6-SNAPSHOT-fix26` as of the last update of this document.
+> **The latest publicly released build is `0.1.6-SNAPSHOT-fix22`.**
 > This README does not maintain a version number on its own — historically it mentioned stale values
 > like `fix4`/`fix6`, and **whenever it disagrees with the Releases page, the Releases page wins**.
-> After installing, check the version suffix on the About screen (e.g. `-fix26`) to confirm you
-> installed the right package; only files named with `-fixN` are the currently verified builds.
+> After installing, check the version suffix on the About screen (e.g. `-fix22`) to confirm you
+> installed the right package; only files named with `-fixN` are verified builds.
+>
+> ⚠️ **The code has reached fix26, but fix23–fix26 have not been published to the Releases page**
+> (and have no tags). Those rounds exist only on this machine and in `output/`; they are not publicly
+> downloadable. Per-version notes are in [`docs/RELEASES.md`](docs/RELEASES-EN.md).
 
 ---
 

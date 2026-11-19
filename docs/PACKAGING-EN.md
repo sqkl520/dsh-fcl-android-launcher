@@ -51,7 +51,7 @@ The three locations each have their own job — **do not mix them**:
 
 | Location | Purpose | In Git |
 |---|---|---|
-| `<repo root>/output/` | **local delivery / pickup** directory; holds only the current version | No (.gitignore'd) |
+| `<repo root>/output/` | **local delivery / pickup** directory; accumulates every historical build; **never deleted** (see REPOS.md) | No (.gitignore'd) |
 | `<repo root>/apk-archive/<version>/` | **version records**: only `SHA256SUMS` (fingerprints) | **Yes** |
 | `<repo root>/FCL/build/outputs/apk/` | raw Gradle output; the packaging script **moves** it to `output/` | No |
 
@@ -70,7 +70,7 @@ can be verified directly with `sha256sum -c`.
 > Early packaging once put APKs there; it was later unified into `output/`.
 
 After the second hardening round (2026-09-22), `version` and `scripts/version` in assets were raised to **2**
-(a change in a sub-item version triggers incremental re-extraction). **The scripts have been iterated many times since, and `scripts/version` is currently 12**;
+(a change in a sub-item version triggers incremental re-extraction). **The scripts have been iterated many times since, and `scripts/version` is currently 13**;
 the rootfs `version` has changed to a version-string form (`debian-…-slim1`, see `ROOTFS-EN.md`) and is no longer an integer.
 
 > **fix22 (code 128)** added `scripts/launcher-assets.mjs` and bumped `scripts/version` from 11 to 12 —
@@ -101,7 +101,7 @@ dsh/
     version            rootfs sub-item version (version-string form, e.g. `debian-…-slim1`)
     rootfs.tar.xz      [in place · not in Git] Debian 12 bookworm arm64 + Node 22 + preinstalled dsh (142MB after slimming, see ROOTFS-EN.md)
   scripts/
-    version            (currently 12)
+    version            (currently 13)
     setup-node-dsh.sh  in place (prints STAGE=... progress; hard verification after install)
     start-dsh.sh       in place (prints READY url=/FAILED reason=...; signal forwarding; supports PORT=0;
                        passes launcher.patch.yml to dsh via `--patch` when present, and retries once without it if it cannot start with --patch)

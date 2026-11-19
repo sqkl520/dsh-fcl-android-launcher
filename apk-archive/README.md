@@ -33,7 +33,7 @@ apk-archive/
 
 | 位置 | 用途 | 是否入 Git |
 |---|---|---|
-| `<仓库根>/output/` | **本机交付 / 取件**，只放当前版本 | 否 |
+| `<仓库根>/output/` | **本机交付 / 取件**，累积保留历史包，**永不删** | 否 |
 | `apk-archive/<version>/SHA256SUMS` | 版本指纹记录 | **是** |
 | `FCL/build/outputs/apk/` | Gradle 原始产物；`build-apk.sh` 会**移动**到 `output/`，不留第三份 | 否 |
 

@@ -195,7 +195,7 @@ Three layers of responsibility:
 
 ### 4.3 Kotlin files already written (17 in `com.dsh.core` + 7 in `com.dsh.ui` ≈ 4310 lines)
 
-> ⚠️ **Outdated (counts and list)**: this is a 2026-09-22 snapshot; `com/dsh/` has since grown to **43 files**
+> ⚠️ **Outdated (counts and list)**: this is a 2026-09-22 snapshot; `com/dsh/` has since grown to **44 files**
 > (`core` 21 + `ui` 22, including the `shell/` shell and the `setup/` prerequisite page), and `DshCredentials.kt` has been
 > deleted while `DshDownloadViewModel.kt` has moved into `core`. For the current list see "Current status" in `README.md`.
 
@@ -237,7 +237,7 @@ Three layers of responsibility:
 
 ### 4.4 Scripts
 
-Early PoC script directory (at the time the same source as `FCL/src/main/assets/dsh/scripts/`, script version 2; the script version is now at 7):
+Early PoC script directory (at the time the same source as `FCL/src/main/assets/dsh/scripts/`, script version 2; the script version is now at 13):
 - `setup-node-dsh.sh` — prepare Node inside the rootfs (validate ^22.19||>=24) + install the specified dsh version into the instance directory;
   prints `STAGE=...` for the UI to show progress; shared npm cache; hard validation after install
 - `start-dsh.sh` — start `dsh web` inside the rootfs; **actively probes for readiness** and prints `READY url=/port=`,

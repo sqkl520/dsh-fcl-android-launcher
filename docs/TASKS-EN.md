@@ -19,8 +19,8 @@
 |---|---|
 | Public version | `0.1.6-SNAPSHOT` (`dshVersion` in `gradle.properties`) |
 | Version code / fix label | `dshVersionCode=132` · `dshFixLabel=fix26` |
-| Current verification build | `0.1.6-SNAPSHOT-fix26` (current verification build) |
-| Quality baseline | unit tests **513/513**; script self-check **28/28** |
+| Latest code round | `0.1.6-SNAPSHOT-fix26` (**not released**; the latest public build is fix22) |
+| Quality baseline | unit tests **1060/1060**; script self-check **33/33** |
 | On-device end to end | 0.1.6 (batch A) lit up; since then per-version on-device feedback has driven the fixes (fix1~fix26) |
 
 > The single source of truth for the version number is `gradle.properties`; the "current version" in `RELEASES.md` / `README.md` must match it.
@@ -66,6 +66,13 @@
 | fix20 | API Key exposure-surface warning, diagnosable typo'd empty directory | R28 third round |
 | fix21 | Empty directory auto-warning `WARN home-has-no-subdir`, three incorrect explanations corrected | R28 C3 |
 | fix22 | No re-showing the gate after a successful link copy (BL-221); `--patch` overlay + `/assets` cache-header plugin (BL-222) | R29 C3 items 6/8 |
+| fix23 | URL adoption gate (scheme allowlist + loopback host), `registerSecret` rejects overly short secrets, page rebuild after reclamation | R31+R32 |
+| fix24 | Reliability pass: orphan cleanup / rootfs.tmp no longer fail silently, log filenames match directory names, atomic pid/overlay/rootfs writes | R33–R44 |
+| fix25 | Gate dialog body no longer clipped at large font sizes, and it scrolls (BL-231) | R45 |
+| fix26 | `launcher.patch.yml` is no longer overwritten wholesale, so user-configured providers survive (BL-246) | R45 |
+
+> ⚠️ **fix23–fix26 have not been published to the Releases page** (no tags either); they exist only on
+> this machine and in `output/`.
 
 ## P1 · UI restoration
 
