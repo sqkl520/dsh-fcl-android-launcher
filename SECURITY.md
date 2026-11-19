@@ -6,7 +6,8 @@ DSHarness-FCL-Launcher 是一个**在本机运行**的安卓启动器。它用 p
 rootfs、一个 Node 进程和一个 dsh（DeepSeek Harness）服务，然后用 WebView 加载
 `http://127.0.0.1:<port>/`。
 
-它**不是**远程服务，**没有**我们自己运营的后端，**不收集**遥测，也**不上传**你的任何数据。
+它**不是**远程服务，**没有**我们自己运营的后端，**不收集**遥测，**不会自动上传**你的任何数据。
+（唯一的，是你按下去的：崩溃页有一个从上游继承的「上传日志」按钮，见 [出站连接](#出站)。）
 它做的事是：在你手机上起一个只有本机能连的 Web 服务，然后把界面给你看。
 
 正因为它是"在你设备上跑别人的代码"（rootfs 里的 Node、你装的 dsh、你配的模型提供方），本文档
@@ -134,9 +135,35 @@ CHANGELOG 中署名致谢。
 安装其他应用（`REQUEST_INSTALL_PACKAGES`）、相机、麦克风、定位、通讯录、短信、通话记录、
 查询已安装应用列表。全部数据都在应用私有目录里，不需要任何存储权限。
 
-**导出组件**：Manifest 里只有 `SplashActivity` 是 `android:exported="true"`（启动器入口）。
-运行时服务 `DshRuntimeService` 与两个 `ContentProvider` 都是 `exported="false"`，第三方 App
+**导出组件**：Manifest 里**面向用户的** `android:exported="true"` 组件只有 `SplashActivity`（启动器入口）。
+运行时服务 `DshRuntimeService` 与自有的 `ContentProvider` 都是 `exported="false"`，第三方 App
 无法直接调起。`FileProvider` 走 `grantUriPermissions="true"`，权限按 URI 单独授予。
+
+如实补充两点打包结果里的事实：
+
+- 打包时会并入 androidX 的 `androidx.profileinstaller.ProfileInstallReceiver`，它也是
+  `exported="true"`；但它受系统级 `android.permission.DUMP`（signature|privileged）保护，
+  **第三方 App 实际发不进来**。
+- 另有一个 androidX 的 `InitializationProvider`，`exported="false"`。
+
+### 备份
+
+`android:allowBackup` 在 Manifest 里是 `true`，但**全部运行时数据都被排除**：
+
+| 规则文件 | 生效范围 | 排除内容 |
+|---------|---------|---------|
+| `backup_rules.xml` | Android 11 及以下 | `domain="file" path="dsh/"` |
+| `data_extraction_rules.xml` | Android 12+（云备份 + 设备迁移） | 同上 |
+
+`domain="file"` 即 `<filesDir>`，而运行时根目录正是 `$filesDir/dsh`（`DshPaths.ROOT_DIR`）——
+所以 rootfs、实例目录、`.credentials.yaml`、pid/侧车 token 文件、日志**全在排除范围内**。
+
+为什么整目录排除：备份配额约 25 MB，而该目录 1 GB 起；更关键的是换机后 `version` 文件要跟本机
+assets 比对，恢复也仍要重新解包，实例清单可由界面重建。
+
+`<filesDir>` 根下还有两个**不在**排除名单里的文件：`startup-failures.log`（启动失败栈回溯，由
+`FCLApp` 写）与 `app_log/`（FCL 自身日志）。它们**不含凭据**（FCL 日志路径本身也做了 token 替换），
+因此没有列入排除——这一点写在这里，而不是留给读者自己推断。
 
 ---
 
@@ -146,13 +173,17 @@ CHANGELOG 中署名致谢。
 
 | # | 连接 | 目的地 | 由谁发起 | 能不能关 |
 |---|------|--------|---------|---------|
-| 1 | dsh 版本列表 | `https://registry.npmjs.org` | 启动器（Kotlin `HttpURLConnection`） | 不用版本页就不发生 |
+| 1 | dsh 版本列表 | `https://registry.npmjs.org` | 启动器（`DshRegistry`） | 不用版本页就不发生 |
 | 2 | `npm install @deepseek-ai/dsh@<版本>` | `https://registry.npmjs.org` | rootfs 里的 npm（原生进程，走 socket） | 不装新版本就不发生 |
 | 3 | 模型 API 调用 | **你自己配的地址** | dsh（rootfs 里的 Node） | 由 dsh 的配置决定 |
 | 4 | 你主动外跳的站外链接 | 你点的那个站 | 系统浏览器（**不是本 App**） | 不点就不发生 |
+| 5 | **崩溃日志上传** | `https://api.logshare.cn/1/log`（中文环境）<br>`https://api.mclo.gs/1/log`（其它） | 启动器（继承自 FCL 的 `HttpRequest`） | **只有你按下崩溃页的「上传日志」才发生** |
 
-**没有**自有后端、没有遥测、没有崩溃上报服务器、没有更新检查器。崩溃页只做本地展示与导出，
-不会自动上传。
+**没有**自有后端、没有遥测、没有**自有的**崩溃上报服务器、没有更新检查器。
+
+⚠️ **但崩溃页保留了一个第三方上传按钮**：这是从上游 FCL 继承来的。只有你主动按下「上传日志」，
+崩溃文本才会被 POST 到第三方日志分享服务（中文环境 `api.logshare.cn`，其它 `api.mclo.gs`）。
+**它不会自动触发**。另外，这条路径的文本**不经过** [日志脱敏](#访问-token)——见下方「已知的残余风险」。
 
 验证方式（只查本 App 的 Java 网络层）：
 
@@ -160,17 +191,20 @@ CHANGELOG 中署名致谢。
 grep -rn "HttpURLConnection\|openConnection\|new URL(\|new Socket" FCL/src/main/java/com/dsh/
 ```
 
-命中三处，**全部是回环或 npm 版本列表**：
+命中会连**注释**一起命中，要逐条看是不是真的调用。真实的网络调用有三处：
 
 | 位置 | 用途 | 目标 |
 |------|------|------|
 | `DshRegistry.kt` | 拉 dsh 版本列表 | `https://registry.npmjs.org` |
-| `DshDownloadViewModel.kt` | 下载进度（复用 `DshRegistry` 的请求层） | 同上 |
-| `DshRuntime.kt`（`Probe.probeTokenUrl` / `isPortOpen`） | 探活**本机** dsh 是否还活着、token 是否仍被受理 | `127.0.0.1` |
+| `DshRuntime.kt`（`Probe.isPortOpen` / `probeTokenUrl`） | 探活**本机** dsh 是否还活着、token 是否仍被受理 | `127.0.0.1` |
+| `LogSharingUtils.kt`（在 `com/tungsten/fcllibrary`） | 崩溃页「上传日志」按钮 | 见上表第 5 条 |
 
-> 上面的命令**只查 `com/dsh/`**，也就是 dsh 启动器自己的代码。`com/tungsten/fclcore/` 里还有
-> 一套从 FCL 继承下来的通用 HTTP 工具（`HttpRequest` / `NetworkUtils`）——那是**请求层**，
-> 本身不决定连哪里，实际目标由调用方给出；在 dsh 启动器里唯一的使用方就是上面的 `DshRegistry`。
+> `DshDownloadViewModel.kt` 里也出现了 `HttpURLConnection`，但那**只在注释里** —— 它是
+> `DshRegistry.fetchVersionsCached()` 的调用方，本身不发请求。
+
+> `com/tungsten/fclcore/` 里还有一套从 FCL 继承下来的通用 HTTP 工具（`HttpRequest` /
+> `NetworkUtils`）——那是**请求层**，本身不决定连哪里，实际目标由调用方给出。它在本项目里
+> **恰好有两个用户**：`DshRegistry`（npm 版本列表）与 `LogSharingUtils.uploadLog`（崩溃页上传）。
 
 rootfs 内的 `npm` / dsh 是原生进程，直接走 socket，不经过这层代码——它们连哪里由 npm 与
 dsh 的配置决定，不由启动器决定。
@@ -214,7 +248,15 @@ dsh 的配置决定，不由启动器决定。
 dsh 启动时自己打印形如 `dsh web: http://127.0.0.1:3080/?token=XXXX` 的地址。这个 token 是
 **进程级、base64url、43 字符**，是 dsh 唯一的内建鉴权。
 
-它必然出现在几个地方，这是设计使然：**内存、WebView 的 URL、以及剪贴板（仅当你点「复制链接」）**。
+它必然出现在几个地方，这是设计使然：**内存、WebView 的 URL、以及剪贴板**。
+剪贴板这一项要说得更准确些 —— 有两种情形会写入：
+
+| 情形 | 是否额外确认 |
+|------|-------------|
+| 你点「复制链接」 | 是，你明确知道自己在复制 |
+| 你选择「在浏览器中打开」（含门禁框的「用外部浏览器打开」、实例详情页的浏览器按钮、崩溃提示的外跳） | **否** —— 外跳路径会**先复制再跳转**，作为浏览器吞掉查询串时的兜底（BL-225） |
+
+所以：**只要用过任何一次「在浏览器中打开」，剪贴板里就躺着一条带 token 的地址**，不一定是你主动复制的。
 
 我们做了三件事限制它的扩散面：
 
@@ -224,8 +266,13 @@ dsh 启动时自己打印形如 `dsh web: http://127.0.0.1:3080/?token=XXXX` 的
    token 形状（只接受 base64url 字符集）、不遮蔽协约词（否则日志归因会静默失效）、
    容量（≤16 条）。**容量满时拒绝新增而不是淘汰旧条目** —— 淘汰会让一条已经漏进日志的真 token
    重新变回明文。
-2. **启动日志轮转。** `dsh-start-*.log` 是**含明文 token** 的启动日志，每次启动前轮转清理，
-   避免无上限堆积。
+2. **启动日志有界轮转。** `dsh-start-*.log` 是**含明文 token** 的启动日志。每次启动前会做一次
+   **有界的**轮转：按修改时间保留最新 **6** 份，其余只在超过 **7 天**未修改后才删除。
+   脚本只在**正常退出**路径自删该文件，App 被强杀后会残留 ——
+   所以**在一次会话内可能同时存在多份含 token 的日志**。这是刻意保留恢复源（认领孤儿进程要用它）
+   换来的代价。
+   ⚠️ 更直接的一面：这些日志落在 `cacheDir` 下并被 proot `--bind` 成 rootfs 的 `/tmp`，
+   **rootfs 内任何进程都能读到它们**（也就读得到明文 token）。
 3. **外跳留痕不记 token。** 交给系统浏览器时，日志只写 `scheme://host:port` 与"是否带凭据"。
 
 ⚠️ **明说**：带 token 的 URL 会以**明文**写进 pid 文件与侧车文件 `dsh-token-url.txt`
@@ -241,6 +288,14 @@ dsh 自己不落盘，不存就只能重启。**它们没有加密**，保护完
 （启动器自己的 Keystore 密文）。这两份文件在升级后会被**主动清理**——否则一个明文 API Key 会
 一直躺在实例目录里。
 
+⚠️ 这次清理的**确切范围**要说清楚，别让人以为"清过了就没了"：
+
+- 只覆盖 **`instances.json` 清单内**的实例目录。不在清单里的孤儿目录（比如历史上的残留）
+  **不会被清理**，那个明文 Key 会一直躺着。
+- 删除**失败时完全静默**（没有 `onFailure` 日志）。失败后下次启动会再试，但你可能永远不会知道
+  它没删掉。
+- 想彻底确认，请手动检查各实例目录下是否还存在这两个文件。
+
 ⚠️ **一个真实的暴露面（已写进设置项说明）**：dsh 的文件 API **允许读工作区外的文件**
 （它的设计如此——agent 要能读任意文件）。所以**如果你把 `home/` 选成工作区，agent 就能读到
 `.credentials.yaml`**。启动器的选择器默认落点是实例目录（`workspace/` 与 `home/` 并列），
@@ -251,9 +306,12 @@ dsh 自己不落盘，不存就只能重启。**它们没有加密**，保护完
 「复制链接」把**带 token 的完整 URL** 放进系统剪贴板。这是有意的功能（BL-225：Edge 等浏览器
 会剥掉第三方传入的查询串，复制粘贴是兜底路径）。
 
+⚠️ 但**这不只发生在「复制链接」时**：任何一次「在浏览器中打开」也会先复制再跳转（见上表）。
+所以别以为"我没点过复制，剪贴板里就没有凭据"。
+
 ⚠️ 剪贴板是**系统级共享**的：Android 10 之前任何有焦点的 App 都能读；Android 10+ 只有当前
-焦点 App 能读，但用户粘贴到哪由用户决定。**这个 token 的暴露面由你控制**——复制完请粘贴到
-你信任的地方。
+焦点 App 能读，但用户粘贴到哪由用户决定。**这个 token 的暴露面由你控制**——粘贴前想一下
+你在把它交给谁。
 
 ---
 
@@ -276,11 +334,38 @@ dsh 自己不落盘，不存就只能重启。**它们没有加密**，保护完
 5. **WebView 开了 JavaScript。** 必须开——dsh 的前端是 JS 应用。缓解手段：禁文件/内容访问、
    禁混合内容、禁第三方 cookie、禁多窗口、禁 JS 自动开窗、只允许回环地址留在 WebView 内、
    WebView 远程调试**只在调试包**开启。
+   ⚠️ **但这不等于"该关的都关了"**：以下几项**没有显式设置，全靠 WebView 默认值** ——
+   `allowFileAccessFromFileURLs` / `allowUniversalAccessFromFileURLs`（API ≤29 默认 `true`，
+   30+ 默认 `false`，本机 minSdk 是 **26**）、`savePassword`（默认 `true`）、
+   `saveFormData`（默认 `true`）、`databaseEnabled`（默认 `false`）。
+   `allowFileAccess=false` 已把它们能造成的危害压得很低，但这是"没关"而不是"关了"，
+   本项目**不声称**这部分已加固。
+   一个好消息：`addJavascriptInterface` **从未被调用**，页面无法直接调用 Java 对象。
 6. **我们不校验 rootfs 内 npm 包与 dsh 插件的完整性**，只有 npm 自身的校验。供应链安全由
    上游与你的选择决定。
 7. **不防设备已被攻破。** 有 root、解锁 bootloader、装了恶意 Xposed 模块的设备上，应用私有
    目录隔离不成立，本文档的多数保证都不再有效。
 8. **没有 PGP、没有漏洞赏金、没有专职安全响应。** 响应时间是单人目标。
+
+---
+
+### 已知的残余风险（我们知情但未修）
+
+这些不是"没想到"，是**权衡后暂时保留**的。列在这里，是为了让你能自己判断风险，而不是等出事才发现。
+
+1. **崩溃页上传的文本不经过日志脱敏。** 「上传日志」把崩溃面板全文原样 POST 出去
+   （`LogSharingUtils.uploadLog`），没有复用 `DshLogBus.sanitize`。当前崩溃文本是栈回溯，
+   一般不含 token；但**一旦某天的异常消息里带上了带 token 的 URL，这条路就是绕开脱敏的直出通道**。
+2. **页面内的回环链接不校验端口。** `shouldOverrideUrlLoading` 用 `isLoopback()` 判断是否留在
+   WebView 内，而它**只比对 host、不含端口**。于是页面里的 `http://127.0.0.1:<任意端口>/` 会被
+   留在 WebView 内导航。这与 `webUiUrlAllowed(url, expectedPort)` 的口径不同 —— 后者是严格的。
+3. **`DEEPSEEK_*` 环境变量前缀被无条件放行。** `ProotCommand.isAllowedEnvKey` 的最后一条是
+   `key.startsWith("DEEPSEEK_")`。当前**没有任何调用方**使用它，但它是一条现成的
+   "把 key 塞进子进程 argv（会出现在 `/proc/<pid>/cmdline`）"的通道。保留它是因为上游脚本可能用到
+   这个前缀；如果你 fork 这个项目，建议改成显式白名单。
+4. **`::1` 能过主机判据，但过不了明文策略。** 主机判据接受 `::1`，而
+   `network_security_config.xml` 的例外只列了 `127.0.0.1` 与 `localhost`。结果是
+   `http://[::1]:port/` 会被网络安全策略直接拦死 —— 这是**功能缺口**，不是安全洞（失败方向是拒绝）。
 
 ---
 
