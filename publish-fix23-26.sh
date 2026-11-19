@@ -109,9 +109,8 @@ for pair in fix23:129 fix24:130 fix25:131 fix26:132; do
   if [ ! -s "$NOTES" ]; then
     echo "  [FAIL] docs/RELEASES.md 里找不到 $FIX 段落"; rm -f "$NOTES"; FAIL=1; continue
   fi
-  # 附 APK 与校验值（与已有 Release 的尾部格式一致）
-  printf '\n---\n\n**APK**：`%s`（附件，约 %s）\n\n**sha256**：`%s`\n\n参见仓库 `apk-archive/0.1.6-SNAPSHOT/SHA256SUMS`。\n' \
-    "$(basename "$APK")" "$(du -h "$APK" | awk '{print $1}')" "$GOT" >> "$NOTES"
+  # 附一行校验值（与 release.sh 同一口径：不重复附件名与体积）
+  printf '\n---\n\nsha256: `%s`\n' "$GOT" >> "$NOTES"
 
   if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
     echo "  [skip] $TAG 已存在，改用 edit + upload"

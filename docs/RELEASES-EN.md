@@ -53,7 +53,6 @@
 ### Upgrade notes
 
 - **Over-the-top install works** (fix25 → fix26 needs no uninstall).
-- Quality baseline: unit tests **1060/1060**, script self-check **33/33**.
 
 ---
 
@@ -79,7 +78,6 @@
 ### Upgrade notes
 
 - **Over-the-top install works** (fix24 → fix25 needs no uninstall).
-- Quality baseline: unit tests **1051/1051**, script self-check **33/33**.
 
 ---
 
@@ -90,25 +88,19 @@
 
 ### Fixed
 
-- **Leftover process cleanup no longer pretends to succeed.** The stop signal's result used to be
-  discarded, so the pid file was deleted even when the process was still alive. Now a signal that was not
-  delivered skips the wait and records it, a still-live process after a hard kill is explicitly logged,
-  and the pid file is **only deleted once the process is confirmed dead**.
-- **`rootfs.tmp` cleanup failures are no longer silent.** When deletion fails it records the absolute
-  path, an exception summary and the remaining size, and judges the outcome by "is the file still there"
-  rather than treating a boolean return value as the conclusion.
-- **Instance logs no longer cross wires.** Log filenames and directory names used two different folding
-  rules, so `my app` / `my.app` / `my_app` — three **different instances** — shared one log file, and
-  deleting one also deleted another instance's log.
-- **Concurrent writes can no longer slip into an instance deletion.** The guard used to be released
-  between two steps.
-- **Several critical writes became atomic**: pid files, install pids, the overlay replacement file and
-  rootfs replacement — each step now checks its result, and the "guess and move" fallback is gone.
+- **A failed stop no longer claims it succeeded.** The stop signal's result used to be discarded, so the
+  record was cleared even when the process was still alive. It is now cleared only once the process is
+  confirmed dead.
+- **Cleanup failures are no longer silent.** Leftovers that cannot be deleted are recorded with their
+  location and remaining size, so you can tell they are still there.
+- **Instance logs no longer cross wires.** `my app` / `my.app` / `my_app` — three different instances —
+  used to share one log file, and deleting one also deleted another's log.
+- **Deleting an instance can no longer be interleaved with a concurrent operation.**
+- **Several critical writes are now atomic**, so a half-written config file cannot happen.
 
 ### Upgrade notes
 
 - **Over-the-top install works** (fix23 → fix24 needs no uninstall).
-- Quality baseline: unit tests **1037/1037**, script self-check **33/33**.
 
 ---
 
@@ -137,7 +129,6 @@
 ### Upgrade notes
 
 - **Over-the-top install works** (fix22 → fix23 needs no uninstall).
-- Quality baseline: unit tests **1027/1027**, script self-check **33/33**.
 
 ---
 
