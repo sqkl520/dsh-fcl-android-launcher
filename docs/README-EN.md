@@ -9,7 +9,7 @@
 > This project is **based on [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) (GPL-3.0)**
 > and is likewise released under **GPL-3.0**.
 >
-> **Current version: `0.1.6-SNAPSHOT`** (code 128; fix22 has been built; for the latest build see the top of
+> **Current version: `0.1.6-SNAPSHOT`** (code 132; fix26 has been built; for the latest build see the top of
 > [`RELEASES.md`](RELEASES.md)) — it will not be labelled `1.0.0` until dsh can be started, downloaded and
 > managed reliably.
 
@@ -24,6 +24,7 @@
 | File | Contents | When to read it |
 |---|---|---|
 | `RELEASES.md` | **Release notes (for users)**: what each version adds, changes, fixes, and upgrade notes; GitHub Release bodies are taken from here | You want to know "what changed in this version, should I upgrade" |
+| [`../SECURITY-EN.md`](../SECURITY-EN.md) | **Security policy**: which permissions are requested, where it connects, where credentials live, and **what this launcher cannot protect against** (the rootfs is not a sandbox) | You want to know "is this thing safe, and where does my API key live" |
 | `PLAN.md` | **Overall design**: architecture, directory layout, key flows, security design | You want the big picture |
 | `ROADMAP.md` | **Roadmap**: milestones M1–M6 (device bring-up → stability → experience → engineering → distribution → extension) | You want to know where this is heading |
 | `TASKS.md` | **To-do list**: things clearly intended but not yet done | You want to know what is still missing |
@@ -43,7 +44,7 @@
 
 ## Current status
 
-- **Code**: `com/dsh/` **43 files** (`core` 21 + `ui` 22) + the FCL base
+- **Code**: `com/dsh/` **44 files** (`core` 22 + `ui` 22) + the FCL base
   - `com/tungsten/fcllibrary/` 44 (UI framework, keeps the FCL look)
   - `com/tungsten/fclcore/` 373 (`fakefx` / `util` / `task` / `event`)
   - `com/tungsten/fcl/` 4 (`FCLApp` / `SplashActivity` / `RuntimeUtils` etc.)
@@ -52,7 +53,7 @@
   caching plugin `launcher-assets.mjs` + `version` markers at each level; `rootfs.tar.xz` is not in Git) ·
   3 jniLibs (`libproot.so` / `libproot-loader.so` / `libbusybox.so`)
 - **Gradle modules**: `:FCL` + `:ZipFileSystem`
-- **Verification**: build (Kotlin+Java+resources+Manifest) **BUILD SUCCESSFUL**; unit tests **1037/1037**;
+- **Verification**: build (Kotlin+Java+resources+Manifest) **BUILD SUCCESSFUL**; unit tests **1060/1060**;
   script self-check **33/33**
 - **Entry points**: `SplashActivity` → first-run prerequisite page (`DshSetupActivity`, when the base is not
   ready) → **`DshMainActivity`** (three-page shell: Instances / Versions / Settings; no MC runtime gate,
@@ -73,7 +74,7 @@ The rootfs was slimmed on 2026-10-06: `rootfs.tar.xz` **314 MB → 142 MB (−52
 
 | Location | Description |
 |---|---|
-| `FCL/src/main/java/com/dsh/` | **The dsh launcher itself** (`core` 21 + `ui` 22), 43 files |
+| `FCL/src/main/java/com/dsh/` | **The dsh launcher itself** (`core` 22 + `ui` 22), 44 files |
 | `FCL/src/main/java/com/tungsten/` | The FCL base (`fcllibrary` UI framework + `fclcore` utilities) |
 | `FCL/src/main/assets/dsh/` | Runtime base: `scripts/` (3 POSIX sh + `launcher-assets.mjs`) + `rootfs/` (tar.xz not in Git) |
 | `FCL/src/test/java/com/dsh/` | JVM unit tests |

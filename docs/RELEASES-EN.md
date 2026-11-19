@@ -23,7 +23,114 @@
 
 ---
 
-## 0.1.6-SNAPSHOT (fix22, current verified build)
+## 0.1.6-SNAPSHOT (fix26, current verified build)
+
+> **The twenty-sixth round of 0.1.6** — fixing a defect where **your configuration silently disappears**:
+> **the model provider you add is gone after one restart**.
+
+### Fixed (`launcher.patch.yml` is no longer overwritten wholesale)
+
+- **The problem**: on every start the launcher wrote a `launcher.patch.yml` into the instance directory,
+  and that file is exactly what `--patch` points at when dsh starts. It used to be **regenerated in full** —
+  so a custom provider you wrote in following dsh's documentation was wiped on the next start, **with no
+  warning at all**.
+- **Now**: the launcher claims only its own two entries (`client-hmr`, `launcher-assets`); every other entry
+  is **preserved verbatim** and placed after the launcher's entries (dsh's patch semantics are
+  "later entries win", so your configuration still takes effect).
+- **On-device evidence**: before the fix, writing a provider and restarting took
+  `grep -c mygateway launcher.patch.yml` from `1` to `0`; after the fix it stays at `1`.
+- **One shortcoming, stated plainly**: the **on-device verification of this fix was not completed by me**
+  (the device had already disconnected). Nine unit tests cover the merge logic, one of which specifically
+  asserts that "the production call site really calls the merge function" (reverting the call site makes
+  exactly that test go red). If your provider still disappears after a restart, please open an issue with
+  what you observed.
+
+### Upgrade notes
+
+- **Over-the-top install works** (fix25 → fix26 needs no uninstall).
+- Quality baseline: unit tests **1060/1060**, script self-check **33/33**.
+
+---
+
+## 0.1.6-SNAPSHOT (fix25, historical verified build)
+
+> **The twenty-fifth round of 0.1.6** — fixing "the gate dialog body gets clipped": turn the font size up
+> and the most important sentence becomes invisible.
+
+### Fixed (gate dialog body no longer clipped at large font sizes)
+
+- **Symptom**: at 1.3× system font size, the WebView gate dialog's body broke off mid-sentence, and what
+  got cut was precisely "tapping 'Continue anyway' on this device will not restore these features" — i.e.
+  the most important risk warning **did not exist on a small screen with large text**.
+- **The root cause was one layer deeper than the ledger recorded**: the layout already **had** a ScrollView,
+  but two things together defeated it — ① the ScrollView used `0dp` + `weight`, and weight only distributes
+  leftover space when the parent has a definite height, while the dialog root is `wrap_content`, so there
+  was never any scroll budget; ② the height check used `parent.getMeasuredHeight() < maxHeight`, and since
+  the parent is `wrap_content` that condition is **almost always true**, so it always took the "it fits"
+  branch and long bodies were silently clipped.
+- **Now**: height is computed in code from the message's measured height plus a fixed chrome allowance, the
+  layout uses `wrap_content` with explicit scrollbars, and any body length can be scrolled to the end.
+
+### Upgrade notes
+
+- **Over-the-top install works** (fix24 → fix25 needs no uninstall).
+- Quality baseline: unit tests **1051/1051**, script self-check **33/33**.
+
+---
+
+## 0.1.6-SNAPSHOT (fix24, historical verified build)
+
+> **The twenty-fourth round of 0.1.6** — a **reliability pass**: turning "silent failure" one by one into
+> "failure you can see".
+
+### Fixed (no more silent failures)
+
+- **Orphaned dsh process cleanup no longer pretends to succeed**: the SIGQUIT return value used to be
+  dropped, so the pid file was deleted even when the process was still alive. Now a signal that was not
+  delivered skips the grace period and **logs it**; after SIGKILL a still-live process is explicitly logged
+  as "STILL alive"; and the pid file is **only deleted once the process is confirmed dead**.
+- **Leftover `rootfs.tmp` cleanup is no longer silent**: when deletion fails it records the **absolute
+  path, an exception summary and the remaining size**, and judges the outcome with `exists()` rather than
+  treating a boolean return value as the conclusion.
+- **Instance log filenames now use the same folding as directory names**: the two used different rules, so
+  `my app` / `my.app` / `my_app` — three **different instances** — shared one log file, and deleting one
+  deleted another instance's log. Both now delegate to the same mapping.
+- **The delete-transaction gate now covers the whole transaction lifetime**: previously the gate was
+  released between two windows and concurrent writes could slip in.
+- **Pid files, install pids, overlay replacement and rootfs replacement all became atomic writes**, each
+  step forced to check its return value, with the "guess and move" fallback removed.
+
+### Upgrade notes
+
+- **Over-the-top install works** (fix23 → fix24 needs no uninstall).
+- Quality baseline: unit tests **1037/1037**, script self-check **33/33**.
+
+---
+
+## 0.1.6-SNAPSHOT (fix23, historical verified build)
+
+> **The twenty-third round of 0.1.6** — **security depth**: blocking "a forged line in process output
+> steering the UI somewhere else".
+
+### Fixed (URL adoption gate)
+
+- **Addresses entering the WebView now pass three gates**: a scheme allowlist (`http`/`https` only), a
+  loopback host, and the port. Red-team testing showed that `javascript:alert(1)//`,
+  `file:///root/home/.credentials.yaml`, `data:text/html,…` and `intent://…` were previously adopted
+  verbatim and passed to `loadUrl`. An **allowlist** rather than a denylist, because the set of schemes
+  `loadUrl` accepts varies by WebView version and a denylist necessarily misses some.
+- **Stricter log redaction**: `registerSecret` rejects overly short secrets (a single character would
+  otherwise redact an entire log down to `***`).
+- **Pages now rebuild correctly after being reclaimed**, and the script version comparison was corrected.
+
+### Upgrade notes
+
+- **Over-the-top install works** (fix22 → fix23 needs no uninstall).
+- Quality baseline: unit tests **1027/1027**, script self-check **33/33**.
+
+---
+
+## 0.1.6-SNAPSHOT (fix22, historical verified build)
 
 > **The twenty-second round of 0.1.6** — two things: **stop asking you questions you just answered**, and
 > **add cache headers for the front-end static assets used by external browsers**; plus a re-measurement and

@@ -9,7 +9,7 @@
 > 本项目**基于 [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher)（GPL-3.0）改造**，
 > 同样以 **GPL-3.0** 发布。
 >
-> **当前版本：`0.1.6-SNAPSHOT`**（code 128，fix22 已出包；最新包见 [`RELEASES.md`](RELEASES.md) 顶部）
+> **当前版本：`0.1.6-SNAPSHOT`**（code 132，fix26 已出包；最新包见 [`RELEASES.md`](RELEASES.md) 顶部）
 > —— 待"能正常启动 / 下载 / 管理 dsh"后才标 `1.0.0`。
 
 > **DeepSeek Harness（dsh）在未 root 安卓手机上的启动器**。
@@ -22,6 +22,7 @@
 | 文件 | 内容 | 什么时候看 |
 |---|---|---|
 | `RELEASES.md` | **版本说明（面向用户）**：每个版本新增/变更/修复/升级须知；GitHub Release 正文取自这里 | 想知道"这一版改了什么、要不要升" |
+| [`../SECURITY.md`](../SECURITY.md) | **安全策略**：申请了哪些权限、连哪里、凭据放哪、**本启动器防不住什么**（rootfs 不是沙箱） | 想知道"这东西安全吗、我的 API Key 放哪" |
 | `PLAN.md` | **总体方案**：架构、目录布局、关键流程、安全设计 | 想了解全貌 |
 | `ROADMAP.md` | **路线规划**：M1~M6 里程碑（真机点亮 → 稳定 → 体验 → 工程化 → 分发 → 扩展） | 想知道"接下来往哪走" |
 | `TASKS.md` | **待办清单**：已明确要做但未做的 | 想知道"还有哪些没做" |
@@ -41,7 +42,7 @@
 
 ## 当前状态
 
-- **代码**：`com/dsh/` **43 个文件**（`core` 21 + `ui` 22）+ FCL 基座
+- **代码**：`com/dsh/` **44 个文件**（`core` 22 + `ui` 22）+ FCL 基座
   - `com/tungsten/fcllibrary/` 44 个（UI 框架，保留 FCL 风格）
   - `com/tungsten/fclcore/` 373 个（`fakefx` / `util` / `task` / `event`）
   - `com/tungsten/fcl/` 4 个（`FCLApp` / `SplashActivity` / `RuntimeUtils` 等）
@@ -50,7 +51,7 @@
   `launcher-assets.mjs` + 各级 `version` 标记；`rootfs.tar.xz` 不入 Git）· jniLibs 3 个
   （`libproot.so` / `libproot-loader.so` / `libbusybox.so`）
 - **Gradle 模块**：`:FCL` + `:ZipFileSystem`
-- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **1037/1037**；脚本自检 **33/33**
+- **验证**：编译（Kotlin+Java+资源+Manifest）**BUILD SUCCESSFUL**；单测 **1060/1060**；脚本自检 **33/33**
 - **入口**：`SplashActivity` → 首启前置页（`DshSetupActivity`，底座未就绪时）→ **`DshMainActivity`**（外壳三页：实例 / 版本 / 设置；
   无 MC 运行时门禁、无 EULA、无 MC 主界面）
 
@@ -69,7 +70,7 @@ rootfs 已于 2026-10-06 瘦身：`rootfs.tar.xz` **314 MB → 142 MB（−52.7%
 
 | 位置 | 说明 |
 |---|---|
-| `FCL/src/main/java/com/dsh/` | **dsh 启动器主体**（`core` 21 + `ui` 22），43 个文件 |
+| `FCL/src/main/java/com/dsh/` | **dsh 启动器主体**（`core` 22 + `ui` 22），44 个文件 |
 | `FCL/src/main/java/com/tungsten/` | FCL 基座（`fcllibrary` UI 框架 + `fclcore` 工具） |
 | `FCL/src/main/assets/dsh/` | 运行时底座：`scripts/`（3 个 POSIX sh + `launcher-assets.mjs`）+ `rootfs/`（tar.xz 不入 Git） |
 | `FCL/src/test/java/com/dsh/` | JVM 单测 |

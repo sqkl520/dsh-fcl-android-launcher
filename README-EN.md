@@ -10,7 +10,7 @@ A dsh launcher built on top of [Fold Craft Launcher](https://github.com/FCL-Team
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
 ![No Root](https://img.shields.io/badge/root-not%20required-success?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-1037%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-1060%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 **No root** · **No PC** · **No cost** — install one APK and dsh runs on your phone.
@@ -26,10 +26,10 @@ A dsh launcher built on top of [Fold Craft Launcher](https://github.com/FCL-Team
 > If you find it useful, a star means a lot ⭐
 >
 > **The [Releases page](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) is the source of truth for versions.**
-> The most recently verified build is `0.1.6-SNAPSHOT-fix22` as of the last update of this document.
+> The most recently verified build is `0.1.6-SNAPSHOT-fix26` as of the last update of this document.
 > This README does not maintain a version number on its own — historically it mentioned stale values
 > like `fix4`/`fix6`, and **whenever it disagrees with the Releases page, the Releases page wins**.
-> After installing, check the version suffix on the About screen (e.g. `-fix22`) to confirm you
+> After installing, check the version suffix on the About screen (e.g. `-fix26`) to confirm you
 > installed the right package; only files named with `-fixN` are the currently verified builds.
 
 ---
@@ -98,7 +98,7 @@ The UI follows FCL's visual style and GUI framework (`fcllibrary` + `ThemeEngine
 | Distribution | **Debian 12 bookworm arm64** (about 148 MB after slimming, with Node 22) |
 | Runtime | **Node.js 22** + npm, used to install dsh and its dependencies |
 | UI | Android **WebView** loading `http://127.0.0.1:<port>/` |
-| Tests | Home-grown MiniRunner (1037 unit tests) + runtime script self-check (33 checks) |
+| Tests | Home-grown MiniRunner (1060 unit tests) + runtime script self-check (33 checks) |
 
 For technology choices see [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT-EN.md);
 for the rootless mechanism, see "W^X bypass" below.
@@ -121,7 +121,7 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 
 ## 📌 Current status
 
-> Last updated: 2026-10-30 (fix22). The single source of truth for version numbers is `dshVersion` /
+> Last updated: 2026-11-19 (fix26). The single source of truth for version numbers is `dshVersion` /
 > `dshVersionCode` in `gradle.properties`.
 
 | Area | Status |
@@ -144,9 +144,13 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 | Fix round **fix20** (R28 third review: API key exposure warning + diagnosable empty-directory typo) | ✅ Built (code 126) |
 | Fix round **fix21** (R28 C3 user perspective: warn on empty directories + correct three inaccurate explanations) | ✅ Built (code 127) |
 | Fix round **fix22** (R29: stop re-prompting the WebView gate after copying the link + cache headers for front-end assets, so the UI no longer re-downloads every time) | ✅ Built (code 128) |
+| Fix round **fix23** (R31+R32: URL adoption gate, page teardown/rebuild, script version marker) | ✅ Built (code 129) |
+| Fix round **fix24** (R33–R44: stricter log redaction, atomic pid/overlay/delete transactions, orphan cleanup no longer fails silently) | ✅ Built (code 130) |
+| Fix round **fix25** (R45: gate dialog body no longer clipped at large font sizes, and it scrolls) | ✅ Built (code 131) |
+| Fix round **fix26** (R45: `launcher.patch.yml` is no longer overwritten wholesale, so your configured providers survive) | ✅ Built (code 132, current verified build) |
 | `1.0.0` (can reliably start / download / manage dsh) | ⬜ Pending promotion from 0.1.6 |
 
-**Quality baseline**: build BUILD SUCCESSFUL · unit tests **1037/1037** · script self-check 33/33
+**Quality baseline**: build BUILD SUCCESSFUL · unit tests **1060/1060** · script self-check 33/33
 (full suite runs every round; every key fix is pinned by assertions)
 
 > The single source of truth for version numbers remains `dshVersion` / `dshVersionCode` in
@@ -192,7 +196,7 @@ to join in; Issues and PRs are both accepted.
 - **Build and test**: `.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest` (Windows, unit tests);
   `sh run-compile.sh` → `sh run-tests.sh` (arm64 Linux / phone sandbox, compile check + unit tests). Environment wiring in [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT-EN.md).
 - **Issues and PRs**: when reporting a bug please include the **version suffix shown on the About screen**
-  (e.g. `0.1.6-SNAPSHOT-fix22`), device model, Android version and reproduction steps. If you want to change
+  (e.g. `0.1.6-SNAPSHOT-fix26`), device model, Android version and reproduction steps. If you want to change
   code, open an Issue first so your work is not wasted.
 
 [![Contributors](https://contrib.rocks/image?repo=sqkl520/dsh-fcl-android-launcher)](https://github.com/sqkl520/dsh-fcl-android-launcher/graphs/contributors)
@@ -205,6 +209,7 @@ This project is based on [Fold Craft Launcher](https://github.com/FCL-Team/FoldC
 
 | Document | Contents |
 |---|---|
+| [`SECURITY-EN.md`](SECURITY-EN.md) | **Security policy**: permission surface, where it connects, where credentials live, what this launcher cannot protect against |
 | [`docs/PLAN.md`](docs/PLAN-EN.md) | Project charter and overall design |
 | [`docs/ROADMAP.md`](docs/ROADMAP-EN.md) | Milestones M1–M6 |
 | [`docs/TASKS.md`](docs/TASKS-EN.md) | To-do list |

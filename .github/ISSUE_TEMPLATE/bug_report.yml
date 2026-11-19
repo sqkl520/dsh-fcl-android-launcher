@@ -11,6 +11,10 @@ body:
            不少问题在 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 说明里已写了根因和绕法。
         2. **贴日志前删掉 API Key、token 和访问链接** —— dsh 的访问链接里带凭据，公开等于送人。
 
+        > ⚠️ **如果这是安全问题**（凭据泄漏、第三方 App 读到私有目录、WebView 被导向别处、路径穿越等），
+        > **不要在这里开公开 issue**。请走 [SECURITY.md](https://github.com/sqkl520/dsh-fcl-android-launcher/blob/main/SECURITY.md)
+        > 里的私密报告通道；公开 issue 在修复前等于把攻击方法告诉所有人。
+
   - type: input
     id: version
     attributes:

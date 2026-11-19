@@ -13,15 +13,15 @@
 > `RELEASES.md` (per version, user-facing). This document keeps only the part that is "still not done / still not verified",
 > plus each round's **mandatory verification checklist** (T6).
 
-## Version progress (as of fix22)
+## Version progress (as of fix26)
 
 | Item | Value |
 |---|---|
 | Public version | `0.1.6-SNAPSHOT` (`dshVersion` in `gradle.properties`) |
-| Version code / fix label | `dshVersionCode=128` · `dshFixLabel=fix22` |
-| Current verification build | `0.1.6-SNAPSHOT-fix22` (released to Releases) |
+| Version code / fix label | `dshVersionCode=132` · `dshFixLabel=fix26` |
+| Current verification build | `0.1.6-SNAPSHOT-fix26` (current verification build) |
 | Quality baseline | unit tests **513/513**; script self-check **28/28** |
-| On-device end to end | 0.1.6 (batch A) lit up; since then per-version on-device feedback has driven the fixes (fix1~fix22) |
+| On-device end to end | 0.1.6 (batch A) lit up; since then per-version on-device feedback has driven the fixes (fix1~fix26) |
 
 > The single source of truth for the version number is `gradle.properties`; the "current version" in `RELEASES.md` / `README.md` must match it.
 
@@ -46,7 +46,7 @@
 | **T-D1** | Shipping identity switch: formal package name `com.dsh.fcl.androidlauncher` + new signing + not debuggable (brought forward and landed in fix6) | fix6, code 112 |
 | **T7 slimming** | rootfs `314,360,800 → 148,637,136` bytes (−52.7%), extracted 1436 → 862 MB; shipped to real devices since 0.1.3 | see `ROOTFS.md` |
 
-### fix7 ~ fix22 completion overview (per-version details in `RELEASES.md`)
+### fix7 ~ fix26 completion overview (per-version details in `RELEASES.md`)
 
 | fix | Main delivery | Survey/critique source |
 |---|---|---|
@@ -81,7 +81,7 @@
 
 ## P2 · Runtime and stability
 
-### T6. On-device end-to-end acceptance (critical) — **0.1.6 lit up; current verification build fix22**
+### T6. On-device end-to-end acceptance (critical) — **0.1.6 lit up; current verification build fix26**
 
 > **Added 2026-10-30: verification tools**
 > - **Whatever can run on a PC, don't push onto a real device**: `sh tools/host-dsh-check.sh` actually runs dsh on Windows,
@@ -90,8 +90,8 @@
 >   gate dialog wording, screenshot evidence. With no device connected it returns code 2 (an environment problem, not a failure).
 > - The **testable/untestable** boundary of both is described in `docs/DEV-PLAN.md §3.8` (internal document).
 
-> **Current verification build**: `0.1.6-SNAPSHOT-fix22` (`v0.1.6-SNAPSHOT-fix22`, code 128, released).
-> Historical control builds: `fix21`~`fix1` and the unsuffixed `v0.1.6-SNAPSHOT` (code 106, the control baseline) are mostly on the Releases page
+> **Current verification build**: `0.1.6-SNAPSHOT-fix26` (`v0.1.6-SNAPSHOT-fix26`, code 132).
+> Historical control builds: `fix22`~`fix1` and the unsuffixed `v0.1.6-SNAPSHOT` (code 106, the control baseline) are mostly on the Releases page
 > (fix5 is the exception: verified locally only, never uploaded) — generally do not install them; use them to reinstall and confirm "is this problem something a fix introduced" when a divergence appears.
 > Historical control: the 0.1.2 (old rootfs, `8abaa3ea…`) and 0.1.3-and-later (slimmed rootfs,
 > `216cd9ef…`) builds are still on the Releases page, and can be used to compare "did slimming delete something it shouldn't have".
