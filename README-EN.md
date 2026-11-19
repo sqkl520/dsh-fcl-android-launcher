@@ -30,7 +30,7 @@ A dsh launcher built on top of [Fold Craft Launcher](https://github.com/FCL-Team
 > This README does not maintain a version number on its own — historically it mentioned stale values
 > like `fix4`/`fix6`, and **whenever it disagrees with the Releases page, the Releases page wins**.
 > After installing, check the version suffix on the About screen (e.g. `-fix26`) to confirm you
-> installed the right package; only files named with `-fixN` are verified builds.
+> installed the right package.
 
 ---
 
@@ -57,7 +57,7 @@ A dsh launcher built on top of [Fold Craft Launcher](https://github.com/FCL-Team
 ## 🚀 Quick start
 
 1. Download the latest APK from [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases)
-   (`dsh-fcl-android-launcher-*-arm64.apk`; files with a `-fixN` suffix are the currently verified builds — install those)
+   (`dsh-fcl-android-launcher-*-arm64.apk`)
 2. Install it on an arm64 Android phone (**no root needed**). Reserve roughly **1.5 GB** of free space for the first install
    (the in-app prompt is computed from the same threshold, dynamically)
 3. On first launch, wait for the runtime to finish extracting (a few minutes — keep the app in the foreground)
@@ -147,7 +147,7 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 | Fix round **fix23** (R31+R32: URL adoption gate, page teardown/rebuild, script version marker) | ✅ Built (code 129) |
 | Fix round **fix24** (R33–R44: stricter log redaction, atomic pid/overlay/delete transactions, orphan cleanup no longer fails silently) | ✅ Built (code 130) |
 | Fix round **fix25** (R45: gate dialog body no longer clipped at large font sizes, and it scrolls) | ✅ Built (code 131) |
-| Fix round **fix26** (R45: `launcher.patch.yml` is no longer overwritten wholesale, so your configured providers survive) | ✅ Built (code 132, current verified build) |
+| Fix round **fix26** (R45: `launcher.patch.yml` is no longer overwritten wholesale, so your configured providers survive) | ✅ Released (code 132, current) |
 | `1.0.0` (can reliably start / download / manage dsh) | ⬜ Pending promotion from 0.1.6 |
 
 **Quality baseline**: build BUILD SUCCESSFUL · unit tests **1060/1060** · script self-check 33/33

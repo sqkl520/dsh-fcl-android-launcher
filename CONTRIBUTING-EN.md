@@ -28,7 +28,7 @@ When opening a new Issue, please use the template and include these six things w
 
 | Needed | Why |
 |---|---|
-| **Version suffix** (the string on the About screen, e.g. `0.1.6-SNAPSHOT-fix26`) | Without it there is no way to tell whether you installed the currently verified build; the README has had version-mismatch incidents in the past |
+| **Version suffix** (the string on the About screen, e.g. `0.1.6-SNAPSHOT-fix26`) | Without it there is no way to tell whether you installed the current build; the README has had version-mismatch incidents in the past |
 | **Device model + Android version** | proot / WebView / storage-path behaviour is strongly ROM-dependent |
 | **Reproduction steps** | "Tapping start shows a blank screen" and "after installing dsh, tapping start shows a blank screen" are two different problems |
 | **Log excerpt** | The in-app log page can copy out; instance logs and the global log are separate — paste the relevant one |

@@ -28,7 +28,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT (fix26, current verified build)
+## 0.1.6-SNAPSHOT (fix26)
 
 > **The model provider you add no longer disappears.** Previously one restart wiped the provider you
 > configured, with no warning at all.
@@ -56,7 +56,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT (fix25, historical verified build)
+## 0.1.6-SNAPSHOT (fix25)
 
 > **Risk warnings are no longer cut off when you increase the system font size.** The gate dialog body
 > used to break off mid-sentence.
@@ -81,7 +81,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT (fix24, historical verified build)
+## 0.1.6-SNAPSHOT (fix24)
 
 > **A "failures must be visible" pass.** Several error paths used to swallow the failure silently, so you
 > could never work out what went wrong.
@@ -104,7 +104,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT (fix23, historical verified build)
+## 0.1.6-SNAPSHOT (fix23)
 
 > **A security hardening: nobody can steer your UI to another site any more.** Plus a batch of stability fixes.
 
@@ -132,7 +132,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT (fix22, historical verified build)
+## 0.1.6-SNAPSHOT (fix22)
 
 > **The same dialog no longer reappears after you copy the access link.** And opening the UI in an
 > external browser no longer re-downloads the front-end files every time.
@@ -201,14 +201,14 @@ upgrade notes matter to you today are called out in the notes column.
 | `0.1.6-SNAPSHOT` (fix11) | R24 state machine: startup retry and stop reliability | — |
 | `0.1.6-SNAPSHOT` (fix10) | R23 review rework: four-branch gate dialog + no blank screen after copying + script version comparison wired up | **First build where the script-version comparison actually runs on startup** |
 | `0.1.6-SNAPSHOT` (fix9) | Superseded by fix10 | — |
-| `0.1.6-SNAPSHOT` (fix8) | Historical verified build | — |
-| `0.1.6-SNAPSHOT` (fix7) | Historical verified build | — |
+| `0.1.6-SNAPSHOT` (fix8) | — | — |
+| `0.1.6-SNAPSHOT` (fix7) | — | — |
 | `0.1.6-SNAPSHOT` (fix6) | **First identity change: a new app; the old package can coexist** | **Package name changes to `com.dsh.fcl.androidlauncher` with a dedicated key (not debuggable). fix6 does not inherit data from fix1–fix5** |
-| `0.1.6-SNAPSHOT` (fix5) | Historical verified build — verified locally only, never uploaded to Releases | — |
-| `0.1.6-SNAPSHOT` (fix4) | Historical verified build | — |
-| `0.1.6-SNAPSHOT` (fix3) | Historical verified build | — |
-| `0.1.6-SNAPSHOT` (fix2) | Historical verified build | — |
-| `0.1.6-SNAPSHOT` (fix1) | Historical verified build | Package names carry a `.debug` suffix with the public debug key |
+| `0.1.6-SNAPSHOT` (fix5) | Verified locally only, never uploaded to Releases | — |
+| `0.1.6-SNAPSHOT` (fix4) | — | — |
+| `0.1.6-SNAPSHOT` (fix3) | — | — |
+| `0.1.6-SNAPSHOT` (fix2) | — | — |
+| `0.1.6-SNAPSHOT` (fix1) | — | Package names carry a `.debug` suffix with the public debug key |
 | `0.1.6-SNAPSHOT` | Base 0.1.6 build | — |
 | `0.1.5-SNAPSHOT` | Earlier iteration | — |
 | `0.1.4-SNAPSHOT` | Earlier iteration | — |

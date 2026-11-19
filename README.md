@@ -28,7 +28,7 @@
 > **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
 > **公开发布的最新包是 `0.1.6-SNAPSHOT-fix26`**。本 README 不单独维护版本号 ——
 > 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
-> 装完请到**关于页核对版本号后缀**（如 `-fix26`）确认装对了包；文件名带 `-fixN` 的才是验证包。
+> 装完请到**关于页核对版本号后缀**（如 `-fix26`）确认装对了包。
 
 ---
 
@@ -55,7 +55,7 @@
 ## 🚀 快速开始
 
 1. 去 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 下载最新 APK
-   （`dsh-fcl-android-launcher-*-arm64.apk`；文件名带 `-fixN` 的是当前验证包，装它）
+   （`dsh-fcl-android-launcher-*-arm64.apk`）
 2. 在 arm64 安卓手机上安装（**未 root 也用**）；首次安装请预留约 **1.5 GB** 空闲空间
    （界面内提示同源，按实际门槛动态计算）
 3. 首次启动等待运行环境解压（几分钟，期间保持应用在前台）
@@ -71,7 +71,7 @@
 | 界面白屏 / 模型选不了 | 同上——多半是 WebView 内核过旧；dsh 新版前端实测需要 119+（社区/真机经验值，非代码里的硬性门槛） |
 | 首次要等多久？要多大空间？ | 解压约需 1.5 GB 空闲、几分钟（视闪存速度）；解压期间保持前台或锁屏放置均可 |
 | 下载/安装中断了要重来吗？ | 不用——已下载的内容有缓存，重试不会从头再来 |
-| 品牌 / 包名 | **fix6 起**：正式包名 `com.dsh.fcl.androidlauncher` + 专用签名密钥（非 debuggable）。**fix1~fix5**：验证包，包名带 `.debug` 后缀、公开调试签名——两者是**不同的 App，可并存**（fix6 不继承旧版数据） |
+| 品牌 / 包名 | **fix6 起**：正式包名 `com.dsh.fcl.androidlauncher` + 专用签名密钥（非 debuggable）。**fix1~fix5**：调试包，包名带 `.debug` 后缀、公开调试签名——两者是**不同的 App，可并存**（fix6 不继承旧版数据） |
 | 覆盖安装后脚本要重解压吗？ | 需要时会自动做，不用你操心：启动时只读比对一次本机脚本与 APK 内的版本号，落后就直接进「准备运行环境」页，只重解 `scripts` 子目录（约 45 KB，秒级），**不动 rootfs**。这条路径 fix10 起才接通（此前存量用户升级后不会触发）。**fix22 改了脚本**（新增一个前端资源缓存插件），从更早的包升上来会真正触发一次重解压 |
 
 ## 🔧 它是怎么工作的
@@ -125,7 +125,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 应用外壳：三页 + 实例详情 + 右面板 + 动态岛 | ✅ 完成 |
 | 运行时底座：proot + rootfs + PROOT_LOADER | ✅ 已集成、真机点亮 |
 | 真机端到端：装 → 启 → 停 → 再启 → 对话 | ✅ 已点亮（0.1.6，2026-10-11） |
-| 修复轮次 fix1 ~ fix9 | ✅ 全部已发布（fix5 仅本机验证、未上传 Releases，原因见 [`docs/RELEASES.md`](docs/RELEASES.md) 的「fix5，历史验证包」段）；状态见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
+| 修复轮次 fix1 ~ fix9 | ✅ 全部已发布（fix5 仅本机验证、未上传 Releases，原因见 [`docs/RELEASES.md`](docs/RELEASES.md) 的 fix5 段）；状态见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
 | 修复轮次 **fix10**（R23 锐评返工：门禁框四支按钮 + 复制后不再空白 + 脚本版本比对接通） | ✅ 已发布（code 116，见 Releases） |
 | 修复轮次 **fix11**（R24 状态机收口：启动重试与停止可靠性） | ✅ 已发布（code 117，见 Releases） |
 | 修复轮次 **fix12**（R25 判据统一：装好了没只认一套口径 + 失败不再被吞掉） | ✅ 已发布（code 118，见 Releases） |
@@ -142,7 +142,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 修复轮次 **fix23**（R31+R32：URL 采信门、页面回收重建、脚本版本号） | ✅ 已出包（code 129） |
 | 修复轮次 **fix24**（R33~R44：日志脱敏加严、pid/overlay/删除事务原子化、孤儿清理不再静默失败） | ✅ 已出包（code 130） |
 | 修复轮次 **fix25**（R45：门禁框正文在高字号下不再被裁掉，且能滚动） | ✅ 已出包（code 131） |
-| 修复轮次 **fix26**（R45：`launcher.patch.yml` 不再整份覆盖，保留用户配的 provider） | ✅ 已出包（code 132，当前验证包） |
+| 修复轮次 **fix26**（R45：`launcher.patch.yml` 不再整份覆盖，保留用户配的 provider） | ✅ 已发布（code 132，当前最新） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
 **质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **1060/1060** · 脚本自检 33/33

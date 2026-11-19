@@ -59,7 +59,7 @@ cd <仓库根>
 
 
 命名规则：`dsh-fcl-android-launcher-<version>-arm64.apk`（如
-`dsh-fcl-android-launcher-0.1.6-SNAPSHOT-arm64.apk`；带 `-fixN` 后缀的是同一版本下的修复验证包，
+`dsh-fcl-android-launcher-0.1.6-SNAPSHOT-arm64.apk`；带 `-fixN` 后缀的是同一版本下的修复包，
 如 `…-0.1.6-SNAPSHOT-fix1-arm64.apk`）。
 
 `SHA256SUMS` 里只写**文件名**（两处同名），因此 `output/` 与 `apk-archive/<version>/`

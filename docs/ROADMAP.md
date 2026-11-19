@@ -107,7 +107,7 @@ M5 的"可分发签名 APK"已由 fix6 达成（T-D1 提前）。逐版证据见
 
 ### 要做的（按顺序，历史记录）
 
-1. **装当前验证包到真机** —— 带 `-fixN` 后缀的那个（当时是 `0.1.6-SNAPSHOT-fix1`，
+1. **装当前最新版本到真机** —— 带 `-fixN` 后缀的那个（当时是 `0.1.6-SNAPSHOT-fix1`，
    **公开发布的最新包是 `0.1.6-SNAPSHOT-fix22`**），包在 GitHub Release：
    <https://github.com/sqkl520/dsh-fcl-android-launcher/releases>
    （无后缀的同版本包是修之前的对照基准，不要装它）
