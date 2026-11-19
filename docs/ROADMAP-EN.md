@@ -17,15 +17,12 @@
 
 ---
 
-## Where we are now (as of 2026-11-19: **code fix26 / code 132**; **public releases still stop at fix22**)
+## Where we are now (as of 2026-11-19: fix26 / code 132, **released**)
 
-> ⚠️ **These two numbers differ — do not conflate them**:
-> - **The code** has reached **fix26** (`dshVersionCode=132`, unit tests 1060/1060, script self-check 33/33);
-> - **Public releases** stop at **`v0.1.6-SNAPSHOT-fix22`** (code 128) — fix23–fix26 have **not been
->   published to the Releases page** and have no tags. They currently exist only on this machine and in
->   the `output/` directory.
->
-> So: **if you want a publicly downloadable build, install fix22**; fix23–26 must wait for a release.
+> **Code and public releases are now aligned**: the latest code is **fix26**
+> (`dshVersionCode=132`, unit tests 1060/1060, script self-check 33/33), and the latest public release
+> is also **`v0.1.6-SNAPSHOT-fix26`**. fix23–fix26 had been built but not published to the Releases
+> page; that was completed on 2026-11-19.
 
 **The shell rework (M0) is fully complete** (phases 0~4, including the de-Material wrap-up, see `design/app-shell.md`):
 the app goes straight into the dsh shell on launch, the main menu has three switchable pages (Instances / Versions / Settings), and there is no MC runtime gate.

@@ -19,7 +19,7 @@
 |---|---|
 | Public version | `0.1.6-SNAPSHOT` (`dshVersion` in `gradle.properties`) |
 | Version code / fix label | `dshVersionCode=132` · `dshFixLabel=fix26` |
-| Latest code round | `0.1.6-SNAPSHOT-fix26` (**not released**; the latest public build is fix22) |
+| Current verification build | `0.1.6-SNAPSHOT-fix26` (released to Releases) |
 | Quality baseline | unit tests **1060/1060**; script self-check **33/33** |
 | On-device end to end | 0.1.6 (batch A) lit up; since then per-version on-device feedback has driven the fixes (fix1~fix26) |
 
@@ -71,7 +71,7 @@
 | fix25 | Gate dialog body no longer clipped at large font sizes, and it scrolls (BL-231) | R45 |
 | fix26 | `launcher.patch.yml` is no longer overwritten wholesale, so user-configured providers survive (BL-246) | R45 |
 
-> ⚠️ **fix23–fix26 have not been published to the Releases page** (no tags either); they exist only on
+> fix23–fix26 were published on 2026-11-19 (they had been built but not uploaded).
 > this machine and in `output/`.
 
 ## P1 · UI restoration

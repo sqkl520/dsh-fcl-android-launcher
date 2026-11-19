@@ -26,12 +26,9 @@
 > 如果喜欢这个项目就 Star 一下喵 ⭐
 >
 > **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
-> **公开发布的最新包是 `0.1.6-SNAPSHOT-fix22`**。本 README 不单独维护版本号 ——
+> **公开发布的最新包是 `0.1.6-SNAPSHOT-fix26`**。本 README 不单独维护版本号 ——
 > 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
-> 装完请到**关于页核对版本号后缀**（如 `-fix22`）确认装对了包；文件名带 `-fixN` 的才是验证包。
->
-> ⚠️ **代码已走到 fix26，但 fix23~fix26 尚未发布到 Releases 页**（也没有 tag）。
-> 这几轮只在本机与 `output/` 里，公开下不到。逐版说明见 [`docs/RELEASES.md`](docs/RELEASES.md)。
+> 装完请到**关于页核对版本号后缀**（如 `-fix26`）确认装对了包；文件名带 `-fixN` 的才是验证包。
 
 ---
 

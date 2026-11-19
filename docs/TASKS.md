@@ -19,7 +19,7 @@
 |---|---|
 | 对外版本 | `0.1.6-SNAPSHOT`（`gradle.properties` 的 `dshVersion`） |
 | 版本号 / fix 标签 | `dshVersionCode=132` · `dshFixLabel=fix26` |
-| 代码最新轮次 | `0.1.6-SNAPSHOT-fix26`（**未发布**；公开最新包是 fix22） |
+| 当前验证包 | `0.1.6-SNAPSHOT-fix26`（已发布到 Releases） |
 | 质量基线 | 单测 **1060/1060**；脚本自检 **33/33** |
 | 真机端到端 | 0.1.6（批 A）已点亮；此后逐版真机反馈驱动修复（fix1~fix26） |
 
@@ -71,7 +71,7 @@
 | fix25 | 门禁框正文在高字号下不再被裁掉，且能滚动（BL-231） | R45 |
 | fix26 | `launcher.patch.yml` 不再整份覆盖，保留用户配的 provider（BL-246） | R45 |
 
-> ⚠️ **fix23~fix26 尚未发布到 Releases 页**（也无 tag），只在本机与 `output/` 里。
+> fix23~fix26 已于 2026-11-19 补齐发布（此前打好包但未上传）。
 
 ## P1 · UI 还原
 
