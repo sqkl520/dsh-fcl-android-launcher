@@ -101,10 +101,9 @@ for pair in fix23:129 fix24:130 fix25:131 fix26:132; do
   fi
 
   # Release 正文取自 docs/RELEASES.md 里该轮那一段（与 release.sh 同一套抽取规则）
+  # 段标题就是产物版本串本身（RELVER = 0.1.6-SNAPSHOT-fixN），与 tag / APK 名同源。
   NOTES=$(mktemp)
-  FIXN=$(echo "$FIX" | sed -n 's/^fix\([0-9][0-9]*\)$/\1/p')
-  BASEVER=$(echo "$VER" | sed -n 's/-SNAPSHOT$//p'); [ -n "$BASEVER" ] || BASEVER="$VER"
-  awk -v v="## ${BASEVER}-build.${FIXN}" 'index($0,v)==1{f=1} f && /^## / && index($0,v)!=1{exit} f{lines[++n]=$0}
+  awk -v v="## ${RELVER}" 'index($0,v)==1{f=1} f && /^## / && index($0,v)!=1{exit} f{lines[++n]=$0}
     END{last=n; while(last>0 && (lines[last]~/^[[:space:]]*$/ || lines[last]~/^-{3,}[[:space:]]*$/)) last--;
         first=1; while(first<last && lines[first]~/^[[:space:]]*$/) first++;
         for(i=first;i<=last;i++) print lines[i]}' "$SRC/docs/RELEASES.md" > "$NOTES"
