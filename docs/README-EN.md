@@ -24,7 +24,6 @@
 | File | Contents | When to read it |
 |---|---|---|
 | `RELEASES.md` | **Release notes (for users)**: what each version adds, changes, fixes, and upgrade notes; GitHub Release bodies are taken from here | You want to know "what changed in this version, should I upgrade" |
-| `RELEASE-NOTES-GUIDE.md` | **Release-note writing rules**: structure, eight hard rules, self-check list. **Shared by every product in this project** | You are writing or editing any release notes |
 | [`../SECURITY-EN.md`](../SECURITY-EN.md) | **Security policy**: which permissions are requested, where it connects, where credentials live, and **what this launcher cannot protect against** (the rootfs is not a sandbox) | You want to know "is this thing safe, and where does my API key live" |
 | `PLAN.md` | **Overall design**: architecture, directory layout, key flows, security design | You want the big picture |
 | `ROADMAP.md` | **Roadmap**: milestones M1–M6 (device bring-up → stability → experience → engineering → distribution → extension) | You want to know where this is heading |

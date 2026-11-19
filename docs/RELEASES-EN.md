@@ -8,9 +8,12 @@
 > **There is exactly one source of truth for the version number**: `dshVersion` in `gradle.properties`
 > at the repository root. The newest version number in this file must match it.
 
-> 📖 **Before editing this file, read [`RELEASE-NOTES-GUIDE-EN.md`](RELEASE-NOTES-GUIDE-EN.md)** —
-> those are the release-note rules shared by every product in this project (structure, eight hard
-> rules, self-check list). This file does not repeat them; it keeps only the one note specific to it:
+> How to write these: **one `##` per version → a one-sentence summary → category sections → upgrade
+> notes**. Categories are Keep a Changelog's six (Added / Changed / Deprecated / Removed / Fixed /
+> Security) plus `Known limitations` and `Upgrade notes`.
+> Hard rules: `Fixed` appears only once per version (use list items for several fixes); no
+> parentheses or technical nouns in headings; describe what the user experiences rather than which
+> line changed; unsolved problems go under `Known limitations`, never hidden.
 
 > ⚠️ **Known inaccuracies in the historical sections**: the upgrade notes of the early builds (fix1 – fix7)
 > say "the first launch re-extracts the scripts (a few MB)", but the size measures at only **about 34 KB**
