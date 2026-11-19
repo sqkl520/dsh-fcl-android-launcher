@@ -102,7 +102,9 @@ for pair in fix23:129 fix24:130 fix25:131 fix26:132; do
 
   # Release 正文取自 docs/RELEASES.md 里该轮那一段（与 release.sh 同一套抽取规则）
   NOTES=$(mktemp)
-  awk -v v="## ${VER}（${FIX}" 'index($0,v)==1{f=1} f && /^## / && index($0,v)!=1{exit} f{lines[++n]=$0}
+  FIXN=$(echo "$FIX" | sed -n 's/^fix\([0-9][0-9]*\)$/\1/p')
+  BASEVER=$(echo "$VER" | sed -n 's/-SNAPSHOT$//p'); [ -n "$BASEVER" ] || BASEVER="$VER"
+  awk -v v="## ${BASEVER}-build.${FIXN}" 'index($0,v)==1{f=1} f && /^## / && index($0,v)!=1{exit} f{lines[++n]=$0}
     END{last=n; while(last>0 && (lines[last]~/^[[:space:]]*$/ || lines[last]~/^-{3,}[[:space:]]*$/)) last--;
         first=1; while(first<last && lines[first]~/^[[:space:]]*$/) first++;
         for(i=first;i<=last;i++) print lines[i]}' "$SRC/docs/RELEASES.md" > "$NOTES"
