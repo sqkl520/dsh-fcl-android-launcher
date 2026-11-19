@@ -102,8 +102,13 @@ for pair in fix23:129 fix24:130 fix25:131 fix26:132; do
 
   # Release 正文取自 docs/RELEASES.md 里该轮那一段（与 release.sh 同一套抽取规则）
   # 段标题就是产物版本串本身（RELVER = 0.1.6-SNAPSHOT-fixN），与 tag / APK 名同源。
+  # ★ 精确匹配整行，不用前缀——`…-fix2` 是 `…-fix26` 的前缀，前缀匹配会抽出 7 段。
   NOTES=$(mktemp)
-  awk -v v="## ${RELVER}" 'index($0,v)==1{f=1} f && /^## / && index($0,v)!=1{exit} f{lines[++n]=$0}
+  awk -v v="## ${RELVER}" '
+    { hit = 0
+      if ($0 == v) hit = 1
+      else if (index($0, v) == 1 && index(substr($0, length(v)+1), "（") == 1) hit = 1 }
+    hit{f=1} f && /^## / && !hit{exit} f{lines[++n]=$0}
     END{last=n; while(last>0 && (lines[last]~/^[[:space:]]*$/ || lines[last]~/^-{3,}[[:space:]]*$/)) last--;
         first=1; while(first<last && lines[first]~/^[[:space:]]*$/) first++;
         for(i=first;i<=last;i++) print lines[i]}' "$SRC/docs/RELEASES.md" > "$NOTES"

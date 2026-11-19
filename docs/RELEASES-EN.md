@@ -40,15 +40,15 @@
   **regenerated in full** — a provider you wrote in following dsh's documentation was wiped on the next
   start. Now the launcher maintains only its own two entries and leaves everything else untouched, so your
   configuration is no longer lost.
-- **On-device evidence**: before the fix, writing a provider and restarting took `grep -c mygateway`
-  from `1` to `0`; after the fix it stays at `1`.
 
-### Known limitations
+  `writeLauncherPatchOverlay` used to overwrite the whole file; it now merges — claiming `client-hmr` and
+  `launcher-assets` by id and keeping everything else after them (dsh's patch semantics are "later wins").
+  `R45LauncherPatchMergeTest` has 9 cases, one of which asserts the production call site really calls the
+  merge function. Unit tests 1060/1060, script self-check 33/33.
 
-- **On-device verification of this fix was not completed by the author** (the device had disconnected).
-  Nine unit tests cover the merge logic, one of which specifically asserts that "the production call site
-  really calls the merge function" (reverting the call site makes exactly that test go red). If your
-  provider still disappears after a restart, please open an issue with what you observed.
+  Verified on device (KKG-AN00 / Android 10): wrote a `mygateway` provider into `launcher.patch.yml`,
+  force-stopped and relaunched — the entry was still there, and both of the launcher's own entries were
+  too. All three coexist.
 
 ### Upgrade notes
 
