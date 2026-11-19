@@ -8,40 +8,9 @@
 > **There is exactly one source of truth for the version number**: `dshVersion` in `gradle.properties`
 > at the repository root. The newest version number in this file must match it.
 
-## How to write these (read this before editing the file)
-
-The structure is fixed at four levels. Do not improvise:
-
-```text
-## Version (fixN, status)        ← one ## per version
-> One sentence on the most important change in this build
-
-### Added / Fixed / ...         ← use Keep a Changelog's categories, only the ones that apply
-### Upgrade notes              ← uninstall needed? re-extraction? anything to watch out for
-```
-
-**Six categories** (from [Keep a Changelog](https://keepachangelog.com/), in this order, omit the ones
-that do not apply):
-
-| Category | When to use it |
-|----------|----------------|
-| `Added` | A new feature users can see |
-| `Changed` | Existing behaviour changed |
-| `Deprecated` | Something about to be removed |
-| `Removed` | Something removed in this build |
-| `Fixed` | A defect that got fixed |
-| `Security` | Security-related fixes (credentials, permissions, privilege) |
-
-**Three hard rules** (these were the most frequently broken):
-
-1. **`Fixed` may appear only once per version.** When several things were fixed, use `-` list items;
-   do not open a second `### Fixed (something)`. Stuffing technical descriptions into the parentheses
-   is what made these notes messy.
-2. **Describe what the user experiences, not which line you changed.** Good:
-   `The same dialog no longer reappears after a successful link copy`. Bad:
-   `Reworked the lifetime of the gateCopied flag`. Technical detail belongs in `docs/BUGLEDGER.md`.
-3. **No technical nouns in headings.** The heading is just `Fixed` or `Added`, never
-   `Fixed (launcher.patch.yml overwrite issue)` — put any explanation in the item body.
+> 📖 **Before editing this file, read [`RELEASE-NOTES-GUIDE-EN.md`](RELEASE-NOTES-GUIDE-EN.md)** —
+> those are the release-note rules shared by every product in this project (structure, eight hard
+> rules, self-check list). This file does not repeat them; it keeps only the one note specific to it:
 
 > ⚠️ **Known inaccuracies in the historical sections**: the upgrade notes of the early builds (fix1 – fix7)
 > say "the first launch re-extracts the scripts (a few MB)", but the size measures at only **about 34 KB**
