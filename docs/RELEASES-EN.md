@@ -71,7 +71,7 @@ that do not apply):
 - **On-device evidence**: before the fix, writing a provider and restarting took `grep -c mygateway`
   from `1` to `0`; after the fix it stays at `1`.
 
-### Known limitations (not solved in this build)
+### Known limitations
 
 - **On-device verification of this fix was not completed by the author** (the device had disconnected).
   Nine unit tests cover the merge logic, one of which specifically asserts that "the production call site
@@ -197,7 +197,7 @@ that do not apply):
   "install a plugin and it appears without refreshing" would silently stop working, which is worse than
   being a bit slower.
 
-### Known limitations (not solved in this build)
+### Known limitations
 
 - **Leaving and re-entering the UI still prompts once about an outdated WebView.** That "already copied"
   flag only lives in the current page and is not persisted — persisting it would mean this device never
@@ -223,7 +223,7 @@ that do not apply):
 The full text of each of these lives in the Chinese original [`RELEASES.md`](RELEASES.md). Only builds whose
 upgrade notes matter to you today are called out in the notes column.
 
-| Version | Headline | Notes worth knowing |
+| Version | Headline | Notes |
 |---|---|---|
 | `0.1.6-SNAPSHOT` (fix21) | Corrected three things the previous build stated wrongly; warn automatically about the empty-directory trap (hit three times) | — |
 | `0.1.6-SNAPSHOT` (fix20) | Third R28 review: API key exposure surface warning + diagnosable empty-directory typo | — |
