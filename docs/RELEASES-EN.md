@@ -210,9 +210,9 @@ upgrade notes matter to you today are called out in the notes column.
 | `0.1.6-SNAPSHOT` (fix2) | — | — |
 | `0.1.6-SNAPSHOT` (fix1) | — | Package names carry a `.debug` suffix with the public debug key |
 | `0.1.6-SNAPSHOT` | Base 0.1.6 build | — |
-| `0.1.5-SNAPSHOT` | Earlier iteration | — |
-| `0.1.4-SNAPSHOT` | Earlier iteration | — |
-| `0.1.3-SNAPSHOT` | Earlier iteration | — |
-| `0.1.2-SNAPSHOT` | Earlier iteration | — |
-| `0.1.1-SNAPSHOT` | Earlier iteration | — |
-| `0.1.0` | First published version | — |
+| `0.1.5-SNAPSHOT` | Task area, setup page and right panel polished | — |
+| `0.1.4-SNAPSHOT` | Instance management and version download reworked | — |
+| `0.1.3-SNAPSHOT` | Slimmed rootfs (314 MB → 149 MB) | — |
+| `0.1.2-SNAPSHOT` | Setup page and a task area; fixed duplicate installs | — |
+| `0.1.1-SNAPSHOT` | **The APK bundles the full rootfs** — no manual setup | 1.4 GB free space for first extraction |
+| `0.1.0` | First installable version | First release; rootfs had to be prepared manually |
