@@ -703,8 +703,16 @@ object DshInstances {
      */
     private val adoptLock = Any()
 
-    /** [delete] 等实例离开 Starting/Running/Stopping 的上限 —— 与 [DshRuntime.stopAndWait] 的默认预算一致 */
-    private const val DELETE_WAIT_TIMEOUT_MS = 8_000L
+    /**
+     * [delete] 等实例离开 Starting/Running/Stopping 的上限。
+     *
+     * ★ BL-226：**不再是独立字面量**。原来这里是 `8_000L`，注释却写"与 [DshRuntime.stopAndWait]
+     * 的默认预算一致"—— 而那边是 13_000，两者已经漂开 5 秒。删除一个正在停止的实例时，
+     * 进程在 9~13 秒才停完，删除流程却在 8 秒处判超时、对仍在写 `node_modules` 的 proot
+     * 调 `deleteRecursively()` ⇒ 300MB 级残留 + 下次冷启被 [adoptOrphanInstanceDirs] 收养成幽灵实例。
+     * 现在直接引用同一个常量，杜绝再次漂移。
+     */
+    private const val DELETE_WAIT_TIMEOUT_MS = DshRuntime.STOP_SETTLE_BUDGET_MS
 
     /** [delete] 轮询 [DshRuntime.activeInstanceId] 的间隔（停止收尾在秒级，100ms 足够跟手且不费） */
     private const val DELETE_WAIT_POLL_MS = 100L
@@ -1254,8 +1262,8 @@ object DshInstances {
                 // ★ 必须等进程真正退出再删：stop() 是异步的（TERM→5s→KILL），
                 // 若不等它，node 可能还在往 node_modules 写文件，deleteRecursively 就会留下
                 // 一堆 300MB 级残留且无提示（界面早已把实例从列表里移除）。
-                // 等待上限 [DELETE_WAIT_TIMEOUT_MS]（与 DshRuntime.stopAndWait 的预算一致），
-                // 超时也硬删并靠日志提示。
+                // 等待上限 [DELETE_WAIT_TIMEOUT_MS]（= [DshRuntime.STOP_SETTLE_BUDGET_MS]，
+                // 与 stopAndWait 的预算同源），超时也硬删并靠日志提示。
                 //
                 // ★ 归属校验（BL-036 重写；旧判据 `runningInstanceId() == id` 漏掉了 Stopping）：
                 // DshRuntime 是单实例策略，stop() 停的是**当前正在运行的那个实例**，与传入的 id 无关。

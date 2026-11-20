@@ -245,6 +245,20 @@ object DshRuntime {
     private const val NODE_KILL_GRACE_MS = 2_000L
 
     /**
+     * 「等一个正在跑的实例彻底停稳」的时间预算上限（毫秒）—— **[stopAndWait] 与
+     * `DshInstances.delete` 共用这一个值**。
+     *
+     * ★ BL-226：原来两处各写一个把字面量（这里 13_000、删除那边 8_000），删除侧的注释还
+     *   自称"与 stopAndWait 的预算一致"—— 实际差 5 秒。后果是"删除正在运行的实例"在
+     *   8s 处判超时、对仍在写 node_modules 的 proot 调 `deleteRecursively()`，留下 300MB
+     *   级残留，下次冷启被 `adoptOrphanInstanceDirs` 收养成幽灵空壳。
+     *   现在只有这一个常量，两边谁也不可能再漂开。
+     *
+     * 数值依据见 [stopAndWait] 的 KDoc：收尾链最坏 ≈12s（2 + 2.5 + 2.5 + 5），留 1s 余量。
+     */
+    const val STOP_SETTLE_BUDGET_MS = 13_000L
+
+    /**
      * 停止时，等 proot 响应 SIGQUIT / 确认它已经退出的宽限时间（毫秒）。
      *
      * ★ R16/fix4（BL-138）：两段式 —— 先总时长 [PROOT_EXIT_GRACE_MS]，仍在则以
@@ -972,7 +986,28 @@ object DshRuntime {
                         "exist; refusing to create it (it would be adopted as a phantom instance)"
                 )
             }
-            HomeDirPlan.AlreadyExists, HomeDirPlan.OutsideGuestRoot -> Unit
+            is HomeDirPlan.OutsideGuestRoot -> {
+                // ★ BL-239：这条分支原来是 `-> Unit`（和 AlreadyExists 合并在一起），
+                //   于是"启动目录指向 rootfs 之外 / 指向 `/`"这件事**完全静默**：不建目录、
+                //   不告警、日志里一个字都没有。真机实测（v0.1.6-SNAPSHOT-fix22）：
+                //   用户填 `/` → 保存成功、`instances.json` 里 `"homeDir": "/"`、
+                //   设置页照原样显示 `/`（因 homeDir 非空，连"（默认）"都不标）——
+                //   界面上看不出任何异常，而 dsh 的目录选择器起点会变成 rootfs 根
+                //   （列 bin/ boot/ dev/ …）。事后翻日志也没有痕迹，无法诊断。
+                //
+                //   UI 层现在会在保存时拦 `/`（见 DshInstanceSettingPage 的 HomeDirPlan 注释），
+                //   但那拦不住**已经存进去的旧值**（升级上来的实例、手改 instances.json）。
+                //   所以运行期必须留一条能对上号的日志。只告警、不改行为 —— 生效的 HOME
+                //   仍是 resolveHomeRootfs 的结果，我们不去替用户改写他存的值。
+                DshLogBus.appendFor(
+                    instance.id,
+                    "[runtime] custom HOME '$homeGuest' is outside the guest root " +
+                        "${ProotCommand.GUEST_ROOT}; leaving it as-is and creating nothing. " +
+                        "dsh will start in a directory the launcher does not manage " +
+                        "(fix it in instance settings if this looks wrong)"
+                )
+            }
+            HomeDirPlan.AlreadyExists -> Unit
         }
 
         // ★ R28 / C3-D：**自动判据** —— 生效的 HOME 里必须有至少 1 个子目录，否则打 WARN。
@@ -2074,8 +2109,11 @@ object DshRuntime {
      * 那条路径同量级）。8s 落在 2)~4) 中间 ⇒ "停后秒启"的兜底分支（超时后强行启动）**是常规路径**
      * 而不是边角，会把 Stopping 覆写成 Starting 并把 SIGKILL 打到正走 SIGQUIT 的 proot 上（E4-N-1）。
      * 13_000 比最坏值留 1s 余量；多等 5s 只发生在"proot 真的顽固"的设备上，正常收尾 <3s 就返回。
+     *
+     * ★ BL-226：默认值改为引用 [STOP_SETTLE_BUDGET_MS]，与 `DshInstances.delete` 的等待
+     * 共用同一个常量（那边原来是独立的 8_000 字面量，两处已经漂开过一次）。
      */
-    suspend fun stopAndWait(reason: String, timeoutMs: Long = 13_000): Boolean {
+    suspend fun stopAndWait(reason: String, timeoutMs: Long = STOP_SETTLE_BUDGET_MS): Boolean {
         // ★ BL-036：判据用 activeInstanceId()（含 Stopping）而不是 runningInstanceId()。
         //   旧实现在 Stopping 窗口进来时走"本来就没在跑"分支 → 立即 `_state.value = State.Idle`
         //   （二次停止秒置 Idle 的另一条出口，还把删除实例的等待条件整个跳过——进程还活着就删目录）。
