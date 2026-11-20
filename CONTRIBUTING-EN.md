@@ -192,7 +192,7 @@ This section is not negotiable:
 | `*.apk` / `output/` | Artifacts go out as GitHub Release assets, not into Git history |
 | `build/`, `.gradle/`, `.kotlin/` | Rebuildable caches |
 | Logs, `.hprof`, temporary screenshots | See `.gitignore` |
-| The existing `debug-key.jks` / `key-store.jks` | Leftover FCL **debug** signatures — **do not replace, do not delete**, or the old packages' upgrade chain breaks |
+| The existing `.config/debug-key.jks` / `.config/key-store.jks` | Leftover FCL **debug** signatures — **do not replace, do not delete**, or the old packages' upgrade chain breaks |
 
 Self-check before committing:
 

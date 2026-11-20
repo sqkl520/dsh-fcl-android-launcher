@@ -173,7 +173,7 @@ proot binary sources: prebuilt artifacts from the proot-distro project, termux's
 - **The shipping signing private key is not in the repository (T-D1, since 2026-10-19)**: `release-key/dsh-release.jks` (password in
   `dsh.pwd` in `local.properties`) — both repositories' exclusion lists have `/release-key/` added; this machine additionally keeps
   an offline backup at `D:\Backup\dsh-release-key-2026-10-19\` (restore from the backup when changing machines / for disaster recovery; do not rely on a single location).
-  The `debug-key.jks` used to sign old builds (same blob as the FCL upstream one, public password) **is now used only for the fordebug debug channel**.
+  The `.config/debug-key.jks` used to sign old builds (same blob as the FCL upstream one, public password) **is now used only for the fordebug debug channel**.
 - **The API key no longer touches disk and no longer passes through the launcher**: since 0.1.5 the key is managed entirely by dsh itself
   (the launcher **no longer stores it, no longer injects it, no longer checks it before starting**; the old `credentials.env` / `credentials.enc`
   are deleted automatically at startup, see the 0.1.5 upgrade notes in `RELEASES.md`).

@@ -172,7 +172,7 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 - **出货签名私钥不入库（T-D1，2026-10-19 起）**：`release-key/dsh-release.jks`（密码在
   `local.properties` 的 `dsh.pwd`）——两仓的排除清单都加了 `/release-key/`；本机另有
   `D:\Backup\dsh-release-key-2026-10-19\` 离线备份（换机/灾备时从备份恢复，不要只依赖一处）。
-  旧包签名用的 `debug-key.jks`（与 FCL 上游同 blob、密码公开）**只再用于 fordebug 调试通道**。
+  旧包签名用的 `.config/debug-key.jks`（与 FCL 上游同 blob、密码公开）**只再用于 fordebug 调试通道**。
 - **API key 不再落盘、不再经启动器**：0.1.5 起 Key 完全由 dsh 自己管
   （启动器**不再保存、不再注入、不再在启动前检查**，旧版的 `credentials.env` / `credentials.enc`
   会在启动时自动删除，见 `RELEASES.md` 0.1.5 升级须知）。

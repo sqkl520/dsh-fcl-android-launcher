@@ -16,7 +16,7 @@
 #   sh publish-fix23-26.sh              # 校验通过后逐个发布
 set -eu
 
-ROOT=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [ -f "$ROOT/settings.gradle.kts" ]; then SRC="$ROOT"; else SRC="$ROOT/dsh-fcl-android-launcher"; fi
 [ -d "$SRC/FCL" ] || { echo "!! 找不到源码仓库：$SRC"; exit 1; }
 

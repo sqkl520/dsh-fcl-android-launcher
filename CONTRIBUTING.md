@@ -165,7 +165,7 @@ sh build-apk.sh      # 出 APK（release 出货包）到 output/
 | `*.apk` / `output/` | 产物走 GitHub Release 附件，不进 Git 历史 |
 | `build/`、`.gradle/`、`.kotlin/` | 可重建的缓存 |
 | 日志、`.hprof`、截图临时文件 | 见 `.gitignore` |
-| 仓库里已有的 `debug-key.jks` / `key-store.jks` | 是 FCL 遗留的**调试**签名，**不要替换、不要删**，否则老包升级链断掉 |
+| 仓库里已有的 `.config/debug-key.jks` / `.config/key-store.jks` | 是 FCL 遗留的**调试**签名，**不要替换、不要删**，否则老包升级链断掉 |
 
 提交前自查：
 
