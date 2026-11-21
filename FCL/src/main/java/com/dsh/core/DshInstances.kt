@@ -448,6 +448,88 @@ internal const val LAUNCHER_ASSETS_PLUGIN = "launcher-assets.mjs"
 internal const val LAUNCHER_PATCH_OVERLAY = "launcher.patch.yml"
 
 /**
+ * dsh 的会话写锁文件名（上游 `session-persistence-jsonl/src/lease.ts` 的 `LEASE_FILENAME`）。
+ *
+ * 每个会话一个目录：`<DSH_HOME>/sessions/<projectKey(cwd)>/<encoded-session-id>/session.lock`。
+ * 我们**不依赖**中间两层的编码规则 —— 清理时是递归扫描，见 [planStaleSessionLockCleanup]。
+ */
+internal const val SESSION_LOCK_FILE = "session.lock"
+
+/** [planStaleSessionLockCleanup] 的结果：要删哪些锁文件、以及为什么没删。 */
+data class StaleSessionLockPlan(
+    /** 可以安全删除的锁文件（按路径排序，保证日志与测试稳定） */
+    val removable: List<File>,
+    /** 扫描到但没有删的锁文件 → 原因（进日志用；空 Map 表示扫描没发现问题） */
+    val skipped: Map<File, String>
+)
+
+/**
+ * 判定"哪些 `session.lock` 可以安全删除"（纯函数，JVM 可测）。
+ *
+ * ## 背景：BL-247（会话锁卡死）
+ *
+ * dsh 的会话写锁是**内核 flock**（`lease.ts`：*the kernel releases the lock when the
+ * holder's descriptor closes, including on any process death*）。所以正常情况下，
+ * 残留的 `session.lock` **文件**不构成阻塞 —— 文件在、但没人持有锁，下一次 flock 直接成功。
+ *
+ * 但真机上出现过发消息报 `session "…" is already owned by an active write handle`、
+ * 且**停止→重启实例也不恢复**的情形。`lease.ts` 的 POSIX 路径在 flock 成功之后还要校验
+ * `handle.stat()` 与 `stat(path)` 的 `ino`/`dev` 一致，最多重试 3 次，全不匹配就抛
+ * `SessionAlreadyOwnedError` —— proot 虚拟化 inode/dev 时两次 stat 可能对不上，
+ * 于是**误报"已被占用"**，而实际上没有任何持有者。
+ *
+ * 这种情况用户唯一的出路是删掉那个锁文件。但非 debuggable 包连 `files/` 都读不到，
+ * 用户自己做不到。所以由启动器在**安全的时刻**代劳。
+ *
+ * ## 什么叫"安全的时刻"
+ *
+ * `DshRuntime.start()` 采用**单实例策略**：进入 [startLocked] 之前必然已经把别的实例
+ * stopAndWait 干净（见 `DshRuntime.start` 的 KDoc 与 `stopAndWait` 的调用点）。
+ * 也就是说，本函数被调用时**本 App 没有任何 dsh 进程在跑** ⇒ 那些锁不可能有活的持有者
+ * ⇒ 删掉它们不会放弃任何互斥。
+ *
+ * ★ 这个前提是**硬约束**，不能在别的时机调用本函数（例如实例运行中）。
+ *   上游注释原话：*Removing a live session's lock file therefore forfeits exclusion on POSIX*。
+ *
+ * ## 为什么不只删"出问题的那一个"
+ *
+ * 我们没有可靠办法在启动前知道"哪个会话会出问题"（错误发生在 dsh 内部的 resume 阶段，
+ * 而且用户可能换一个会话继续用）。既然前提是"没有任何 dsh 进程在跑"，那么所有 session.lock
+ * 都是无主的，一起清掉是一致的做法 —— 而且剩下的锁文件本来也会在下次 flock 时被忽略。
+ *
+ * @param sessionsRoot dsh 的 sessions 根目录（`<DSH_HOME>/sessions`）；不存在 ⇒ 返回空计划
+ * @param hasLiveDshProcess 有没有活着的 dsh/node 进程。**传 true 时一个都不删**
+ *   （防御性参数：调用方理论上已保证没有进程，但把这个判据做成显式输入，
+ *   让它可测、并且将来若有人挪动调用时机，行为会退化成"什么都不做"而不是"误删"）
+ */
+fun planStaleSessionLockCleanup(
+    sessionsRoot: File,
+    hasLiveDshProcess: Boolean
+): StaleSessionLockPlan {
+    if (!sessionsRoot.isDirectory) return StaleSessionLockPlan(emptyList(), emptyMap())
+
+    val locks = runCatching {
+        sessionsRoot.walkTopDown()
+            .onEnter { it.name != "." && !it.name.startsWith(".") }
+            .filter { it.isFile && it.name == SESSION_LOCK_FILE }
+            .toList()
+    }.getOrElse { return StaleSessionLockPlan(emptyList(), emptyMap()) }
+
+    if (locks.isEmpty()) return StaleSessionLockPlan(emptyList(), emptyMap())
+
+    // ★ 唯一的否决条件。有活进程就**一个都不碰** —— 哪怕某个锁看起来是老的。
+    //   宁可不修，也不能在一个活会话上放弃互斥（那会让两次 append 撕裂同一份日志）。
+    if (hasLiveDshProcess) {
+        return StaleSessionLockPlan(
+            removable = emptyList(),
+            skipped = locks.associateWith { "a dsh process is alive; refusing to touch any session lock" }
+        )
+    }
+
+    return StaleSessionLockPlan(removable = locks.sortedBy { it.absolutePath }, skipped = emptyMap())
+}
+
+/**
  * 决定"要不要为自定义 HOME 建目录"（纯函数，R28 / C2-C-1）。
  *
  * **为什么要抽出来**：原来的判断写在 `DshRuntime.startLocked` 里，而那里需要

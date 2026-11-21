@@ -198,6 +198,7 @@ echo "[start-dsh] listen  : http://$HOST:$PORT"
 echo "[start-dsh] DSH_HOME: $DSH_HOME"
 echo "[start-dsh] workdir : $PWD"
 
+
 LOGFILE="${TMPDIR:-/tmp}/dsh-start-$$.log"
 if ! : > "$LOGFILE" 2>/dev/null; then
   # /tmp（宿主 cacheDir）不可写时退到实例目录；都不可写就明确失败，
@@ -281,6 +282,26 @@ trap 'on_signal INT' INT
 # 坑点(已验证): 默认 web profile 的 dsh-hmr 需要 node 带 --expose-internals，
 # 且该 flag 不允许放进 NODE_OPTIONS，只能直接传给 node。
 LAUNCHER_PATCH="$INSTANCE_DIR/launcher.patch.yml"
+
+# ★ BL-247：proot 下的 inode 一致性 shim。
+#
+# 问题：dsh 的会话写锁（lease.ts）在 flock 成功之后还要校验
+# `fstat(fd).ino === stat(path).ino`。proot 让这两个值**永远不同**
+# （实测三个挂载点一致：fstat 恒为 proot 编的假值，stat 是真实 inode），
+# 于是校验 3 次全失败 ⇒ 抛 SessionAlreadyOwnedError ⇒ 用户看到
+# `session "…" is already owned by an active write handle`，连全新会话都发不出消息。
+#
+# 修法：preload 一个 shim，把 ino/dev 投影成"由路径决定的稳定值"，让那次自校验通过。
+# flock 的互斥语义没有被改动。shim 自己会先探测，环境正常时它什么都不做。
+SHIM="${DSH_SCRIPTS_DIR:-/opt/dsh/scripts}/proot-inode-shim.cjs"
+# 注意 --require 只能在 NODE_OPTIONS 里（--expose-internals 不行，见上面的注释）。
+# 用追加而不是覆盖：NODE_OPTIONS 里可能已经有启动器传进来的 --max-old-space-size。
+if [ -f "$SHIM" ]; then
+  NODE_OPTIONS="${NODE_OPTIONS:-} --require $SHIM"
+  export NODE_OPTIONS
+  echo "[start-dsh] inode shim : $SHIM"
+fi
+
 PATCH_USED=0
 if [ -f "$LAUNCHER_PATCH" ]; then
   node --expose-internals "$BIN_JS" web --patch "$LAUNCHER_PATCH" --no-open --host "$HOST" --port "$PORT" >"$LOGFILE" 2>&1 &

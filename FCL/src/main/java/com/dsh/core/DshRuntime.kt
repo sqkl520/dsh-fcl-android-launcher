@@ -1075,6 +1075,64 @@ object DshRuntime {
                 DshLogBus.appendFor(instance.id, "[runtime] launcher patch overlay 写入失败（不影响启动）：$it")
             }
 
+        // ★ BL-247：清掉**无主**的会话写锁。
+        //
+        // ## 为什么必须在这里做
+        // 真机上出现过：发消息报 `session "…" is already owned by an active write handle`，
+        // **停止 → 重启实例也不恢复**（同一个 session id、同一条错）。查上游 `lease.ts` 后
+        // 定位到 POSIX 路径在 flock 成功后还要校验 `handle.stat()` 与 `stat(path)` 的
+        // `ino`/`dev` 一致，3 次不匹配就抛 SessionAlreadyOwnedError —— proot 虚拟化
+        // inode/dev 时两次 stat 可能对不上，于是**误报占用**，而根本没有持有者。
+        //
+        // 用户唯一的出路是删掉那个 session.lock，而非 debuggable 包连 `files/` 都读不到
+        // （实测：`run-as` 报 "package not debuggable"，adb shell 报 Permission denied）。
+        // 所以只能由启动器在**安全的时刻**代劳。
+        //
+        // ## 为什么这个时刻是安全的（硬约束，别挪）
+        // 走到这里时 [start] 已经 stopAndWait 过别的实例（单实例策略），本 App 没有任何 dsh
+        // 进程在跑 ⇒ 那些锁不可能有活的持有者 ⇒ 删掉不会放弃任何互斥。
+        // 上游注释原话：*Removing a live session's lock file therefore forfeits exclusion on POSIX*。
+        // 所以这里的 hasLiveDshProcess 传的是"状态机里还有活跃实例吗"——
+        // 真为 true 时计划会退化成"一个都不删"，代价只是这次不修，绝不会误删。
+        //
+        // ⚠ 清理失败**不能**让启动失败：它只是修复一个可能不存在的问题。
+        runCatching {
+            val homeHost = hostPathForGuestDir(
+                "$instancePathInRootfs/home",
+                File(DshPaths.ROOT_DIR),
+                ProotCommand.GUEST_ROOT
+            )
+            val sessionsRoot = homeHost?.let { File(it, "sessions") }
+            if (sessionsRoot != null) {
+                val plan = planStaleSessionLockCleanup(
+                    sessionsRoot = sessionsRoot,
+                    hasLiveDshProcess = activeInstanceId() != null
+                )
+                if (plan.removable.isNotEmpty()) {
+                    var removed = 0
+                    for (lock in plan.removable) {
+                        if (runCatching { lock.delete() }.getOrDefault(false)) removed++
+                    }
+                    DshLogBus.appendFor(
+                        instance.id,
+                        "[runtime] cleared $removed stale session lock(s) before start " +
+                            "(no dsh process was running, so no holder could exist)"
+                    )
+                }
+                for ((file, why) in plan.skipped) {
+                    DshLogBus.appendFor(
+                        instance.id,
+                        "[runtime] kept session lock ${file.name} at ${file.parentFile?.name}: $why"
+                    )
+                }
+            }
+        }.onFailure {
+            DshLogBus.appendFor(
+                instance.id,
+                "[runtime] stale session lock cleanup failed (start continues): $it"
+            )
+        }
+
         val argvEnv = mapOf(
             "INSTANCE_DIR" to instancePathInRootfs,
             "DSH_HOME" to "$instancePathInRootfs/home",
