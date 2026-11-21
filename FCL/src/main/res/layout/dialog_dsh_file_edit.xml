@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  配置文件编辑器（BL-249）。
+
+  ## 为什么需要它
+
+  dsh 的「设置 → 打开配置文件」在 Android 上必然失败（BL-248：它在 linux 分支调
+  `xdg-open`，而 proot 里既没有 xdg-utils 也没有显示服务）。而 `launcher.patch.yml`
+  是**用户可见的配置入口** —— dsh 文档教用户往里加 provider / 插件（BL-246 记录过）。
+  所以启动器得自己给一个能用的编辑入口。
+
+  ## 为什么是全屏对话框而不是新页面
+
+  编辑器要有足够高度放多行 YAML，还要有"保存/取消"两个明确的出口。
+  新开一个 ViewPager 页面要改 DshUIManager 的页面注册与返回栈；
+  全屏 Dialog 只影响这一处，且天然带"取消即返回"的语义。
+
+  ## 布局要点
+
+  - 编辑框 `layout_height="0dp"` + 权重：占满除按钮行以外的全部高度。
+  - `gravity="top|start"`：多行文本从左上开始，否则默认垂直居中，长文本会滚到中间。
+  - `inputType="textMultiLine|textNoSuggestions"`：关掉输入法联想 ——
+    YAML 里的键名会被当成英文单词自动纠错，改坏配置。
+  - `fontFamily="monospace"`：对齐缩进，YAML 缩进错一位语义就变了。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/edit_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="?attr/colorOnSurface" />
+
+    <TextView
+        android:id="@+id/edit_path"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="11sp"
+        android:fontFamily="monospace"
+        android:alpha="0.6"
+        android:textColor="?attr/colorOnSurface" />
+
+    <TextView
+        android:id="@+id/edit_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textSize="12sp"
+        android:alpha="0.75"
+        android:textColor="?attr/colorOnSurface" />
+
+    <!--
+      占满剩余空间。minHeight 保证即使软键盘弹出、剩余高度被压到很小，
+      也还能看见几行（否则用户以为"内容没了"）。
+    -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="12dp"
+        android:background="?attr/colorSurfaceContainerHighest"
+        android:padding="8dp">
+
+        <EditText
+            android:id="@+id/edit_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="240dp"
+            android:gravity="top|start"
+            android:fontFamily="monospace"
+            android:textSize="13sp"
+            android:background="@null"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:importantForAutofill="no"
+            android:textColor="?attr/colorOnSurface"
+            android:textColorHint="?attr/colorOnSurfaceVariant" />
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal"
+        android:gravity="end">
+
+        <Button
+            android:id="@+id/edit_cancel"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+
+        <Button
+            android:id="@+id/edit_save"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+</LinearLayout>

@@ -105,6 +105,10 @@ class DshResourceFormatTest {
         //（如 `/opt/dsh/instances/inst-x`）—— 是路径字符串，不是数字。
         "dsh_home_default_value" to arrayOf<Any>("/opt/dsh/instances/inst-x"),
 
+        // BL-249：配置文件编辑器读失败时的提示。%1$s = 异常消息（字符串，不是数字 ——
+        // 用 %d 接 IllegalStateException 的 message 会在运行期抛 IllegalFormatConversion）。
+        "dsh_file_edit_read_failed" to arrayOf<Any>("Permission denied"),
+
         // 安装阶段：脚本报 key，启动器翻文案（见 DshInstaller.stageText）。
         // 这几条带 %1$s，参数是版本号 / Node 版本号。
         "dsh_stage_node_ready" to arrayOf<Any>("v22.23.3"),

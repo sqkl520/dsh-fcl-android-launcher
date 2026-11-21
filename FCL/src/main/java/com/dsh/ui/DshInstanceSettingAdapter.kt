@@ -86,7 +86,11 @@ class DshInstanceSettingAdapter(
     enum class Tag {
         NAME, PORT, HOME_DIR,
         STATUS, START_STOP, OPEN_WEB, COPY_URL, OPEN_BROWSER,
-        VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE
+        VERSION, DISK, PATH, VERIFY, REINSTALL, DELETE,
+        // ★ BL-249：编辑实例的配置文件。dsh 自带的「打开配置文件」在 Android 上必然失败
+        //   （BL-248：它在 linux 分支调 xdg-open，proot 里既没有它也没有显示服务），
+        //   而 `launcher.patch.yml` 是用户可见的配置入口，所以启动器自己给一个能用的。
+        EDIT_CONFIG
     }
 
     sealed class Row {

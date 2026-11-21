@@ -21,6 +21,7 @@ import com.dsh.core.UrlScanner
 import com.dsh.core.resolveHomeRootfs
 import com.dsh.fcl.androidlauncher.R
 import com.dsh.fcl.androidlauncher.databinding.UiDshInstanceDetailBinding
+import com.dsh.ui.DshFileEditDialog
 import com.dsh.ui.DshInstanceSettingAdapter
 import com.mio.ui.adapter.SpacingItemDecoration
 import com.tungsten.fcllibrary.component.dialog.EditDialog
@@ -30,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 重装（BL-147）前等待旧进程离场的预算：上限与轮询间隔**照抄** [DshInstances.delete] 的
@@ -446,6 +448,21 @@ class DshInstanceSettingPage(
             DshInstanceSettingAdapter.Tag.HOME_DIR
         ),
         DshInstanceSettingAdapter.Row.Group(R.string.dsh_settings_section_maintain),
+        // ★ BL-249：编辑实例配置文件。
+        //
+        // 为什么必须有这一行：dsh 设置页右上角那个「打开配置文件」在 Android 上**必然失败**
+        // （BL-248：它在 linux 分支调 `xdg-open`，而 proot 里既没有 xdg-utils、
+        // 也没有可连接的显示服务）。而 `launcher.patch.yml` 是 dsh 文档教用户改的那个文件
+        // —— 用户想加 provider / 插件，没有别的入口。
+        //
+        // 放在「维护」段而不是「实例」段：它改的是磁盘上的文件，和"改名字/改端口"不同类；
+        // 而且它与「重装」「删除」一样属于"要慎重"的操作区。
+        DshInstanceSettingAdapter.Row.Action(
+            R.string.dsh_settings_row_edit_config,
+            R.string.dsh_settings_desc_edit_config,
+            R.string.dsh_settings_row_edit_config,
+            DshInstanceSettingAdapter.Tag.EDIT_CONFIG
+        ),
         DshInstanceSettingAdapter.Row.Action(
             R.string.dsh_action_reinstall, R.string.dsh_settings_desc_reinstall,
             R.string.dsh_action_reinstall, DshInstanceSettingAdapter.Tag.REINSTALL
@@ -862,8 +879,70 @@ class DshInstanceSettingPage(
             DshInstanceSettingAdapter.Tag.VERIFY -> verifyRuntime()
             DshInstanceSettingAdapter.Tag.REINSTALL -> reinstall(i)
             DshInstanceSettingAdapter.Tag.DELETE -> confirmDelete(i)
+            DshInstanceSettingAdapter.Tag.EDIT_CONFIG -> editConfig()
             else -> Unit
         }
+    }
+
+    /**
+     * 打开配置编辑器（BL-249）。
+     *
+     * ## 为什么要先要求"实例已停止"
+     *
+     * dsh 会 watch 配置文件，运行期改写会触发一次整树 recompose —— 等于给用户正在用的实例
+     * 来一次重启级抖动。启动器自己的 [com.dsh.core.writeLauncherPatchOverlay] 也遵守同一条
+     * （它只在启动前写）。所以这里先拦一道，明确告诉用户"先停下"，
+     * 而不是让他在毫无提示的情况下把运行中的实例搅乱。
+     *
+     * ## 为什么是三个文件而不是一个
+     *
+     * 用户照着 dsh 文档改配置时，实际会碰到三个文件（`launcher.patch.yml` 只是其中之一）：
+     *
+     * | 文件 | 作用 |
+     * |---|---|
+     * | `launcher.patch.yml` | 启动器 `--patch` 指向的那个，加 provider / 插件改这里 |
+     * | `home/.credentials.yaml` | 只存凭据 |
+     * | `home/profiles/web/cordis.patch.yml` | profile 层 patch（启动器不读，dsh 读） |
+     *
+     * 只给第一个会让用户改错地方还不知道（BL-246 的真实踩坑记录：写到 profiles 那份
+     * 根本不生效，浪费了一轮）。
+     */
+    private fun editConfig() {
+        val i = inst ?: return
+        if (isRunning()) {
+            toast(context.getString(R.string.dsh_file_edit_running))
+            return
+        }
+        val instanceDir = DshPaths.instanceDir(i.id)
+        // 三个文件按"最常改的排前面"
+        val targets = listOf(
+            File(instanceDir, "launcher.patch.yml") to
+                (R.string.dsh_file_edit_patch_title to R.string.dsh_file_edit_patch_hint),
+            File(instanceDir, "home/.credentials.yaml") to
+                (R.string.dsh_file_edit_credentials_title to R.string.dsh_file_edit_credentials_hint),
+            File(instanceDir, "home/profiles/web/cordis.patch.yml") to
+                (R.string.dsh_file_edit_profile_title to R.string.dsh_file_edit_profile_hint)
+        )
+        val labels = targets.map { context.getString(it.second.first) }.toTypedArray()
+        // ★ 用平台的 AlertDialog 做列表选择，不用 FCLAlertDialog ——
+        //   后者只有 title/message/三个按钮，**没有 setItems**（实测编译期就报 unresolved reference）。
+        //   为三个选项去扩 FCL 的 Builder 不划算。
+        androidx.appcompat.app.AlertDialog.Builder(host.activity)
+            .setTitle(R.string.dsh_settings_row_edit_config)
+            .setItems(labels) { _, which ->
+                val (file, titles) = targets[which]
+                DshFileEditDialog(
+                    activity = host.activity,
+                    target = file,
+                    titleText = context.getString(titles.first),
+                    hintText = context.getString(titles.second) + "\n" +
+                        context.getString(R.string.dsh_file_edit_backup_note),
+                    readOnly = false,
+                    onSaved = { reload() }
+                ).show()
+            }
+            .setNegativeButton(R.string.dialog_negative, null)
+            .show()
     }
 
     /**

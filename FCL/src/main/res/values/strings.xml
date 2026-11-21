@@ -492,4 +492,21 @@ Version %1$s</string>
 
     <!-- R31/BL-229：状态面板上的「去浏览器」按钮（仅链接已复制面板显示） -->
     <string name="dsh_webview_open_in_browser">Open in browser</string>
+
+    <!-- BL-249：实例配置文件编辑器（dsh 自带的「打开配置文件」在 Android 上必然失败，见 BL-248） -->
+    <string name="dsh_settings_row_edit_config">Edit configuration files</string>
+    <string name="dsh_settings_desc_edit_config">dsh\'s own \"open config file\" button cannot work on Android (no xdg-open, no display server). Edit them here; changes take effect after restarting the instance</string>
+    <string name="dsh_file_edit_patch_title">Edit launcher.patch.yml</string>
+    <string name="dsh_file_edit_patch_hint">This is the file dsh\'s --patch points to. Providers and plugins you add here are kept across restarts.</string>
+    <string name="dsh_file_edit_credentials_title">Edit home/.credentials.yaml</string>
+    <string name="dsh_file_edit_credentials_hint">Stores credentials only (key to secret). Keep the refs: structure intact.</string>
+    <string name="dsh_file_edit_profile_title">Edit home/profiles/web/cordis.patch.yml</string>
+    <string name="dsh_file_edit_profile_hint">Profile-level patch. The launcher does not read this one; dsh does.</string>
+    <string name="dsh_file_edit_read_failed">Could not read the file: %1$s</string>
+    <string name="dsh_file_edit_saved">Saved</string>
+    <string name="dsh_file_edit_save_failed_title">Save failed</string>
+    <string name="dsh_file_edit_empty_title">Save an empty file?</string>
+    <string name="dsh_file_edit_empty_message">An empty launcher.patch.yml makes the launcher stop passing --patch, so the /assets cache headers and the HMR polling interval stop applying. dsh still starts normally. Save anyway?</string>
+    <string name="dsh_file_edit_running">Stop the instance before editing its configuration</string>
+    <string name="dsh_file_edit_backup_note">A .bak copy of the previous contents is kept next to the file.</string>
 </resources>

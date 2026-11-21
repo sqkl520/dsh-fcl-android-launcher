@@ -445,4 +445,21 @@
 
     <!-- R31/BL-229：状态面板上的「去浏览器」按钮（仅链接已复制面板显示） -->
     <string name="dsh_webview_open_in_browser">前往瀏覽器</string>
+
+    <!-- BL-249：實例設定檔編輯器（dsh 自帶的「開啟設定檔」在 Android 上必然失敗，見 BL-248） -->
+    <string name="dsh_settings_row_edit_config">編輯設定檔</string>
+    <string name="dsh_settings_desc_edit_config">dsh 自帶的「開啟設定檔」在 Android 上必然失敗（沒有 xdg-open，也沒有顯示服務）。在這裡改；改完重啟實例生效</string>
+    <string name="dsh_file_edit_patch_title">編輯 launcher.patch.yml</string>
+    <string name="dsh_file_edit_patch_hint">這是 dsh 的 --patch 指向的檔案。你在這裡加的 provider 和套件會保留到重啟之後。</string>
+    <string name="dsh_file_edit_credentials_title">編輯 home/.credentials.yaml</string>
+    <string name="dsh_file_edit_credentials_hint">只存憑證（key 到 secret）。保持 refs: 的結構不變。</string>
+    <string name="dsh_file_edit_profile_title">編輯 home/profiles/web/cordis.patch.yml</string>
+    <string name="dsh_file_edit_profile_hint">profile 層的 patch。啟動器不讀這個檔案，dsh 讀。</string>
+    <string name="dsh_file_edit_read_failed">讀不到這個檔案：%1$s</string>
+    <string name="dsh_file_edit_saved">已儲存</string>
+    <string name="dsh_file_edit_save_failed_title">儲存失敗</string>
+    <string name="dsh_file_edit_empty_title">儲存成空檔案？</string>
+    <string name="dsh_file_edit_empty_message">launcher.patch.yml 清空後，啟動器就不再傳 --patch，/assets 快取標頭和 HMR 輪詢間隔這兩條優化會一起失效。dsh 本身仍能正常啟動。確定要儲存嗎？</string>
+    <string name="dsh_file_edit_running">先停止實例，再改它的設定</string>
+    <string name="dsh_file_edit_backup_note">上一份內容會在同目錄留一個 .bak 備份。</string>
 </resources>
