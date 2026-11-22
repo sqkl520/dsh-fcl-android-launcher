@@ -14,19 +14,46 @@
  * throw new SessionAlreadyOwnedError(id)
  * ```
  *
- * **在 proot 下这两个 inode 永远不同**（实测，三个不同挂载点都一样）：
+ * **在 proot 下这两个 inode 不同**（实测）：
  * ```
  * /opt/dsh/.../sessions/.flock-probe  fstat=0:6062660  stat=0:1630527
  * /tmp/.flock-probe                   fstat=0:6062660  stat=0:1630716
  * /opt/dsh/instances/....flock-probe  fstat=0:6062660  stat=0:1629121
  * ```
- * `fstat` 的 ino 恒为 proot 编的一个假值，`stat` 返回的是真实 inode。
  * 于是 lease 的校验 3 次全失败 ⇒ 抛 `SessionAlreadyOwnedError` ⇒
  * 用户在界面里看到 `session "…" is already owned by an active write handle`，
  * **连全新的会话、第一条消息都发不出去**。
  *
- * 这不是 dsh 的缺陷，也不是我们的错 —— 是 proot 的文件系统虚拟化让"fd 的 inode"
- * 与"路径的 inode"不一致，而这个校验的前提在真机上不成立。
+ * ## ⚠️ 归因未定：上面这组数据**不能**说明"proot 伪造了 ino"
+ *
+ * 我最初在这里写的归因（"ino 是 proot 伪造的"）**是错的**，已核实：
+ *
+ * ```
+ * $ grep -rn "st_ino" oonid-pr-reference/src/proot/src/
+ * src/tracee/statx.c:103:  state.statx_buf.stx_ino = stat_buf.st_ino;
+ * ```
+ * 整个 proot 源码里 `st_ino` 只出现一次，而且是**透传真实值**，没有任何伪造。
+ * 实际安装的二进制也确认是**非 USERLAND 构建**
+ * （`.proot.l2s.` 计数 0 / `.l2s.` 计数 1），而 `fake_id0/stat.c` 里那条会改写
+ * fstat 的路径整段在 `#ifdef USERLAND` 里、不编译。
+ *
+ * 更可疑的是那组数据本身的形状：**三个不同挂载点上的三个不同文件，
+ * fstat 返回同一个 ino `6062660`**。真实 inode 不可能相同。
+ * 这更像 `fstat` 没成功填写结构体、代码读到了栈上的残值（syscall 返回 -1 而 errno
+ * 未处理），或者探针脚本自身的问题。
+ *
+ * **所以：现象是真的（会话锁确实卡死）、修法能让它不卡（实测通过），
+ * 但"为什么"没有查清。** 在拿到干净的取证之前，不要把这个 shim 当成"修好了根因"。
+ *
+ * ## 这个 shim 的代价（必须知道）
+ *
+ * `lease.ts` 那个 ino 校验的用途是检测「锁住的文件被 unlink 重建」：
+ * > A POSIX lock names an inode, not a path ... an unlinked-and-recreated lock file
+ * > carries a fresh inode
+ *
+ * 本 shim 把 ino 投影成"只由路径决定的哈希" ⇒ **unlink 重建后路径不变 ⇒ 投影值不变
+ * ⇒ 校验永远通过** ⇒ 那个真异常检测被**永久关闭**。
+ * 这不是免费的：我们换来了"不再误报"，代价是"真异常也检不出"。
  *
  * ## 修法：把两边都投影到"由路径决定"的稳定 inode
  *
@@ -180,8 +207,11 @@ function install() {
   }
   promises.lstat = async function lstat(target, options) {
     const stats = await origLstat(target, options)
-    // lstat 不能 resolve：它就是用来读符号链接本身的
-    return rewriteStats(stats, String(target), wantsBigInt(options))
+    // ★ 投影键必须与 stat 用同一个规则（path.resolve），否则相对路径下
+    //   `lstat("x")` 投影到 "x" 而 `stat("x")` 投影到 "/cwd/x" —— 两个不同的值。
+    //   注意：`lstat` 不能 resolve 的是**去哪读元数据**（要读链接本身而不是目标）；
+    //   而这里 resolve 的是**算投影键用的那个字符串**，两件事无关。
+    return rewriteStats(stats, path.resolve(String(target)), wantsBigInt(options))
   }
 
   // --- ② fs.statSync / lstatSync / fstatSync ---
@@ -194,7 +224,8 @@ function install() {
   }
   fs.lstatSync = function lstatSync(target, options) {
     const stats = origLstatSync(target, options)
-    return rewriteStats(stats, String(target), wantsBigInt(options))
+    // 同 promises.lstat：投影键与 statSync 保持同一规则
+    return rewriteStats(stats, path.resolve(String(target)), wantsBigInt(options))
   }
   // ★ fstatSync 收的是 fd，没有路径参数 —— 从 fdPaths 表（或 /proc 兜底）反查。
   fs.fstatSync = function fstatSync(fd, options) {
@@ -229,6 +260,23 @@ function install() {
     return fh
   }
 
+  // --- ③b close 系列：清掉 fd → path，避免 fd 复用前的窗口读到旧路径 ---
+  //
+  // ★ 为什么必须包 close：不包的话，一个 fd 关闭后、被内核复用给别的文件之前，
+  //   `fstatSync(那个 fd)` 仍会从表里拿到**旧路径**并投影出旧值。
+  //   窗口很窄（close 到下次 open 之间），但它在语义上是错的 ——
+  //   而本 shim 的全部价值就在于"投影值必须反映真实身份"。
+  const origCloseSync = fs.closeSync
+  fs.closeSync = function closeSync(fd) {
+    fdPaths.delete(fd)
+    return origCloseSync.call(fs, fd)
+  }
+  const origClose = fs.close
+  fs.close = function close(fd, ...rest) {
+    fdPaths.delete(fd)
+    return origClose.call(fs, fd, ...rest)
+  }
+
   // --- ④ FileHandle.prototype.stat（lease.ts 用的是这个）---
   //
   // 这是最关键的一条：`await open(path,'w')` 得到 FileHandle，再 `.stat()`。
@@ -248,6 +296,14 @@ function install() {
       const stats = await origFhStat.call(this, options)
       const realPath = pathOfFd(this.fd)
       return realPath ? rewriteStats(stats, realPath, wantsBigInt(options)) : stats
+    }
+    // close 时清掉 fd → path（同 fs.closeSync 那条的理由：fd 会被内核复用）
+    if (typeof proto.close === 'function') {
+      const origFhClose = proto.close
+      proto.close = async function close() {
+        fdPaths.delete(this.fd)
+        return origFhClose.call(this)
+      }
     }
     fhPatched = true
   }

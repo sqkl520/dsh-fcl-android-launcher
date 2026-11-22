@@ -696,7 +696,7 @@ LAUNCHER_PATCH="$INSTANCE_DIR/launcher.patch.yml"
 #
 # 修法：preload 一个 shim，把 ino/dev 投影成"由路径决定的稳定值"，让那次自校验通过。
 # flock 的互斥语义没有被改动。shim 自己会先探测，环境正常时它什么都不做。
-SHIM="${DSH_SCRIPTS_DIR:-/opt/dsh/scripts}/proot-inode-shim.cjs"
+SHIM="${DSH_SCRIPTS_DIR:-/opt/dsh/scripts}/inode-shim.cjs"
 # 注意 --require 只能在 NODE_OPTIONS 里（--expose-internals 不行，见上面的注释）。
 # 用追加而不是覆盖：NODE_OPTIONS 里可能已经有启动器传进来的 --max-old-space-size。
 if [ -f "$SHIM" ]; then
