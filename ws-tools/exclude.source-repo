@@ -1,0 +1,59 @@
+# 源码仓（.git）要忽略的路径
+#
+# ★ 这是**规范副本**，由 bootstrap.sh 安装到 .git/info/exclude。
+#   （info/exclude 在 .git 里面，不受版本控制，新机器 clone 下来是空的 —— 所以必须有这份规范副本，
+#    否则新机器上源码仓的 git status 会把 apk/ dsh/ poc/ 等全报成 untracked。）
+#   改完这里后跑一次：sh tools/bootstrap.sh --install-excludes
+#
+# ★ 2026-11-23：快照仓已删除。原来这里的条目大多是为了「把快照仓的文件排除在源码仓之外」，
+#   现在那些文件不再属于任何仓库，但作者决定**继续忽略、不进 Git**（公开仓不该收 124M
+#   上游快照与 803M 老 APK）。所以这些忽略项保留，只是理由变了。
+#   内部文档已移到 D:\Projects\_dsh-internal-docs，这里仍排除它们的原路径，
+#   避免将来有人误把内部文档放回来并提交到公开仓。
+
+# --- 历史遗留的 git 目录（快照仓已删，防止残留目录被误提交）---
+/.git-ws-snapshot/
+
+# --- 体积大且不属于源码的目录：留在工作区，不进 Git ---
+/apk/
+/apk-archive/
+/dsh/
+/dsh-launcher-poc/
+/oonid-pr-reference/
+/poc/
+/rootfs-build-info/
+/_review_evidence/
+/picture/
+/release-key/
+
+# --- 工具目录 ---
+# ★ 2026-11-23：快照仓删除后，tools/ 里的工作流脚本（check-sync / release / bootstrap）
+#   改为**纳入源码仓**，否则它们没有任何版本控制。
+#   仍排除 ws-tools/（它是 exclude 的规范副本，自己引用自己会绕）：不——ws-tools 也一并纳入，
+#   因为 bootstrap.sh 要靠它重建 exclude。只有 pycache 之类的临时物才排除。
+__pycache__/
+*.pyc
+/.github/*
+# ISSUE_TEMPLATE 必须留在源码仓：Issue 是在公开仓提的，模板不能一起被忽略掉。
+!/.github/ISSUE_TEMPLATE/
+
+# --- 内部文档：公开仓是**面向用户**的仓库，内部审查报告/踩坑记录/工作区手册都不收录 ---
+#   （docs/ 下其余文档是给用户看的，正常跟踪。）
+#   这些文件现在存放在 D:\Projects\_dsh-internal-docs，这里排除原路径以防误提交。
+/REPOS.md
+/BUGS-*.md
+/bebug.txt
+/docs/CHANGELOG.md
+/docs/INDEX.md
+/docs/LESSONS.md
+/docs/PROJECT_REVIEW_AND_OPTIMIZATION.md
+/docs/PLAN-SANDBOX.md
+/docs/reports/
+/docs/reference/
+/docs/framework/
+/docs/design/assets/
+/docs/design/log-ui-reference.md
+/docs/design/information-architecture.md
+/docs/design/implementation-plan.md
+/docs/DEV-PLAN.md
+/docs/BUGLEDGER.md
