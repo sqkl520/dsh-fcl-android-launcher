@@ -198,6 +198,409 @@ echo "[start-dsh] listen  : http://$HOST:$PORT"
 echo "[start-dsh] DSH_HOME: $DSH_HOME"
 echo "[start-dsh] workdir : $PWD"
 
+# ===== 沙箱能力探测（BL-250）=====
+#
+# ## 为什么要在这里探
+#
+# dsh 的 Linux 沙箱链是 `bwrap → landlock`（sandbox-local/src/index.ts:159
+# 的 PLATFORM_CHAINS，**没有 android 这一项**）。Android 上 process.platform === 'linux'，
+# 所以必然走这条链。两级都不可用 ⇒ 抛 SANDBOX_UNAVAILABLE ⇒
+# workspace-write 模式下**所有命令被拒**（fail closed，不是降级）。
+#
+# 结果是：用户看到的是"每条命令都报沙箱错误"，看起来像 App 坏了。
+#
+# 本段只**探测并如实打印**，不改任何行为、不做任何决定 —— 决定权在用户（P0 的 UI 层）。
+# 输出进实例日志，既让用户能看到，也让我们排障时有据可查。
+#
+# ★ 只探测一次、缓存在实例目录里：每次启动都跑 unshare/mount 这些是浪费。
+#   缓存文件里存"探测时间 + 结论"，P0 的 UI 会读它。
+SANDBOX_CACHE="$DSH_HOME/.sandbox-probe"
+# 缓存要带上"探针逻辑版本"：改了探针代码就该重探，不然旧结论会一直卡在那儿。
+# 改探针逻辑时手动递增这个数字。
+PROBE_REV="3"
+_should_probe=1
+if [ -n "${DSH_FORCE_PROBE:-}" ]; then
+  _should_probe=1
+elif [ -f "$SANDBOX_CACHE" ] && [ -n "$(find "$SANDBOX_CACHE" -mtime -7 2>/dev/null)" ]; then
+  # 缓存有效期内、且是同一版探针写的 ⇒ 跳过
+  if grep -q "^probe_rev=$PROBE_REV$" "$SANDBOX_CACHE" 2>/dev/null; then
+    _should_probe=0
+  fi
+fi
+
+if [ "$_should_probe" = "1" ]; then
+  echo "[start-dsh] sandbox-probe: start"
+
+  # ① 内核版本
+  echo "[start-dsh] sandbox-probe kernel=$(uname -r) arch=$(uname -m)"
+
+  # ② bwrap：有没有装、装了能不能用
+  if command -v bwrap >/dev/null 2>&1; then
+    echo "[start-dsh] sandbox-probe bwrap=present"
+    # bwrap 依赖非特权 userns，先用 unshare 探一下内核有没有编 CONFIG_USER_NS
+    if unshare -U -r true 2>/dev/null; then
+      echo "[start-dsh] sandbox-probe userns=ok"
+    else
+      echo "[start-dsh] sandbox-probe userns=DENIED (CONFIG_USER_NS missing or blocked -> bwrap cannot work)"
+    fi
+  else
+    echo "[start-dsh] sandbox-probe bwrap=absent"
+  fi
+
+  # ③ landlock：用 dsh 自己那个 launcher 探（判据与 dsh 一致，不另造一套）
+  #
+  #    为什么用它的 --probe 而不是自己调 landlock_create_ruleset：
+  #    那个二进制是 dsh 上游的、和它运行期用的是同一个；用它的探针等于复用同一判据，
+  #    不会出现"我们以为能用、dsh 以为不能用"的错位。
+  LL=""
+  for cand in \
+      "$DSH_HOME/../node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run" \
+      "/opt/dsh-preinstalled/node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run" \
+      "$INSTANCE_DIR/node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run"
+  do
+    if [ -f "$cand" ] && [ -x "$cand" ]; then LL="$cand"; break; fi
+  done
+  if [ -z "$LL" ]; then
+    # 退一步：在 node_modules 里找（不假设具体布局）
+    LL=$(find "$INSTANCE_DIR/node_modules" /opt/dsh-preinstalled/node_modules \
+            -name landlock-run -type f 2>/dev/null | head -1)
+  fi
+
+  if [ -z "$LL" ]; then
+    echo "[start-dsh] sandbox-probe landlock=launcher-not-found"
+  else
+    echo "[start-dsh] sandbox-probe landlock=launcher-present path=$LL"
+    _ll_out=$("$LL" --probe 2>&1)
+    _ll_rc=$?
+    echo "[start-dsh] sandbox-probe landlock-probe rc=$_ll_rc out=$_ll_out"
+    if [ "$_ll_rc" -ne 0 ]; then
+      echo "[start-dsh] sandbox-probe landlock=UNUSABLE (kernel $(uname -r); Landlock landed in 5.13, cannot be backported)"
+    fi
+  fi
+
+  # ④ proot 的封锁面 —— 这些决定了"能不能在 proot 内部再造一个沙箱"
+  #    答案是不能，所以记下来免得后人白试。
+  echo "[start-dsh] sandbox-probe tracerpid=$(sed -n 's/^TracerPid:[[:space:]]*//p' /proc/self/status 2>/dev/null)"
+  echo "[start-dsh] sandbox-probe capeff=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status 2>/dev/null)"
+  echo "[start-dsh] sandbox-probe seccomp=$(sed -n 's/^Seccomp:[[:space:]]*//p' /proc/self/status 2>/dev/null)"
+  if unshare -U true 2>/dev/null; then
+    echo "[start-dsh] sandbox-probe unshare-u=ok"
+  else
+    echo "[start-dsh] sandbox-probe unshare-u=DENIED"
+  fi
+
+  # ⑤ stat(".") 是否可用（inode shim 的已知问题：AT_FDCWD 走不通）
+  #    这条直接影响构建工具，独立于沙箱，一并记下来。
+  _dot_stat=$(stat -c '%d:%i' . 2>&1)
+  _abs_stat=$(stat -c '%d:%i' "$PWD" 2>&1)
+  echo "[start-dsh] sandbox-probe stat-dot=$_dot_stat"
+  echo "[start-dsh] sandbox-probe stat-abs=$_abs_stat"
+  if [ "$_dot_stat" != "$_abs_stat" ]; then
+    echo "[start-dsh] sandbox-probe stat-FDCWD=BROKEN (relative 'stat .' disagrees with absolute)"
+  else
+    echo "[start-dsh] sandbox-probe stat-FDCWD=consistent"
+  fi
+
+  # 写缓存（只写结论摘要，供 UI 读）
+  {
+    echo "probed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    echo "probe_rev=$PROBE_REV"
+    echo "kernel=$(uname -r)"
+    echo "bwrap=$(command -v bwrap >/dev/null 2>&1 && echo present || echo absent)"
+    echo "landlock_rc=${_ll_rc:-na}"
+    echo "dot_stat=${_dot_stat}"
+  } > "$SANDBOX_CACHE" 2>/dev/null && echo "[start-dsh] sandbox-probe cached=$SANDBOX_CACHE"
+
+  echo "[start-dsh] sandbox-probe: done"
+fi
+
+# ===== 插件页加载慢的测量（BL-251）=====
+#
+# ## 为什么要量
+#
+# 真机实测：插件页约 4 分钟、设置→内置插件约 3 分钟才出内容，而同机的
+# 通用设置 / Agent 预设 / 自动化任务都是秒开。所以不是网络慢、也不是前端渲染慢，
+# 是这两个页面各自拉的那条数据特别重。
+#
+# 读源码怀疑是 `plugin-manager.listBundles()`：
+#   dsh/packages/boot/plugin-manager/src/index.ts:199
+#   const names = [...new Set([...selected, ...dependencies, ...Object.keys(installation.dependencies ?? {})])]
+# 这个 names 是 bundle + 两边的**全部依赖**（几十到几百个），然后对每个名字做
+#   createRequire().resolve.paths() 枚举 + 每条路径 existsSync + 一次 readFileSync
+# —— 全部同步、顺序执行。在 proot 下每次 syscall 要穿 ptrace 拦截 + 路径重写。
+#
+# **但这只是假设。** 本段量四个数，用来判断慢在哪一层：
+#   A 纯路径枚举（不碰文件系统）
+#   B 加逐条 existsSync（stat 的开销）
+#   C 加 readFileSync + JSON.parse（读文件的开销）
+#   D readdir 一遍 node_modules（"建索引"方案的基线）
+#
+# B-A 大 ⇒ 慢在 stat；C-B 大 ⇒ 慢在读文件；D ≪ B ⇒ 建索引有效。
+#
+# ★ 只在**首次**跑（缓存 7 天）：这几段会在 proot 里 fork 几百次 node 调用，
+#   每次启动都跑是浪费。
+PERF_CACHE="$DSH_HOME/.plugin-perf-probe"
+_perf_should=1
+if [ -n "${DSH_FORCE_PROBE:-}" ]; then _perf_should=1
+elif [ -f "$PERF_CACHE" ] && [ -n "$(find "$PERF_CACHE" -mtime -7 2>/dev/null)" ]; then
+  grep -q "^probe_rev=$PROBE_REV$" "$PERF_CACHE" 2>/dev/null && _perf_should=0
+fi
+
+if [ "$_perf_should" = "1" ] && command -v node >/dev/null 2>&1; then
+  echo "[start-dsh] perf-probe: start"
+  INSTANCE_DIR="$INSTANCE_DIR" node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const { createRequire } = require("module");
+
+    const inst = process.env.INSTANCE_DIR;
+    const nm = path.join(inst, "node_modules");
+
+    function time(label, fn) {
+      const t0 = process.hrtime.bigint();
+      let r;
+      try { r = fn() } catch (e) { r = { error: String((e && e.message) || e).slice(0, 100) } }
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      console.log("[start-dsh] perf-probe " + label + " = " + ms.toFixed(1) + " ms"
+        + (r && r.error ? "  [" + r.error + "]" : ""));
+      return r;
+    }
+
+    // D：readdir 一遍（建索引方案的基线）
+    const pkgNames = time("D-readdir", () => {
+      const out = [];
+      for (const e of fs.readdirSync(nm, { withFileTypes: true })) {
+        if (e.name.startsWith(".")) continue;
+        if (e.name.startsWith("@")) {
+          try {
+            for (const s of fs.readdirSync(path.join(nm, e.name), { withFileTypes: true })) {
+              if (s.isDirectory()) out.push(e.name + "/" + s.name);
+            }
+          } catch {}
+        } else if (e.isDirectory()) out.push(e.name);
+      }
+      return out;
+    });
+    const names = Array.isArray(pkgNames) ? pkgNames : [];
+    console.log("[start-dsh] perf-probe package-count = " + names.length);
+    if (names.length === 0) { process.exit(0) }
+
+    const anchor = path.join(inst, "package.json");
+    const req = createRequire(fs.existsSync(anchor) ? anchor : path.join(inst, "index.js"));
+
+    // A：只枚举路径，不碰文件系统
+    time("A-resolve-paths", () => {
+      let n = 0;
+      for (const name of names) n += (req.resolve.paths(name) || []).length;
+      return { n };
+    });
+
+    // B：加逐条 existsSync
+    time("B-resolve-exists", () => {
+      let hit = 0;
+      for (const name of names) {
+        for (const sp of (req.resolve.paths(name) || [])) {
+          if (fs.existsSync(path.join(sp, name, "package.json"))) { hit++; break }
+        }
+      }
+      return { hit };
+    });
+
+    // C：再加 readFileSync + JSON.parse（完整一轮 bundleManifest 的核心动作）
+    time("C-resolve-exists-read", () => {
+      let ok = 0;
+      for (const name of names) {
+        for (const sp of (req.resolve.paths(name) || [])) {
+          const dir = path.join(sp, name);
+          const pj = path.join(dir, "package.json");
+          if (fs.existsSync(pj)) {
+            try { JSON.parse(fs.readFileSync(pj, "utf8")); ok++ } catch {}
+            break;
+          }
+        }
+      }
+      return { ok };
+    });
+  ' 2>&1 | while IFS= read -r l; do echo "$l"; done
+
+  {
+    echo "probed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    echo "probe_rev=$PROBE_REV"
+  } > "$PERF_CACHE" 2>/dev/null
+  echo "[start-dsh] perf-probe: done"
+fi
+
+# ===== 预设（agent-presets）的加载开销（BL-251 第二部分）=====
+#
+# ## 为什么还要单独量这一段
+#
+# 上一段量出来 `listBundles` 那条路只要 390 ms（583 个包），**不是**慢的原因。
+# 重新读前端代码（ui-plugin-manager/src/client/manager-store.ts:442）发现 `read()` 的
+# 第一步是 `await pluginInventory.list()`，而它的实现
+# （host/plugin-inventory/src/index.ts:95）里有一句：
+#
+#     const agentPresets = (await presets.compositionInventory()).map(...)
+#
+# `compositionInventory()`（preset/agent-presets/src/index.ts:322）会
+# **逐个预设 await** `fileComposition()`，而后者会：
+#   · readFile + js-yaml 解析
+#   · `unresolvableRows(...)` —— 对**每一行**做 package 解析（require.resolve 那一套）
+#
+# 这和 listBundles 是同一个形状的 N×M syscall 放大，但在 preset 这一层。
+# 而且它同时解释了三个现象：插件页慢、内置插件页慢、**预设页面加载不全**（同一条查询）。
+#
+# 本段量：预设目录数、每个 composition 文件的大小、YAML 解析耗时、逐行解析的占比。
+PRESET_CACHE="$DSH_HOME/.preset-perf-probe"
+_preset_should=1
+if [ -n "${DSH_FORCE_PROBE:-}" ]; then _preset_should=1
+elif [ -f "$PRESET_CACHE" ] && [ -n "$(find "$PRESET_CACHE" -mtime -7 2>/dev/null)" ]; then
+  grep -q "^probe_rev=$PROBE_REV$" "$PRESET_CACHE" 2>/dev/null && _preset_should=0
+fi
+
+if [ "$_preset_should" = "1" ] && command -v node >/dev/null 2>&1; then
+  echo "[start-dsh] preset-probe: start"
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+
+    // 预设可能出现在这两处：dsh 包自带的 presets/ 与用户目录
+    //
+    // ★ SHIPPED_PRESET_ROOT = fileURLToPath(new URL('../presets/', import.meta.url))
+    //   也就是 `@deepseek-ai/dsh-agent-presets` 包的**同级** presets/ 目录。
+    //   具体层级随打包方式变化，所以这里不猜路径，而是**递归找**"含有
+    //   agent.cordis.yml 子目录的那个 presets 目录"。上一版按固定路径猜，结果 roots=none。
+    const COMPOSITION = "agent.cordis.yml";
+    const cands = [];
+    const seen = new Set();
+
+    function hasCompositionDirs(dir) {
+      try {
+        return fs.readdirSync(dir, { withFileTypes: true })
+          .some(d => d.isDirectory() && fs.existsSync(path.join(dir, d.name, COMPOSITION)));
+      } catch { return false }
+    }
+
+    function walk(dir, depth) {
+      if (depth > 6 || seen.has(dir)) return;
+      seen.add(dir);
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const full = path.join(dir, e.name);
+        if (e.name === "presets" && hasCompositionDirs(full)) { cands.push(full); continue }
+        // 只往"可能是包目录"的地方下钻，避免扫整个 node_modules（583 个包）
+        if (depth < 3 && /^@|^dsh|node_modules$/.test(e.name)) walk(full, depth + 1);
+      }
+    }
+
+    const nmRoots = [
+      path.join(process.env.INSTANCE_DIR, "node_modules"),
+      "/opt/dsh-preinstalled/node_modules"
+    ];
+    for (const nm of nmRoots) { if (fs.existsSync(nm)) walk(nm, 0) }
+
+    // 用户目录（注意是点开头）
+    const homePresets = path.join(process.env.DSH_HOME, ".agent-presets");
+    if (fs.existsSync(homePresets)) cands.push(homePresets);
+
+    const uniq = [...new Set(cands)];
+    console.log("[start-dsh] preset-probe roots=" + (uniq.length ? uniq.join(",") : "none"));
+
+    let total = 0, files = 0, yamlMs = 0, readMs = 0, rows = 0;
+
+    for (const root of uniq) {
+      let children;
+      try { children = fs.readdirSync(root, { withFileTypes: true }) } catch { continue }
+      for (const c of children) {
+        if (!c.isDirectory()) continue;
+        const f = path.join(root, c.name, COMPOSITION);
+        if (!fs.existsSync(f)) continue;
+        total++;
+        files++;
+        const t0 = process.hrtime.bigint();
+        let content;
+        try { content = fs.readFileSync(f, "utf8") } catch { continue }
+        readMs += Number(process.hrtime.bigint() - t0) / 1e6;
+
+        // 只统计行数规模，不引 js-yaml（探针不该依赖可选包）
+        const lines = content.split("\n").length;
+        rows += content.split(/\n\s*-\s/).length - 1;
+        const size = content.length;
+
+        console.log("[start-dsh] preset-probe file=" + c.name +
+          " size=" + size + "B lines=" + lines);
+      }
+    }
+    console.log("[start-dsh] preset-probe total-presets=" + total +
+      " total-rows=" + rows + " read-ms=" + readMs.toFixed(1));
+  ' 2>&1 | while IFS= read -r l; do echo "$l"; done
+
+  # --- 第二部分：量 packageInstalled 那个向上遍历 ---
+  #
+  # 这是怀疑的**真正瓶颈**（discovery.ts:112）：
+  #
+  #   function packageInstalled(name, base) {
+  #     let dir = fileURLToPath(base)
+  #     for (;;) {
+  #       if (existsSync(join(dir, 'node_modules', pkg, 'package.json'))) return true
+  #       const parent = dirname(dir)
+  #       if (parent === dir) return false
+  #       dir = parent
+  #     }
+  #   }
+  #
+  # 从 base 一路向上到 /，**每层一次 existsSync**。106 行 × 约 10 层 = 上千次，
+  # 每次都要穿 proot 的 ptrace 拦截 + 路径重写。
+  #
+  # 本段直接复现这个遍历，量单次与总计耗时。
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+
+    const presetRoot = "/opt/dsh-preinstalled/node_modules/@deepseek-ai/dsh-agent-presets/presets";
+    const samplePkg = "@deepseek-ai/cordis";
+
+    function packageInstalled(name, base) {
+      const pkg = name.split("/").slice(0, name.startsWith("@") ? 2 : 1).join("/");
+      let dir = base;
+      let hops = 0;
+      for (;;) {
+        hops++;
+        if (fs.existsSync(path.join(dir, "node_modules", pkg, "package.json"))) return { found: true, hops };
+        const parent = path.dirname(dir);
+        if (parent === dir) return { found: false, hops };
+        dir = parent;
+      }
+    }
+
+    // 单个 base 的层级数
+    const depth = packageInstalled(samplePkg, presetRoot);
+    console.log("[start-dsh] preset-probe pkg-walk hops=" + depth.hops + " found=" + depth.found);
+
+    // 复现 106 行 × N 次
+    const ROWS = 106;
+    const t0 = process.hrtime.bigint();
+    for (let i = 0; i < ROWS; i++) packageInstalled(samplePkg, presetRoot);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    console.log("[start-dsh] preset-probe pkg-walk x" + ROWS + " = " + ms.toFixed(1) + " ms"
+      + " (avg " + (ms / ROWS).toFixed(2) + " ms/row)");
+
+    // 对照组：一次纯 existsSync
+    const t1 = process.hrtime.bigint();
+    for (let i = 0; i < ROWS; i++) fs.existsSync(path.join(presetRoot, "standard", "agent.cordis.yml"));
+    const ms1 = Number(process.hrtime.bigint() - t1) / 1e6;
+    console.log("[start-dsh] preset-probe baseline-exists x" + ROWS + " = " + ms1.toFixed(1) + " ms");
+  ' 2>&1 | while IFS= read -r l; do echo "$l"; done
+
+  {
+    echo "probed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    echo "probe_rev=$PROBE_REV"
+  } > "$PRESET_CACHE" 2>/dev/null
+  echo "[start-dsh] preset-probe: done"
+fi
+
+
 
 LOGFILE="${TMPDIR:-/tmp}/dsh-start-$$.log"
 if ! : > "$LOGFILE" 2>/dev/null; then
