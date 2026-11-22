@@ -35,7 +35,7 @@
         android:layout_height="wrap_content"
         android:textSize="16sp"
         android:textStyle="bold"
-        android:textColor="?attr/colorOnSurface" />
+        android:textColor="@color/primary_text" />
 
     <TextView
         android:id="@+id/edit_path"
@@ -45,7 +45,7 @@
         android:textSize="11sp"
         android:fontFamily="monospace"
         android:alpha="0.6"
-        android:textColor="?attr/colorOnSurface" />
+        android:textColor="@color/primary_text" />
 
     <TextView
         android:id="@+id/edit_hint"
@@ -54,7 +54,7 @@
         android:layout_marginTop="8dp"
         android:textSize="12sp"
         android:alpha="0.75"
-        android:textColor="?attr/colorOnSurface" />
+        android:textColor="@color/primary_text" />
 
     <!--
       占满剩余空间。minHeight 保证即使软键盘弹出、剩余高度被压到很小，
@@ -65,7 +65,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="12dp"
-        android:background="?attr/colorSurfaceContainerHighest"
+        android:background="@color/dialog_background"
         android:padding="8dp">
 
         <EditText
@@ -79,8 +79,8 @@
             android:background="@null"
             android:inputType="textMultiLine|textNoSuggestions"
             android:importantForAutofill="no"
-            android:textColor="?attr/colorOnSurface"
-            android:textColorHint="?attr/colorOnSurfaceVariant" />
+            android:textColor="@color/primary_text"
+             />
     </ScrollView>
 
     <LinearLayout
@@ -90,15 +90,19 @@
         android:orientation="horizontal"
         android:gravity="end">
 
-        <Button
+        <!--
+          ★ 用 FCLButton 而不是原生 Button + `?attr/borderlessButtonStyle`：
+            FCL 的主题里**没有**那个属性，运行期会抛
+            `UnsupportedOperationException: Failed to resolve attribute`（已崩过一次，见 BL-249）。
+            FCLButton 自带 FCL 的观感，也不需要引主题属性。
+        -->
+        <com.tungsten.fcllibrary.component.view.FCLButton
             android:id="@+id/edit_cancel"
-            style="?attr/borderlessButtonStyle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
 
-        <Button
+        <com.tungsten.fcllibrary.component.view.FCLButton
             android:id="@+id/edit_save"
-            style="?attr/borderlessButtonStyle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp" />

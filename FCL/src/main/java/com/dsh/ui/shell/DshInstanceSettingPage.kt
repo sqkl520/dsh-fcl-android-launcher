@@ -931,15 +931,29 @@ class DshInstanceSettingPage(
             .setTitle(R.string.dsh_settings_row_edit_config)
             .setItems(labels) { _, which ->
                 val (file, titles) = targets[which]
-                DshFileEditDialog(
-                    activity = host.activity,
-                    target = file,
-                    titleText = context.getString(titles.first),
-                    hintText = context.getString(titles.second) + "\n" +
-                        context.getString(R.string.dsh_file_edit_backup_note),
-                    readOnly = false,
-                    onSaved = { reload() }
-                ).show()
+                // ★ 包一层 runCatching：对话框的 inflate 失败会**直接崩掉整个 App**
+                //   （已真实发生过一次 —— 布局里用了 FCL 主题没有的 ?attr/，抛
+                //   UnsupportedOperationException，用户在 CrashReportActivity 里看到崩溃页）。
+                //   一个可选的编辑入口不值得让整个启动器挂掉：失败就报错并留在设置页。
+                runCatching {
+                    DshFileEditDialog(
+                        activity = host.activity,
+                        target = file,
+                        titleText = context.getString(titles.first),
+                        hintText = context.getString(titles.second) + "\n" +
+                            context.getString(R.string.dsh_file_edit_backup_note),
+                        readOnly = false,
+                        onSaved = { reload() }
+                    ).show()
+                }.onFailure { e ->
+                    FCLAlertDialog.Builder(host.activity)
+                        .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                        .setTitle(context.getString(R.string.dsh_file_edit_save_failed_title))
+                        .setMessage(e.message ?: e.toString())
+                        .setPositiveButton(context.getString(R.string.dialog_positive), null)
+                        .create()
+                        .show()
+                }
             }
             .setNegativeButton(R.string.dialog_negative, null)
             .show()

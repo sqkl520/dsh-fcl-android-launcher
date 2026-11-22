@@ -20,6 +20,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -402,6 +404,78 @@ internal fun jsonStringLiteral(raw: String): String {
  * @param scriptsHostDir 宿主侧的脚本目录（默认 `DshPaths.SCRIPTS_DIR`，注入以便单测）
  * @return 写成功的宿主 [File]；插件不存在或写失败时为 `null`
  */
+
+/**
+ * 原子写 + 备份（BL-249，配置文件编辑器用的写入内核；纯 JVM 可测）。
+ *
+ * ## 顺序是刻意的
+ *
+ * 1. 先备份原文件到 `<name>.bak`（覆盖式，只留一份）——
+ *    **必须在改动前**，否则写坏了就没有可回滚的内容；
+ * 2. 写 `<name>.tmp`；
+ * 3. `rename` 覆盖目标。
+ *
+ * ## 为什么不先删目标再 rename
+ *
+ * `renameTo` 在 POSIX 上本身就是原子覆盖，多一步删除只是多造一个
+ * "删成功了、rename 失败了"的毁数据窗口（[writeLauncherPatchOverlay] 的注释里有同样的结论）。
+ *
+ * ## 失败时不留垃圾
+ *
+ * rename 失败会把 `.tmp` 留在实例目录里。这里删掉它再抛 ——
+ * 否则用户每试一次就多一个残留文件，且它们不会被任何清理逻辑回收。
+ *
+ * @throws IOException rename 失败（返回 false，或底层抛异常）
+ */
+fun writeFileAtomically(target: File, text: String) {
+    target.parentFile?.mkdirs()
+    if (target.isFile) {
+        val backup = File(target.parentFile, target.name + ".bak")
+        // 备份失败**不**中止写入：备份是保险，不是前提。
+        // 但也不能静默 —— 调用方（编辑器）会把异常抛给用户。
+        runCatching { target.copyTo(backup, overwrite = true) }
+    }
+    val tmp = File(target.parentFile, target.name + ".tmp")
+    tmp.writeText(text, Charsets.UTF_8)
+
+    // ★ 必须用 `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`，**不能**用 `File.renameTo`。
+    //
+    //   这是被单测抓到的一个真 bug：`File.renameTo` 的覆盖行为**平台相关** ——
+    //   Windows 上目标已存在时直接返回 false（不覆盖），Linux 上才覆盖。
+    //   我原来那行 `if (!tmp.renameTo(target)) throw` 在 Windows 上等于
+    //   "编辑任何已存在的文件都失败"。单测在 Windows 上跑了三条覆盖场景，全红。
+    //
+    //   `Files.move` 的 `REPLACE_EXISTING` 是明确语义，`ATOMIC_MOVE` 让它走
+    //   rename(2)/MoveFileEx，Android 上是普通 POSIX rename —— 真正的原子替换。
+    //   两者一起用：要么整个替换成功，要么目标文件保持原样（不会出现半截内容）。
+    try {
+        Files.move(
+            tmp.toPath(),
+            target.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE
+        )
+    } catch (e: Exception) {
+        // 失败时 tmp 必须清掉，否则实例目录里每试一次就多一个残留。
+        runCatching { tmp.delete() }
+        throw IOException("atomic move failed: ${tmp.absolutePath} -> ${target.absolutePath}: ${e.message}", e)
+    }
+}
+
+/**
+ * 决定"要不要给用户弹一个空文件确认"（纯函数，BL-249）。
+ *
+ * 为什么单独抽出来：`launcher.patch.yml` 被清空有**具体后果** ——
+ * `start-dsh.sh` 用 `[ -f "$LAUNCHER_PATCH" ]` 判断要不要传 `--patch`，
+ * 文件空着但存在时仍然会传，而 dsh 读到空 overlay 会认为没有 patch 层。
+ * 也就是说那两条优化（`/assets` 缓存头、HMR 轮询 5000ms）会静默失效。
+ * 用户可能是故意清空（他不想用启动器的 overlay），但必须让他知道代价。
+ *
+ * 其余文件（credentials / profile patch）清空就是清空，没有额外机制受影响，
+ * 不需要确认 —— 多一次无意义的弹框只会让人烦。
+ */
+fun needsEmptyFileConfirmation(fileName: String, newText: String): Boolean =
+    newText.isBlank() && fileName == LAUNCHER_PATCH_OVERLAY
 fun writeLauncherPatchOverlay(
     instancePathInRootfs: String,
     scriptsHostDir: File = File(DshPaths.SCRIPTS_DIR),

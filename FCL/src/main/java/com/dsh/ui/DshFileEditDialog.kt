@@ -5,9 +5,11 @@ import android.app.Dialog
 import android.content.Context
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
+import com.tungsten.fcllibrary.component.view.FCLButton
 import android.widget.EditText
 import android.widget.TextView
+import com.dsh.core.needsEmptyFileConfirmation
+import com.dsh.core.writeFileAtomically
 import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.dialog.FCLDialog
 import java.io.File
@@ -54,8 +56,8 @@ class DshFileEditDialog(
 ) : FCLDialog(activity) {
 
     private lateinit var editText: EditText
-    private lateinit var cancelButton: Button
-    private lateinit var saveButton: Button
+    private lateinit var cancelButton: FCLButton
+    private lateinit var saveButton: FCLButton
 
     /**
      * 读文件失败时被置真。
@@ -90,8 +92,8 @@ class DshFileEditDialog(
         hintView.visibility = if (hintText.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
 
         editText = findViewById<EditText>(R.id.edit_text)!!
-        cancelButton = findViewById<Button>(R.id.edit_cancel)!!
-        saveButton = findViewById<Button>(R.id.edit_save)!!
+        cancelButton = findViewById<FCLButton>(R.id.edit_cancel)!!
+        saveButton = findViewById<FCLButton>(R.id.edit_save)!!
 
         cancelButton.text = activity.getString(R.string.dialog_negative)
         saveButton.text = activity.getString(R.string.dialog_positive)
@@ -124,9 +126,8 @@ class DshFileEditDialog(
             return
         }
 
-        // 空内容要确认：清空 launcher.patch.yml 会让启动器不再传 --patch，
-        // 那一层的两条优化（/assets 缓存头、HMR 轮询间隔）会一起失效。
-        if (text.isBlank() && target.name == LAUNCHER_PATCH_NAME) {
+        // 空内容是否需要确认，判据在 core 层的纯函数里（可单测），不在这里写死文件名。
+        if (needsEmptyFileConfirmation(target.name, text)) {
             confirm(
                 title = activity.getString(R.string.dsh_file_edit_empty_title),
                 message = activity.getString(R.string.dsh_file_edit_empty_message)
@@ -138,7 +139,7 @@ class DshFileEditDialog(
     }
 
     private fun writeAndClose(text: String) {
-        val outcome = runCatching { writeAtomically(target, text) }
+        val outcome = runCatching { writeFileAtomically(target, text) }
         outcome.fold(
             onSuccess = {
                 toast(activity.getString(R.string.dsh_file_edit_saved))
@@ -179,36 +180,4 @@ class DshFileEditDialog(
         android.widget.Toast.makeText(activity, msg, android.widget.Toast.LENGTH_SHORT).show()
     }
 
-    companion object {
-        /** 与 [com.dsh.core.LAUNCHER_PATCH_OVERLAY] 一致（这里只用于"清空要确认"那一处判断） */
-        private const val LAUNCHER_PATCH_NAME = "launcher.patch.yml"
-
-        /**
-         * 原子写 + 备份。
-         *
-         * 顺序是刻意的：
-         * 1. 先备份原文件到 `<name>.bak`（覆盖式，只留一份）——
-         *    必须在改动前，否则写坏了就没有可回滚的内容；
-         * 2. 写 `<name>.tmp`；
-         * 3. rename 覆盖目标。
-         *
-         * 为什么不先删目标再 rename：`renameTo` 在 POSIX 上本身就是原子覆盖，
-         * 多一步删除只是多造一个"删成功了、rename 失败了"的毁数据窗口
-         * （`writeLauncherPatchOverlay` 的注释里有同样的结论）。
-         */
-        fun writeAtomically(target: File, text: String) {
-            target.parentFile?.mkdirs()
-            if (target.isFile) {
-                val backup = File(target.parentFile, target.name + ".bak")
-                runCatching { target.copyTo(backup, overwrite = true) }
-            }
-            val tmp = File(target.parentFile, target.name + ".tmp")
-            tmp.writeText(text, Charsets.UTF_8)
-            if (!tmp.renameTo(target)) {
-                // rename 失败时 tmp 会留下；删掉它，别在实例目录里堆垃圾。
-                runCatching { tmp.delete() }
-                throw java.io.IOException("rename failed: ${tmp.absolutePath} -> ${target.absolutePath}")
-            }
-        }
-    }
 }
