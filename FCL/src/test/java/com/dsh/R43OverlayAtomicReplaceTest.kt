@@ -108,13 +108,29 @@ class R43OverlayAtomicReplaceTest {
                 "/** 启动器自带的 `/assets` 缓存插件"
             )
         )
+        // ★ R49 收紧判据：原来断言的是 `body.contains("delete(")` —— 那会把
+        //   **清 tmp 的合法删除**也判成缺陷。这个函数在失败路径上必须删 tmp（S-08：tmp 名
+        //   现在唯一了，失败不删就会每次启动在实例目录里多一个残留），所以宽判据从
+        //   "近似正确" 变成了 "误伤正确实现"。
+        //
+        //   SP-08 要守的其实只有一件事：**不许删 target**（删了再 rename，rename 一失败
+        //   目标位置就空了，上一份可用 overlay 也没了）。所以判据改成"对 target 的删除"。
+        //
+        //   三种写法都要覆盖（原注释也这么说）：
+        //     target.delete()  /  targetFile.delete()  /  先赋给变量再删
+        //   用"变量名里含 target 或 overlay 的 X.delete()"来近似 —— 比裸 delete( 精确，
+        //   又不必做真正的数据流分析。
+        val deletesTarget = Regex(
+            """\b(?:target|targetFile|overlay|overlayFile)\s*\.\s*delete\s*\("""
+        ).containsMatchIn(body)
         assertFalse(
-            "★ SP-08 复发：writeLauncherPatchOverlay 的可执行代码里出现了 delete( —— " +
+            "★ SP-08 复发：writeLauncherPatchOverlay 的可执行代码里删了 **target** —— " +
                 "先删旧 overlay 再 rename 会制造毁数据窗口（删成功、rename 失败 ⇒ 目标位置" +
                 "什么都没有，上一份可用的 overlay 也丢了）。目标平台只有 Android/Linux，" +
                 "POSIX rename(2) 本身就是原子覆盖，删除这一步完全多余。" +
+                "（删 `tmp` 是允许且必需的：失败路径要清残留。）" +
                 "实际函数体：<$body>",
-            body.contains("delete(")
+            deletesTarget
         )
         assertTrue(
             "前置：writeLauncherPatchOverlay 必须仍然做原子替换（tmp.renameTo(target)）—— " +

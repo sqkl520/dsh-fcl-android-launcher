@@ -62,14 +62,18 @@ class DshResourceFormatTest {
         "dsh_preflight_missing_script" to arrayOf<Any>("/data/user/0/com.tungsten.fcl/files/dsh/scripts/start-dsh.sh"),
 
         // DshSettingsActivity / 实例详情页
-        "dsh_settings_version" to arrayOf<Any>("0.1.5-rc.2"),
-        "dsh_disk_usage" to arrayOf<Any>("312.4 MB"),
+        // ★ R49：`dsh_settings_version` 与 `dsh_disk_usage` 已从本表移除 —— 两条资源本身
+        //   在 W1-E 删死键时被删了（实测静态 grep + getIdentifier 动态取法全仓零引用，
+        //   `git show HEAD:` 可查原文 "Installed dsh: %1$s" / 磁盘用量格式）。
+        //   所以不是"资源还在但测试忘了"，而是资源没了、登记也该没。
+        //   若将来重新需要它们，资源与这条登记要一起加回来。
         // Key 相关文案整组已删（批次 5）：Key 归 dsh 自己管，启动器既不再读它、也不再
         // 注进子进程环境，于是对应的登记一并消失。新增的 dsh_key_first_run_* 没有占位符，
         // 按本测试的规则不需要登记。
 
         // DshSettingsUI（关于页）：%1$s = BuildConfig.VERSION_NAME
-        "dsh_about_version" to arrayOf<Any>("0.1.0-SNAPSHOT"),
+        // ★ R49：`dsh_about_version` 已从本表移除 —— 该资源在 W1-E 删死键时被删
+        //   （三种取法全仓零引用）。`dsh_about_desc` 仍在用，保留。
         "dsh_about_desc" to arrayOf<Any>("0.1.0-SNAPSHOT"),
 
         // DshRuntime（注意 dsh_reason_start_timeout 传的是 Long：%d 接受 Long）
@@ -91,11 +95,13 @@ class DshResourceFormatTest {
         "dsh_install_started_message" to arrayOf<Any>("dsh 0.1.5"),
 
         // DshDownloadActivity / DshDownloadViewModel
-        "dsh_download_error" to arrayOf<Any>("timeout"),
-        "dsh_download_warning" to arrayOf<Any>("timeout"),
+        // ★ R49：`dsh_download_error` / `dsh_download_warning` / `dsh_install_skipped`
+        //   三条已从本表移除 —— 资源在 W1-E 删死键时被删（三种取法全仓零引用：
+        //   `R.string.X` / `@string/X` / `getIdentifier("X",…)` 各查一遍都是 0）。
+        //   它们的旧调用点已改走 `dsh_download_warning_stale` 等新文案（见 values/strings.xml:80
+        //   的说明）。资源没了，登记也该没。
         "dsh_version_size" to arrayOf<Any>("48 KB"),
         "dsh_install_done" to arrayOf<Any>("0.1.5-rc.2"),
-        "dsh_install_skipped" to arrayOf<Any>("0.1.5-rc.2"),
         "dsh_install_failed" to arrayOf<Any>("npm ERR! code ENETUNREACH"),
         // DshInstaller：失败原因会被翻译成这几条专门文案（%1$s = 错误码；其余几条无占位符，
         // 按本测试的规则不需要登记），以及起 npm 之前的空间检查（两个参数都是 formatSize 的文本）
@@ -127,7 +133,9 @@ class DshResourceFormatTest {
         // DshWebViewActivity / DshLogsActivity
         "dsh_webview_error" to arrayOf<Any>("net::ERR_CONNECTION_REFUSED"),
         "dsh_webview_http_error" to arrayOf<Any>(401),
-        "dsh_logs_path" to arrayOf<Any>("/data/user/0/com.tungsten.fcl/files/dsh/logs/runtime.log"),
+        // ★ R49：`dsh_logs_path` / `dsh_instance_detail_title` 已从本表移除 —— 两条资源
+        //   在 W1-E 删死键时被删（实测 `R.string.X` / `@string/X` / `getIdentifier("X",…)`
+        //   三种取法全仓零引用）。资源没了，登记也该没。
 
         // DshLogsUI（控制台式日志页）：信息行与筛选统计，参数都是 Int
         "dsh_logs_info" to arrayOf<Any>(120, 300),
@@ -136,7 +144,6 @@ class DshResourceFormatTest {
 
         // 实例详情页 / 日志范围标示：%1$s 都是实例名（用户起的名字，什么都可能有）
         "dsh_logs_scope_instance" to arrayOf<Any>("dsh 0.1.5"),
-        "dsh_instance_detail_title" to arrayOf<Any>("dsh 0.1.5"),
 
         // DshInstancesUI（任务区）：%1$s = 任务标题（"实例名 · 阶段"，实例名是用户起的）
         "dsh_task_cancelled_suffix" to arrayOf<Any>("dsh 0.1.5 · 安装中…"),
