@@ -433,7 +433,19 @@ fun writeFileAtomically(target: File, text: String) {
         val backup = File(target.parentFile, target.name + ".bak")
         // 备份失败**不**中止写入：备份是保险，不是前提。
         // 但也不能静默 —— 调用方（编辑器）会把异常抛给用户。
+        //
+        // ★ R49 RELIABILITY P1-3：上面这两行注释原本只说了"不能静默"，实现却是裸 runCatching，
+        //   于是一条都不成立。实际后果：备份写失败（目录只读 / 磁盘满 / 文件被占用）时用户
+        //   完全不知道，接着**保存成功**，此后 `.bak` 里留下的是更旧的内容 —— 而用户以为
+        //   那就是"上一次保存前"的回滚点。真出问题时回滚到的是更早的版本，且没有任何线索。
+        //   现在记录到日志（不改写返回值语义：备份仍不是前提，写入继续）。
         runCatching { target.copyTo(backup, overwrite = true) }
+            .onFailure { e ->
+                DshLogBus.append(
+                    "[instances] 备份失败（写入继续）：${backup.absolutePath} " +
+                        "← ${e.javaClass.simpleName}: ${e.message}"
+                )
+            }
     }
     val tmp = File(target.parentFile, target.name + ".tmp")
     tmp.writeText(text, Charsets.UTF_8)

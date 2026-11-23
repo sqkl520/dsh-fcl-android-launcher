@@ -1328,13 +1328,31 @@ object DshRuntime {
             //   留在磁盘上）。三态判据对 Missing 返 true ⇒ 两者一起清干净。
             if (pidFileMayBeDeleted(latest, meta.pid)) {
                 // 文件操作一律 runCatching（清理是旁路，绝不许把认领流程带崩；侧车删除内部已包）
-                runCatching { DshPaths.instancePidFile(instance.id).delete() }
-                ProcessUtil.deleteTokenUrlFile(instance.id)
+                //
+                // ★ R49 RELIABILITY P0-3：原来这两行是裸的，紧接着的日志却无条件宣布
+                //   "removed stale pid file and token sidecar"。删除失败（SecurityException /
+                //   文件被占用 / SELinux）时那行就是**在说谎** —— 文件还在，下次冷启会再读到
+                //   同一个死 pid、再宣布一次"已清理"。现在按实际结果分别措辞。
+                val pidGone = runCatching { DshPaths.instancePidFile(instance.id).delete() }.getOrDefault(false)
+                val sidecarGone = ProcessUtil.deleteTokenUrlFile(instance.id)
                 // ★ 保持全局：与认领族诊断同流（跨实例的冷启恢复动作，"这次冷启清理了什么"要在一起看）
-                DshLogBus.append(
-                    "[runtime] adoption skipped for ${instance.name}: pid ${meta.pid} is no longer alive; " +
-                        "removed stale pid file and token sidecar (start logs left to rotation)"
-                )
+                if (pidGone || sidecarGone) {
+                    DshLogBus.append(
+                        "[runtime] adoption skipped for ${instance.name}: pid ${meta.pid} is no longer alive; " +
+                            "removed stale ${listOfNotNull(
+                                "pid file".takeIf { pidGone },
+                                "token sidecar".takeIf { sidecarGone }
+                            ).joinToString(" and ")} (start logs left to rotation)"
+                    )
+                }
+                if (!pidGone || !sidecarGone) {
+                    DshLogBus.append(
+                        "[runtime] adoption skipped for ${instance.name}: pid ${meta.pid} is no longer alive, " +
+                            "but cleanup was INCOMPLETE " +
+                            "(pid file deleted=$pidGone, token sidecar deleted=$sidecarGone). " +
+                            "Next cold start may read the same dead pid again."
+                    )
+                }
             }
             return false
         }
@@ -3835,8 +3853,16 @@ object ProcessUtil {
             ?.takeIf { it.isNotEmpty() && UrlScanner.tokenOf(it) != null }
     }
 
-    fun deleteTokenUrlFile(instanceId: String) {
-        runCatching { DshPaths.instanceTokenUrlFile(instanceId).delete() }
+    /**
+     * 删掉实例的 token URL 侧车文件。**返回是否真的删干净了**。
+     *
+     * ★ R49 RELIABILITY P0-3：原来返回 `Unit` 且内部裸 `runCatching` —— 调用方拿不到任何结果，
+     *   于是"清理失败"与"清理成功"在日志里长得一模一样。改成返回 Boolean：
+     *   文件本来就不存在也算成功（那是幂等目标态）。
+     */
+    fun deleteTokenUrlFile(instanceId: String): Boolean {
+        val f = DshPaths.instanceTokenUrlFile(instanceId)
+        return runCatching { !f.isFile || f.delete() }.getOrDefault(false)
     }
 
     /**
@@ -4107,13 +4133,32 @@ object ProcessUtil {
             //   （只是这一瞬间 /proc 读不到），就再也找不回来了。
             return
         }
+        // ★ R49 RELIABILITY P0-1：两条 sendSignal 原来都是裸 runCatching（失败全静默）。
+        //   失败的真实成因有两种，都不可忽略：
+        //     · SecurityException —— Android 12+ 对非本应用 UID 发信号受限，而"认领态"的 pid
+        //       可能已被系统回收到别的 UID；
+        //     · SELinux 拦截 / pid 已变成非法值。
+        //   静默的后果：信号根本没发出去，代码继续往下走，最终 [verifyProotGone] 只打印
+        //   "停止后 proot 仍存活（两段宽限后仍未退出）" —— **只有结果、没有原因**。
+        //   同文件的 [killStale]（:4165）与 ProotProcessExecutor 早就补了 onFailure（BL-046），
+        //   唯独这条主停止链漏了。
         runCatching { android.os.Process.sendSignal(pid.toInt(), 15) } // SIGTERM
+            .onFailure { e ->
+                logFor(logInstanceId, "[runtime] SIGTERM failed for pid=$pid: ${e.javaClass.simpleName}: ${e.message}")
+            }
         val deadline = System.currentTimeMillis() + graceMillis
         while (System.currentTimeMillis() < deadline && isAlive(pid)) {
             Thread.sleep(200)
         }
         if (isAlive(pid)) {
             runCatching { android.os.Process.sendSignal(pid.toInt(), 9) } // SIGKILL
+                .onFailure { e ->
+                    logFor(
+                        logInstanceId,
+                        "[runtime] SIGKILL failed for pid=$pid (进程仍然存活，停止不会成功): " +
+                            "${e.javaClass.simpleName}: ${e.message}"
+                    )
+                }
         }
         removePidFileByPid(pid)
     }
