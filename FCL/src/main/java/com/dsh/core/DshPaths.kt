@@ -132,6 +132,34 @@ object DshPaths {
      */
     fun instanceDir(instanceId: String): File = File(INSTANCES_DIR, safeInstanceDirName(instanceId))
 
+    /**
+     * 某实例在 **guest（proot 内）** 的根路径，如 `/opt/dsh/instances/<id>`。
+     *
+     * ★ R49 / BL-251：这个函数的存在就是为了**消灭第二份拼接**。
+     *
+     * 改造前两处各自拼一遍（`DshRuntime.kt:972`、`DshInstaller.kt:1119`），用的是**裸
+     * `instance.id`**；而宿主侧所有路径都过 [safeInstanceDirName]（把 `/` `\` `NUL` 折成 `_`）。
+     *
+     * 正常 id（`inst-<ms>-<seq>-<hex>`）下两者一致，所以这个缺陷长期不可见。但
+     * [com.dsh.core.DshInstances] 收编孤儿目录时用 `id = it.name` 直接接受目录名，
+     * 而 `File.name` 只排除 `/`、**不排除 `\`**（Linux 上 `\` 是合法文件名字符）：
+     *
+     * ```
+     * id = "weird\name"
+     *   宿主找   instances/weird_name      （折叠后）
+     *   guest 找 /opt/dsh/instances/weird\name  （裸拼）
+     * ```
+     *
+     * ⇒ 实例永远起不来，日志报 `No such file or directory`，而用户在文件管理器里看到的是
+     * `weird_name`，两边对不上、极难诊断。
+     *
+     * 现在 guest 侧也过 [safeInstanceDirName]：**宿主与 guest 共用同一个折叠函数**，不可能再漂。
+     * 而 `ProotCommand.kt:186` 的 bind 是 `--bind=<宿主 ROOT_DIR>:/opt/dsh` —— bind 的是
+     * 宿主目录树，所以 guest 侧看到的名字本来就是宿主侧折叠后的文件名，改后反而**更正确**。
+     */
+    fun instanceGuestDir(instanceId: String): String =
+        "${ProotCommand.GUEST_ROOT}/instances/" + safeInstanceDirName(instanceId)
+
     /** 某实例的 DSH_HOME（会话/配置/cookie 都在这，重装 dsh 也不丢） */
     fun instanceHome(instanceId: String): File = File(instanceDir(instanceId), "home")
 

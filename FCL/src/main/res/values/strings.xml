@@ -1,7 +1,6 @@
 <resources>
     <string name="app_name" translatable="false">DSHarness-FCL-Launcher</string>
     <string name="upload_failed">Upload failed: %s</string>
-    <string name="message_copy">Copy successfully!</string>
     <string name="world_time">EEE, MMM d, yyyy HH:mm:ss</string>
     <string name="edit">Edit</string>
     <string name="open_link_failed">Failed to automatically redirect to the browser. The link has been copied automatically. Please manually open the browser and paste it in.</string>
@@ -21,11 +20,9 @@
     <string name="log_upload_open">Open Link</string>
     <string name="log_upload_share">Share Link</string>
     <string name="log_upload_share_template">I encountered a problem in the launcher, here is the log link:\n%s</string>
-    <string name="close">Close</string>
     <string name="dsh_action_clear">Clear</string>
         <string name="dsh_action_close">Close</string>
         <string name="dsh_back_again_to_exit">Press back again to exit</string>
-        <string name="dsh_action_configure">Configure</string>
         <string name="dsh_action_copy">Copy</string>
         <string name="dsh_action_delete">Delete</string>
         <string name="dsh_action_download">Download</string>
@@ -37,13 +34,10 @@
              静态按钮文案，等旧布局退役后要一起删；详情页需要一条独立的、可随页面走的条目 -->
         <string name="dsh_action_open_web">Open UI</string>
         <string name="dsh_action_prepare_runtime">Prepare runtime</string>
-        <string name="dsh_action_refresh">Refresh</string>
         <string name="dsh_action_reinstall">Reinstall</string>
         <string name="dsh_action_retry">Retry</string>
-        <string name="dsh_action_save">Save</string>
         <string name="dsh_action_settings">Settings</string>
         <string name="dsh_action_start">Start</string>
-        <string name="dsh_action_start_anyway">Start anyway</string>
         <string name="dsh_action_stay">Stay here</string>
         <string name="dsh_action_stop">Stop</string>
         <string name="dsh_action_verify_runtime">Run self-check</string>
@@ -55,11 +49,7 @@
         <string name="dsh_delete_title">Delete instance</string>
         <!-- fix12：清单读取失败期间 delete() 直接拒绝（不写盘就不动目录），要把"为什么没删"说出来 -->
         <string name="dsh_delete_refused">Can\'t delete: the instance list failed to load</string>
-        <string name="dsh_disk_usage">Disk usage: %1$s</string>
-        <string name="dsh_download_error">Failed to load: %1$s</string>
         <string name="dsh_download_show_prerelease">Show previews</string>
-        <string name="dsh_download_title">Install dsh version</string>
-        <string name="dsh_download_warning">Showing cached data (%1$s)</string>
         <string name="dsh_install_cancelled">Install cancelled</string>
         <string name="dsh_install_done">Installed %1$s</string>
         <!-- 安装失败原因：只要能从 npm 的输出里认出是哪一类，就说清楚"是什么 + 怎么办"。
@@ -85,17 +75,17 @@
              与实例卡片的 dsh_state_broken（损坏）是措辞差异，不是同一句话 ——
              版本页每行就是一个版本、角标紧挨安装按钮，语境已把它锚定在"这个版本"上。 -->
         <string name="dsh_installed_broken">Failed</string>
-        <string name="dsh_install_skipped">%1$s is already installed — you can start it now</string>
-        <!-- fix12 / E6-4：详情页动作行按 DispatchReason 分叉。dsh_install_skipped 仍是"安装入口
-             发现目标版本已就绪，于是跳过"（带版本号）；下面两条是不带版本号的**结论**文案，
-             给"你点的这个版本已经装好了"和"这个版本正在装"两种状态用。 -->
+        <!-- fix12 / E6-4：详情页动作行按 DispatchReason 分叉。这里只留两条不带版本号的
+             **结论**文案，给"你点的这个版本已经装好了"和"这个版本正在装"两种状态用。
+             （带版本号的 `dsh_install_skipped` 已在 R49 作为死资源删除：它的两处旧调用点已改走
+             `DshDownloadViewModel.kt:437` 的 `DispatchReason` 与
+             `DshInstanceSettingPage.kt:1054` 的 `dsh_install_in_flight`，
+             历史注释指出它对"安装中"的实例是说谎文案。） -->
         <string name="dsh_install_already_installed">Already installed — you can start it</string>
         <string name="dsh_install_in_flight">That version is already installing</string>
-        <string name="dsh_instance_gone">This instance no longer exists</string>
         <string name="dsh_instance_subtitle">v%1$s · port %2$s · %3$s</string>
         <!-- 实例详情页：一个实例 = 一个页面，页内再用 tab 切运行/日志/配置。
              标题带上实例名，是因为从通知或外壳菜单直接跳进来时用户看不到来源列表 -->
-        <string name="dsh_instance_detail_title">Instance: %1$s</string>
         <string name="dsh_instance_detail_tab_run">Run</string>
         <string name="dsh_instance_detail_tab_logs">Logs</string>
         <string name="dsh_instance_detail_tab_config">Config</string>
@@ -103,7 +93,6 @@
         <!-- 详情页是在实例已消失（在别处被删）时也可能被打开的页面，需要一句兜底文案 -->
         <string name="dsh_instance_detail_empty">This instance no longer exists</string>
         <string name="dsh_instances_empty">No instances yet.\nTap "Versions" on the left to install a dsh version.</string>
-        <string name="dsh_instances_title">DeepSeek Harness</string>
         <!-- fix12：实例清单（manifest）读/写失败时的横幅与拒写反馈。四条一组 ——
              横幅（load/write）+ 横幅上的重试 + 重试又失败。前两条是"这一屏的事"，
              后两条是"用户点了重试之后"，所以顺序不能按字母排。 -->
@@ -118,12 +107,10 @@
         <string name="dsh_logs_clear_confirm">Clear all logs in this view? This cannot be undone.</string>
         <string name="dsh_logs_copied">Logs copied to clipboard</string>
         <string name="dsh_logs_empty">No logs yet</string>
-        <string name="dsh_logs_path">File: %1$s</string>
         <!-- 日志页顶部的范围标示：同一个日志组件要同时服务"全部实例"与"单个实例"两种视角，
              不标出来用户无法判断自己看的是谁的日志 -->
         <string name="dsh_logs_scope_app">App log (all instances)</string>
         <string name="dsh_logs_scope_instance">Log of %1$s</string>
-        <string name="dsh_logs_title">Runtime log</string>
         <string name="dsh_name_required">Name can\'t be empty</string>
         <string name="dsh_notify_running">Running</string>
         <string name="dsh_notify_starting">Starting…</string>
@@ -144,6 +131,10 @@
         <string name="dsh_reason_deleted">Instance deleted</string>
         <string name="dsh_reason_from_notification">Stopped from the notification</string>
         <string name="dsh_reason_service_recycled">Stopped: the background service was reclaimed by the system</string>
+        <!-- R49/H-2（审计 P2-6）：停止未完成时的失败原因。原来这句是内联英文，
+             中/繁界面下照样显示英文。**不带占位符**是有意的：`dsh_*` 里带 `%` 的必须登记进
+             `DshResourceFormatTest.callSites`，pid 由 DshRuntime 用语言中立的 `(pid=N)` 后缀补。 -->
+        <string name="dsh_reason_stop_incomplete">Stop incomplete: the dsh process may still be running. Start the instance again to clean it up.</string>
         <string name="dsh_start_port_in_use">Port in use (EADDRINUSE). The next start will pick a free port automatically.</string>
         <string name="dsh_task_deleted">Deleted</string>
         <string name="dsh_task_deleted_with_leftover">Deleted (some files remain)</string>
@@ -154,19 +145,12 @@
         <string name="dsh_notify_text">%1$s · %2$s</string>
         <string name="dsh_reinstall_pick_version">No version has been installed successfully yet; pick one on the Versions tab.</string>
         <string name="dsh_runtime_exited">dsh process exited (code %1$d)</string>
-        <string name="dsh_saved">Saved</string>
         <!-- fix12：拒写期改名/改端口的反馈。dsh_saved 只说"成了"，而 saveAsync() 返回 false
              时内存里改了、盘上没有，必须明说"没保存"以及原因（清单不可写）。 -->
         <string name="dsh_change_not_saved">Not saved: the instance list is read-only right now</string>
-        <string name="dsh_settings_model">Model</string>
-        <string name="dsh_settings_name_hint">Instance name</string>
-        <string name="dsh_settings_port_hint">Port (empty = auto)</string>
-        <string name="dsh_settings_profile">Profile</string>
         <string name="dsh_settings_section_env">Environment</string>
         <string name="dsh_settings_section_instance">Instance</string>
         <string name="dsh_settings_section_maintain">Maintenance</string>
-        <string name="dsh_settings_title">Instance settings</string>
-        <string name="dsh_settings_version">Installed dsh: %1$s</string>
         <string name="dsh_size_calculating">Calculating size…</string>
         <string name="dsh_stage_prepare">Preparing Node runtime and installing dsh…</string>
         <!-- ▼ 安装阶段：脚本输出的是**稳定 key**（`[setup] STAGE=<key> [args]`），
@@ -215,31 +199,20 @@
     <string name="dsh_tab_settings">Settings</string>
 
     <!-- 关于页（阶段 2 设置页内，暂存备用） -->
-    <string name="dsh_about_full_name" translatable="false">DeepSeek Harness FCL Android Launcher</string>
     <string name="dsh_about_subtitle" translatable="false">dshAndroidLauncher (FCL-based)</string>
-    <string name="dsh_settings_no_instance">No instance yet. Create one from the Download tab first.</string>
     <string name="dsh_right_current_instance">Current instance</string>
     <string name="dsh_right_no_instance">No instance yet</string>
     <string name="dsh_action_open_webui">Open UI</string>
     <string name="dsh_setting_group_common">General</string>
     <string name="dsh_setting_group_runtime">Runtime</string>
     <string name="dsh_setting_group_dsh">DeepSeek Harness</string>
-    <string name="dsh_setting_group_hint">FCL launcher settings</string>
     <string name="dsh_setting_language">Language</string>
     <string name="dsh_setting_language_desc">Follow system language</string>
     <string name="dsh_setting_about">About this launcher</string>
     <string name="dsh_setting_runtime_check">Runtime self-check</string>
     <string name="dsh_setting_runtime_check_desc">Check proot, rootfs, Node.js and startup scripts</string>
-    <string name="dsh_setting_logs">Runtime log</string>
-    <string name="dsh_setting_logs_desc">View dsh install and runtime logs</string>
-    <string name="dsh_setting_download">dsh versions</string>
-    <string name="dsh_setting_download_desc">Browse and install DeepSeek Harness versions</string>
-    <string name="dsh_setting_instance">Instances</string>
-    <string name="dsh_setting_instance_desc">Manage instance name, API key, model, profile and port</string>
     <string name="dsh_setting_export_logs">Copy log</string>
     <string name="dsh_setting_export_logs_desc">Copy current log to clipboard</string>
-    <string name="dsh_setting_theme_coming">Theme mode settings will be wired to ThemeEngine later</string>
-    <string name="dsh_about_version">Version: %1$s</string>
     <string name="dsh_action_open">Open</string>
     <string name="dsh_setting_group_appearance">Appearance</string>
     <string name="dsh_setting_theme_mode">Theme mode</string>
@@ -313,8 +286,6 @@ Version %1$s</string>
     <string name="dsh_setup_state_running">In progress</string>
     <string name="dsh_setup_state_failed">Failed</string>
     <string name="dsh_setup_hint_space">First-time setup needs about 1.5 GB free space; it may take a few minutes. If the runtime is already extracted, updating needs much less.</string>
-    <string name="dsh_setup_enter">Enter</string>
-    <string name="dsh_setup_running_now">Preparing runtime</string>
     <string name="dsh_tasks_header">In progress</string>
     <string name="dsh_tasks_cancel">Cancel</string>
     <string name="dsh_tasks_stop">Stop</string>
@@ -342,8 +313,6 @@ Version %1$s</string>
     <string name="dsh_home_must_be_absolute">Must be an absolute path inside the runtime (starting with /)</string>
     <string name="dsh_home_no_dot_segments">The path must not contain . or .. segments (use the full path shown below the field)</string>
     <string name="dsh_home_not_guest_root">Cannot use / — that is the runtime root, not a workspace. Pick a subdirectory such as /opt/dsh/instances/...</string>
-    <string name="dsh_settings_row_key">API key</string>
-    <string name="dsh_settings_row_key_status">Key status</string>
     <string name="dsh_settings_row_version">Installed dsh</string>
     <string name="dsh_settings_row_disk">Disk usage</string>
     <string name="dsh_settings_row_path">Instance path</string>
@@ -357,11 +326,7 @@ Version %1$s</string>
     <string name="dsh_settings_desc_open_browser">Open the dsh interface in your browser right now</string>
     <string name="dsh_settings_desc_open_browser_unavailable">No browser available; try copying the link instead</string>
     <string name="dsh_settings_desc_name">Shown in the instance list</string>
-    <string name="dsh_settings_desc_model">Model used for conversations</string>
-    <string name="dsh_settings_desc_profile">dsh profile to boot</string>
     <string name="dsh_settings_desc_port">Leave empty to pick a port automatically</string>
-    <string name="dsh_settings_desc_key">Stored locally, encrypted with Keystore</string>
-    <string name="dsh_settings_desc_key_status">Result of the last check</string>
     <string name="dsh_settings_desc_path">Tap to copy</string>
     <string name="dsh_settings_desc_copy_url">Tap to copy the link with this session\'s access credentials</string>
     <string name="dsh_settings_desc_verify">Run the minimal chain inside proot (9 checks)</string>
@@ -509,4 +474,5 @@ Version %1$s</string>
     <string name="dsh_file_edit_empty_message">An empty launcher.patch.yml makes the launcher stop passing --patch, so the /assets cache headers and the HMR polling interval stop applying. dsh still starts normally. Save anyway?</string>
     <string name="dsh_file_edit_running">Stop the instance before editing its configuration</string>
     <string name="dsh_file_edit_backup_note">A .bak copy of the previous contents is kept next to the file.</string>
+    <string name="dsh_logs_write_failed">Couldn\'t write the log file — recent lines may be lost. Free up storage, then retry.</string>
 </resources>

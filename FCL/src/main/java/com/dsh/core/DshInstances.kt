@@ -287,6 +287,85 @@ fun launcherPatchOverlayJson(pluginGuestPath: String): String = """
 """.trimStart()
 
 /**
+ * 用户那份 overlay 文件（`launcher.patch.yml`）的解析结论（★ R49 / S-07）。
+ *
+ * 为什么要单独分类、而不是只看 [mergeLauncherPatchOverlay] 的返回值：合并的结果在
+ * "用户文件不存在"与"用户文件坏了"这两种情况下**完全相同**（都只有启动器那两条），
+ * 但对**调用方要做的动作**完全不同 —— 后者必须先备份用户的原文件，否则用户的配置
+ * 在下一次启动时无声消失（真机现场见 [mergeLauncherPatchOverlay] 的 KDoc）。
+ */
+enum class UserOverlayState {
+    /** 文件不存在 / 读失败（`existing == null`）：没有可丢的内容，不需要备份 */
+    Absent,
+
+    /** 解析成功且根是数组：正常合并，用户的条目都会保留 */
+    Parsed,
+
+    /** 存在但解析不了 / 根不是数组：用户的条目**会全部丢失**，调用方必须先备份 */
+    Corrupt,
+}
+
+/**
+ * 判定用户 overlay 的解析结论（纯函数，★ R49 / S-07）。
+ *
+ * 判据与 [mergeLauncherPatchOverlay] 内联的那段**必须一致**（同一份文本分出不同结论
+ * 就是又一套口径）：能 `JsonParser.parseString` 且 `isJsonArray` 才算 [UserOverlayState.Parsed]。
+ *
+ * 注意这不是"最终答案"：dsh 读的是 YAML，JSON 只是它的子集。用户若写了块序列
+ * （`- id: foo`）会落到 [UserOverlayState.Corrupt] —— 而那种写法是否真能被 dsh 接受
+ * **尚未实测**，所以这里的 [UserOverlayState.Corrupt] 语义严格是"我们读不懂 ⇒ 合并必然
+ * 丢内容"，不是"dsh 一定不接受"。备份 + 日志对两种情形都成立。
+ */
+fun classifyUserOverlay(existing: String?): UserOverlayState {
+    if (existing == null) return UserOverlayState.Absent
+    val parsed = runCatching {
+        val root = JsonParser.parseString(existing)
+        if (root.isJsonArray) root.asJsonArray else null
+    }.getOrNull()
+    return if (parsed == null) UserOverlayState.Corrupt else UserOverlayState.Parsed
+}
+
+/**
+ * 把用户写坏的 overlay 文件另存一份（`<name>.bak.BAD-<毫秒>`），返回备份文件（失败为 null）。
+ *
+ * ★ 为什么**不**复用编辑器那套 `<name>.bak`：那个名字是"上一次保存前的内容"，
+ *   会被下一次保存覆盖掉。这里要保留的是"启动器读不懂的那一份"，它必须**不与任何
+ *   常规备份抢名字**，否则下一次启动就把证据冲掉了。
+ *
+ * ★ 为什么备份失败**不**中止写入：不写 ⇒ 文件保持坏的 ⇒ dsh 读到坏 overlay 会**直接启动失败**
+ *   （见 [writeLauncherPatchOverlay] 的 KDoc），那比"丢掉用户的条目"更糟。
+ *   所以两种情况都写，但备份失败必须留痕（否则用户会以为备份在那儿）。
+ *
+ * ★ 为什么只留**最近一份**：这个函数在**每次启动**都会跑（[writeLauncherPatchOverlay] 是
+ *   启动链的一部分），而用户可能长期不改那份坏文件 ⇒ 每启动一次多一个 `.bak.BAD-*`。
+ *   留最新一份就够"找回原文"这个目的（内容是同一份坏文件）；多留的只是同一段文本的副本。
+ *   ⚠️ 删旧的那份是**有损**的：如果用户**每次**改一点再启动，中间那几版就没有了。
+ *   取舍理由：那些中间版本来就没被任何人读过（dsh 也读不懂），而无限增长是确定的害处。
+ *   删除失败静默（下次启动还会试）。
+ */
+internal fun backupUnparsableOverlay(target: File, nowMs: Long): File? {
+    val prefix = "${target.name}.bak.BAD-"
+    val backup = File(target.parentFile, "$prefix$nowMs")
+    val ok = runCatching { target.copyTo(backup, overwrite = true) }.isSuccess
+    if (ok) {
+        // 只留最新一份（见 KDoc）。在成功备份之后做 —— 备份没成功时更不能删旧的证据。
+        target.parentFile?.listFiles()?.forEach { f ->
+            if (f.name != backup.name && f.name.startsWith(prefix)) runCatching { f.delete() }
+        }
+        DshLogBus.append(
+            "[instances] 用户 overlay 解析失败，已备份到 ${backup.name} " +
+                "（本次仍会写入启动器条目 —— 否则坏文件会让 dsh 启动失败）：${target.absolutePath}"
+        )
+        return backup
+    }
+    DshLogBus.append(
+        "[instances] 用户 overlay 解析失败，且**备份也失败**，本次写入会丢掉其中的用户条目：" +
+            "${target.absolutePath}"
+    )
+    return null
+}
+
+/**
  * ★ BL-246：把启动器自己那两条 overlay 与**用户在同一个文件里写的条目**合并。
  *
  * ## 缺陷（真机发现，2026-11-19）
@@ -310,6 +389,11 @@ fun launcherPatchOverlayJson(pluginGuestPath: String): String = """
  *
  * 文件不存在 / 解析失败 / 不是数组 ⇒ 直接用启动器那两条（**不能**因为用户文件坏了就让启动失败；
  * 这与 [writeLauncherPatchOverlay] 既有的"overlay 是优化项，失败不影响启动"同一原则）。
+ *
+ * ★ R49 / S-07：最后那种情况（**用户文件存在但读不懂**）在旧实现里是**纯静默**的 ——
+ *   用户的条目被整份丢掉，下一次启动文件就只剩启动器那两条。现在由调用方
+ *   [writeLauncherPatchOverlay] 用 [classifyUserOverlay] 判定、并先调 [backupUnparsableOverlay]
+ *   把原文件另存一份再写。**本函数本身保持纯函数**（不做 IO），否则它就没法被直测。
  *
  * @param existing 现有文件内容（null = 文件不存在/读失败）
  * @return 合并后的完整 JSON 文本
@@ -384,26 +468,145 @@ internal fun jsonStringLiteral(raw: String): String {
 }
 
 /**
- * 把 [launcherPatchOverlayJson] 写进实例目录，返回宿主侧的 [File]（供启动脚本判断）；
- * 任何一步失败都返回 `null`（调用方据此不传 `--patch`，启动照旧）。
+ * 把 [f] 的内容**真正刷到盘上**（`fsync`，★ R49 / S-09）。
  *
- * ## 三个刻意的选择
+ * ## 为什么是"另开一个 fd 再 sync"而不是一个流写完顺手 sync
  *
- * 1. **写实例目录，不写 `$DSH_HOME`**。`$DSH_HOME/cordis.patch.yml` 是 dsh 定义的
- *    **用户层**，对所有 profile 生效（实测：在里面写一条，`--profile <别的>` 也会被它影响）。
- *    实例目录是"这一份安装"的私有空间，写崩了最多影响这一个实例。
- * 2. **先写临时文件再 rename**。rename 在同一文件系统内是原子的；直接覆写会在中间态
- *    留下半截 JSON，而 dsh 读到坏 overlay 会**直接启动失败**（实测
- *    `failed to read overlay ... ENOENT` 后进程退出）—— 那是唯一一个"我们的优化把 dsh 弄挂了"
- *    的路径，必须用原子写堵死。
- * 3. **路径用 guest 绝对路径**。overlay 在实例目录、插件在 `/opt/dsh/scripts/`，
- *    两者不在同一层，写相对路径会锚到 overlay 所在目录从而指错（实测相对路径按
- *    overlay 所在目录解析）。
+ * `File.writeText` 只 `close` 不 `fsync`：数据停在页缓存里就算"写完"了，断电时会出现
+ * **rename 已经生效、内容还是旧的/空的**（丢新值 —— 不是半截，比半截更难察觉）。
  *
- * @param instancePathInRootfs 实例在 **guest 内**的绝对路径（`/opt/dsh/instances/<id>`）
- * @param scriptsHostDir 宿主侧的脚本目录（默认 `DshPaths.SCRIPTS_DIR`，注入以便单测）
- * @return 写成功的宿主 [File]；插件不存在或写失败时为 `null`
+ * 本函数在内容写完之后另开一个 fd 调 `fsync(2)`：`fsync` 刷的是**这个 inode 的脏页**，
+ * 与"是哪条 fd 写进去的"无关，所以分两步与一步的持久化语义完全相同。
+ * 分成两步的唯一原因是**调用点的形状**：`R43OverlayAtomicReplaceTest` 对
+ * `writeLauncherPatchOverlay` 有一条"必须先 `writeText(` 再 rename"的前置断言
+ * （它靠那个字面量确认用例不是在守一个空函数），把调用点写成单一辅助函数会让那条断言失效。
+ * 这是既有测试的形状约束，不是持久化语义的要求。
  */
+internal fun fsyncFile(f: File) {
+    // append=true：绝不能截断 —— 内容已经由 writeText 写好了，这里只负责刷盘。
+    FileOutputStream(f, true).use { out ->
+        out.flush()
+        out.fd.sync()
+    }
+}
+
+/**
+ * 凭据类文件的判据（纯函数）：这类文件**不备份**、并且写完全强制 `0600`。
+ *
+ * ## 为什么这两类文件的待遇不同（★ R49 / S-06）
+ *
+ * `writeFileAtomically` 会给目标留一份 `<name>.bak`。对普通配置文件（`launcher.patch.yml`、
+ * `cordis.patch.yml`）这是纯粹的好事：写坏了能回滚。但对**明文密钥**文件，`.bak` 就是
+ * **第二份明文 Key**，而且：
+ *
+ * 1. 它**永不清理** —— 用户轮换 Key 之后，旧 Key 仍以明文长期躺在同一个目录里；
+ *    而"轮换"的语义本该是"旧凭据作废"，留着它等于把轮换变成追加；
+ * 2. 多一份副本 = 泄漏面翻倍（同一个目录下任何可读上下文都拿到两份历史 Key）。
+ *
+ * 所以判据按**文件名**（而不是调用方传参）：①这个内核的调用方是通用编辑对话框
+ * （[com.dsh.ui.DshFileEditDialog]），它只认得 `target` 这一个输入；②文件名是
+ * "这是不是密钥"的**唯一稳定事实** —— 靠调用方记得传 `secret = true`，漏一个就是明文泄漏，
+ * 而漏传不会报错。
+ *
+ * 覆盖面：dsh 现存唯一的凭据文件是 `$DSH_HOME/.credentials.yaml`；同时收进历史遗留的
+ * `credentials.env`（明文！）/ `credentials.enc`（启动器旧实现）—— 它们已不再被读，
+ * 但用户仍可能在编辑器里打开它们（[DshInstanceSettingPage] 的文件表）。
+ *
+ * 另外：`.bak` **不主动删除**（已存在的那份是用户上一次保存前的数据，删除是不可逆操作）。
+ */
+fun isCredentialFileName(fileName: String): Boolean {
+    val n = fileName.lowercase()
+    return n == ".credentials.yaml" || n == ".credentials.yml" ||
+        n.startsWith("credentials.") || n.startsWith(".credentials.")
+}
+
+/**
+ * 生成一个**唯一**的临时文件名（★ R49 / S-08；与 `ProcessUtil.atomicWriteText` 同款）。
+ *
+ * 旧实现用固定名 `<target>.tmp`：两个写者共用同一个 tmp ⇒ 先 close 的那个会被后者的
+ * rename 带走，落到目标上的内容可能来自**另一次写**（"原子替换退化成两个写者抢一个缓冲区"）。
+ * Android 上的并发写者（`writeFileAtomically` 走 UI 对话框，`writeLauncherPatchOverlay` 走启动）
+ * 目前不同刻发生，但接口本身不设防。
+ *
+ * 三要素**都要**（理由同 `DshRuntime.atomicWriteText` 的注释）：
+ * 计数器兜住"同一线程同一毫秒连写两次"（部分内核 `nanoTime` 精度只到毫秒，会撞名）；
+ * 线程 id 兜住"不同线程落在同一纳秒"；纳秒让残留文件名自带时序，便于排障。
+ */
+internal fun uniqueTmpName(targetName: String): String =
+    "$targetName.tmp.${TMP_NAME_SEQ.incrementAndGet()}.${Thread.currentThread().id}.${System.nanoTime()}"
+
+/** [uniqueTmpName] 的单调计数器（见那里的三要素说明）。 */
+private val TMP_NAME_SEQ = AtomicInteger(0)
+
+/**
+ * 把 [text] 以 UTF-8 写入 [target]，并确保**内容真的落盘**（★ R49 / S-09）。
+ *
+ * ## 为什么必须是 `FileOutputStream` + `fd.sync()` 而不是 `writeText`
+ *
+ * `writeText` 只 `close` 不 `fsync`：数据停在页缓存里就算"写完"了。断电时可能出现
+ * **rename 已经生效、内容还是旧的/空的**（丢新值 —— 不是半截，比半截更难察觉）。
+ *
+ * ## 顺序：先落盘，再让 rename 生效
+ *
+ * 调用方必须在**本函数返回之后**才做 `Files.move`。反过来（先 rename 再 fsync）会造出
+ * "空文件已经就位"的窗口：崩溃后目标路径上是一份**存在但为空**的文件，
+ * 而 dsh 对空的 `.credentials.yaml` 和空的 `cordis.patch.yml` 的反应都不是"当作没配"。
+ */
+internal fun writeTextSynced(target: File, text: String) {
+    val bytes = text.toByteArray(Charsets.UTF_8)
+    FileOutputStream(target).use { out ->
+        out.write(bytes)
+        out.flush()
+        out.fd.sync()
+    }
+}
+
+/**
+ * 把 [f] 的权限钉成"只有 owner 可读写"（`0600`，★ R49 / S-05）。
+ *
+ * ## 为什么必须在 **tmp** 上做、且必须在 `Files.move` **之前**
+ *
+ * `rename` 会把源文件的 mode 一起带过去 —— 所以在 tmp 上设好，目标位置天然就是 `0600`；
+ * 反过来对已就位的目标 `chmod`，中间那一瞬已经是宽松权限了。
+ *
+ * ## 为什么不能靠 umask
+ *
+ * `FileOutputStream` 建文件的 mode 是 `0666 & ~umask`。Android App 的 umask 通常是 `0077`
+ * （结果恰好 `0600`），但那是**环境**给的，不是代码保证的：部分 ROM / 部分文件系统上
+ * dsh 会因此**拒绝加载凭据**（上游 `credentials-local` 在读之前就检查 group/other 位，
+ * 报错原文是 `run "chmod 600 <path> before starting again`）。
+ *
+ * 与 `DshRuntime.atomicWriteText` 的写法逐行同款（先 `false,false` 关掉 "everyone"，
+ * 再 `true,true` 只留给 owner）。每一步都 `runCatching`：`setReadable`/`setWritable`
+ * 在部分文件系统（FAT/exFAT 挂载、某些虚拟 FS）返回 false 是**正常**的，
+ * 那不是写入失败，不该让保存失败。
+ *
+ * @return true = 四步都执行完且没抛异常（不代表这个文件系统真的支持）
+ */
+internal fun hardenOwnerOnly(f: File): Boolean = runCatching {
+    f.setReadable(false, false)
+    f.setReadable(true, true)
+    f.setWritable(false, false)
+    f.setWritable(true, true)
+}.onFailure { e ->
+    // 不中止写入（这不是写入的前提），但也不能完全静默：真出问题时这是唯一线索。
+    DshLogBus.append(
+        "[instances] 收紧文件权限失败（写入继续）：${f.absolutePath} ← ${e.javaClass.simpleName}: ${e.message}"
+    )
+}.isSuccess
+
+/**
+ * [writeFileAtomically] 收紧权限那一步的注入点（**测试专用**，与 [DshInstances.dirFsync] 同一手法）。
+ *
+ * 为什么必须有它：`setReadable` / `setWritable` 的**可观测效果**是平台相关的 ——
+ * 在 Windows 上 `setReadable(false, false)` 直接返回 false 且什么都不做（实测），
+ * 所以"写完之后看权限位"在开发机上永远看不到差异，"删掉收紧那一步"的变异也测不出来。
+ * 通过这个钩子，测试能断言**收紧那一步在这条路径上被调用了、且作用于 tmp 文件**，
+ * 这在所有平台上都成立（真机上权限位是否真的变成 0600 只能靠 on-device 实测）。
+ *
+ * null = 走生产实现 [hardenOwnerOnly]。测试必须在 `@After` 里复原（它是进程级全局）。
+ */
+internal var writeFilePermissionHook: ((File) -> Unit)? = null
 
 /**
  * 原子写 + 备份（BL-249，配置文件编辑器用的写入内核；纯 JVM 可测）。
@@ -412,8 +615,10 @@ internal fun jsonStringLiteral(raw: String): String {
  *
  * 1. 先备份原文件到 `<name>.bak`（覆盖式，只留一份）——
  *    **必须在改动前**，否则写坏了就没有可回滚的内容；
- * 2. 写 `<name>.tmp`；
- * 3. `rename` 覆盖目标。
+ *    **凭据类文件除外**（见 [isCredentialFileName]：`.bak` 是第二份明文 Key）；
+ * 2. 写一个**唯一名**的 `<name>.tmp.<seq>.<tid>.<nano>`，写完 `fd.sync()`（先落盘）；
+ * 3. 凭据类文件在 tmp 上把权限钉成 `0600`（rename 会把 mode 带走）；
+ * 4. `rename` 覆盖目标。
  *
  * ## 为什么不先删目标再 rename
  *
@@ -429,7 +634,9 @@ internal fun jsonStringLiteral(raw: String): String {
  */
 fun writeFileAtomically(target: File, text: String) {
     target.parentFile?.mkdirs()
-    if (target.isFile) {
+    // ★ R49 / S-06：凭据类文件**不**留 `.bak`（旧 Key 明文永不清理 —— 见 [isCredentialFileName]）。
+    val secret = isCredentialFileName(target.name)
+    if (target.isFile && !secret) {
         val backup = File(target.parentFile, target.name + ".bak")
         // 备份失败**不**中止写入：备份是保险，不是前提。
         // 但也不能静默 —— 调用方（编辑器）会把异常抛给用户。
@@ -447,8 +654,16 @@ fun writeFileAtomically(target: File, text: String) {
                 )
             }
     }
-    val tmp = File(target.parentFile, target.name + ".tmp")
-    tmp.writeText(text, Charsets.UTF_8)
+    // ★ R49 / S-08：tmp 名必须**唯一**（固定名会让两个写者抢同一个缓冲区）。
+    val tmp = File(target.parentFile, uniqueTmpName(target.name))
+    // ★ R49 / S-09：先 fd.sync 落盘，**再** rename（顺序反了会出现"空文件已就位"）。
+    writeTextSynced(tmp, text)
+    // ★ R49 / S-05：凭据类文件在 tmp 上钉 0600 —— rename 会把 mode 一起带到目标位置。
+    //   放在 sync 之后：先保证内容完整，再谈权限；两步都在 move 之前完成。
+    if (secret) {
+        val tighten: (File) -> Unit = writeFilePermissionHook ?: { f -> hardenOwnerOnly(f); Unit }
+        tighten(tmp)
+    }
 
     // ★ 必须用 `Files.move(REPLACE_EXISTING, ATOMIC_MOVE)`，**不能**用 `File.renameTo`。
     //
@@ -488,6 +703,61 @@ fun writeFileAtomically(target: File, text: String) {
  */
 fun needsEmptyFileConfirmation(fileName: String, newText: String): Boolean =
     newText.isBlank() && fileName == LAUNCHER_PATCH_OVERLAY
+
+/**
+ * 收掉实例目录里**过旧**的 overlay 临时文件（★ R49 / S-08 的配套；不删 [keepName]）。
+ *
+ * ## 为什么需要它
+ *
+ * tmp 名改成唯一（[uniqueTmpName]）之后，"同一秒内重复失败"不再共用一个文件，
+ * 而是**每次留一个**。overlay 只在启动前写，真机上 rename 几乎不会失败，
+ * 所以这在实践中几乎不会发生；但"几乎不会"不等于"不会"，而残留没有任何清理逻辑会回收。
+ *
+ * ## 为什么用"够老"而不是"全删"
+ *
+ * 删掉**刚建的**那个 = 替一个正在写的并发者制造 rename 失败（正是 S-08 要消灭的形态）。
+ * 只收 1 小时前的，既兜住长期增长，又不可能撞上任何在途写入
+ * （overlay 写入是微秒级，且实例启动期间本就串行）。
+ *
+ * 失败静默（下次启动还会试）：这是纯卫生动作，不该让启动路径因为"删不掉"而报错。
+ */
+private fun pruneStaleOverlayTmp(dir: File, keepName: String) {
+    val cutoff = System.currentTimeMillis() - STALE_OVERLAY_TMP_MS
+    val prefix = "$LAUNCHER_PATCH_OVERLAY.tmp"
+    dir.listFiles()?.forEach { f ->
+        if (f.name == keepName) return@forEach
+        // 两种命名都要收：唯一名 `launcher.patch.yml.tmp.<seq>.<tid>.<nano>`，以及失败
+        // 改回的那个规范名 `launcher.patch.yml.tmp`（见 writeLauncherPatchOverlay 的失败分支）。
+        if (f.name != prefix && !f.name.startsWith("$prefix.")) return@forEach
+        if (!f.isFile || f.lastModified() > cutoff) return@forEach
+        runCatching { f.delete() }
+    }
+}
+
+/** [pruneStaleOverlayTmp] 的"够老"阈值：1 小时。理由见那个函数的 KDoc。 */
+private const val STALE_OVERLAY_TMP_MS = 60L * 60L * 1000L
+
+/**
+ * 把 [launcherPatchOverlayJson] 写进实例目录，返回宿主侧的 [File]（供启动脚本判断）；
+ * 任何一步失败都返回 `null`（调用方据此不传 `--patch`，启动照旧）。
+ *
+ * ## 三个刻意的选择
+ *
+ * 1. **写实例目录，不写 `$DSH_HOME`**。`$DSH_HOME/cordis.patch.yml` 是 dsh 定义的
+ *    **用户层**，对所有 profile 生效（实测：在里面写一条，`--profile <别的>` 也会被它影响）。
+ *    实例目录是"这一份安装"的私有空间，写崩了最多影响这一个实例。
+ * 2. **先写临时文件再 rename**。rename 在同一文件系统内是原子的；直接覆写会在中间态
+ *    留下半截 JSON，而 dsh 读到坏 overlay 会**直接启动失败**（实测
+ *    `failed to read overlay ... ENOENT` 后进程退出）—— 那是唯一一个"我们的优化把 dsh 弄挂了"
+ *    的路径，必须用原子写堵死。
+ * 3. **路径用 guest 绝对路径**。overlay 在实例目录、插件在 `/opt/dsh/scripts/`，
+ *    两者不在同一层，写相对路径会锚到 overlay 所在目录从而指错（实测相对路径按
+ *    overlay 所在目录解析）。
+ *
+ * @param instancePathInRootfs 实例在 **guest 内**的绝对路径（`/opt/dsh/instances/<id>`）
+ * @param scriptsHostDir 宿主侧的脚本目录（默认 `DshPaths.SCRIPTS_DIR`，注入以便单测）
+ * @return 写成功的宿主 [File]；插件不存在或写失败时为 `null`
+ */
 fun writeLauncherPatchOverlay(
     instancePathInRootfs: String,
     scriptsHostDir: File = File(DshPaths.SCRIPTS_DIR),
@@ -506,12 +776,32 @@ fun writeLauncherPatchOverlay(
     //   （真机现场：写进去的 llm-pi-ai provider 被覆盖回两条内置条目，用户以为"配置没生效"）。
     //   读失败/内容坏 ⇒ existing 为 null ⇒ 退回纯启动器条目（不能让坏文件拖垮启动）。
     val existing = runCatching { target.takeIf { it.isFile }?.readText(Charsets.UTF_8) }.getOrNull()
+    // ★ R49 / S-07：用户文件**存在但读不懂**时必须先备份再写。
+    //   旧实现这一支是完全静默的：`mergeLauncherPatchOverlay` 返回的与"文件不存在"时一模一样，
+    //   于是用户的 40 行 provider 配置被整份覆盖、没有任何痕迹（既没有 .bak 也没有日志）。
+    //   **不**改成"解析失败就不写"：那会让启动器自己那两条也进不去，而 `start-dsh.sh` 用
+    //   `[ -f ... ]` 判断要不要传 --patch —— 坏文件留着不仅丢用户的配置，还让 dsh 直接启动失败。
+    //   所以取舍是"留证据 + 照写"：用户能在 `.bak.BAD-<时间戳>` 里找回原文，日志里也有一行。
+    if (classifyUserOverlay(existing) == UserOverlayState.Corrupt) {
+        backupUnparsableOverlay(target, System.currentTimeMillis())
+    }
     val body = mergeLauncherPatchOverlay(pluginGuest, existing)
 
-    val tmp = File(hostInstance, "$LAUNCHER_PATCH_OVERLAY.tmp")
+    // ★ R49 / S-08：tmp 名唯一（固定名会让本函数与编辑器的并发写抢同一个缓冲区）。
+    val tmp = File(hostInstance, uniqueTmpName(LAUNCHER_PATCH_OVERLAY))
     return runCatching {
         hostInstance.mkdirs()
+        // ★ R49 / S-08 的配套：唯一名之后，**重复失败**会一次留一个 tmp（固定名时只留一个）。
+        //   写之前先收掉**陈旧**的（超过 [STALE_OVERLAY_TMP_MS]），保持目录不无限增长。
+        //   用"够老"而不是"全删"是刻意的：并发写者的 tmp 可能是**几毫秒前**刚建的，
+        //   删掉它等于替对方制造一次 rename 失败 —— 那正是 S-08 要消灭的东西。
+        pruneStaleOverlayTmp(hostInstance, tmp.name)
+        // ★ R49 / S-09：内容先落盘，再让 rename 生效（顺序反了会出现"空 overlay 已就位"，
+        //   而 dsh 读到空 overlay 会认为没有 patch 层 —— 两条优化静默失效）。
+        //   这里必须是 `tmp.writeText(...)` 这个形状：`R43OverlayAtomicReplaceTest` 有一条
+        //   前置断言靠这个字面量确认用例不是在守一个空函数（见 [fsyncFile] 的 KDoc）。
         tmp.writeText(body, Charsets.UTF_8)
+        fsyncFile(tmp)
         // ★ SP-08：**不要**先 `target.delete()`。
         //   目标平台只有 Android/Linux，POSIX 的 rename(2) 是原子覆盖 —— 旧实现那一步
         //   （"先删再 rename"是为了绕开 Windows 上 renameTo 不覆盖）在真机上纯属多余，
@@ -520,12 +810,20 @@ fun writeLauncherPatchOverlay(
         //   同一文件的 [writeManifest]（`:2219`）走的就是纯 rename，是正确的那一侧。
         //   ⚠️ 若将来真要支持 Windows 宿主，必须整段一起重新设计（备份 + 回滚），
         //   不能再退回"先删再 rename"—— 那不是原子替换，那是在赌 rename 不会失败。
-        // ⚠️ 失败时**不是**干净的：rename 失败会让 `$LAUNCHER_PATCH_OVERLAY.tmp` 留在实例
-        //   目录里（不会无限增长，下次 writeText 直接覆盖；但它确实会留在那儿）。
-        if (!tmp.renameTo(target)) return@runCatching null
-        target
+        // ⚠️ 失败时 tmp **刻意保留**，不删：R43 的口径是"新 body 不许两边都没有 —— 必须仍
+        //   在 tmp 里，可人工恢复改名成 launcher.patch.yml"。所以这里不能清残留，
+        //   增长由上面的 [pruneStaleOverlayTmp] 兜住。
+        if (tmp.renameTo(target)) return@runCatching target
+        // ★ R49 / S-08 × R43：tmp 名唯一了（并发安全），但恢复契约要求"新 body 在
+        //   `launcher.patch.yml.tmp` 里可人工恢复成 launcher.patch.yml"。所以 rename 失败时把
+        //   那份唯一名就地**改名**成规范名 —— 改名同目录内几乎不会失败（与 rename 覆盖不同，
+        //   这里目标通常不存在，Windows 上也成立）。改名不成就把唯一名留下（内容仍在，
+        //   只是名字带序号，比丢掉 body 好）。
+        runCatching { tmp.renameTo(File(hostInstance, "$LAUNCHER_PATCH_OVERLAY.tmp")) }
+        return@runCatching null
     }.getOrNull()
 }
+
 
 /** 启动器自带的 `/assets` 缓存插件（assets 里 `dsh/scripts/` 下同名文件）。 */
 internal const val LAUNCHER_ASSETS_PLUGIN = "launcher-assets.mjs"
@@ -2188,6 +2486,18 @@ object DshInstances {
             // ★ R3b-B3-6：跳过墓碑 —— 那些是"删除已生效但目录没删干净"的残留，收养它等于复活。
             val known = _instances.value.mapTo(HashSet()) { it.id }
             known += tombstonedInstanceIds.value
+            val allDirs = File(DshPaths.INSTANCES_DIR).listFiles()
+                ?.filter { it.isDirectory && it.name !in known } ?: emptyList()
+            // ★ R49 / BL-251：名字不是"安全路径分量"的目录**不收编**（宿主会把 `\` 折成 `_`，
+            //   guest 用裸 id ⇒ 实例永远起不来，见 [isAdoptableDirName]）。在这里点名，
+            //   否则"目录在、列表里没有"无从解释 —— 这正是本缺陷最难查的地方。
+            val rejected = allDirs.filterNot { isAdoptableDirName(it.name) }
+            if (rejected.isNotEmpty()) {
+                DshLogBus.append(
+                    "[instances] 跳过 ${rejected.size} 个名字不可收编的孤儿目录（含会与宿主路径折叠冲突的字符）：" +
+                        rejected.joinToString(", ") { it.name }
+                )
+            }
             val found = rebuildMissingInstances(File(DshPaths.INSTANCES_DIR), known)
             if (found.isNotEmpty()) {
                 _instances.update { it + found }
@@ -2215,15 +2525,51 @@ object DshInstances {
      * - 按 id 排序，保证多次扫描结果稳定（listFiles 顺序不保证）；
      * - 只读目录项、不深入内容（状态校准交 [repair]）；非目录项（散落文件）忽略；
      * - [instancesRoot] 不存在 / 不是目录 → 空表（幂等、无异常）。
+     * - ★ R49 / BL-251：**拒绝**那些不是 `safeInstanceDirName` 不动点的目录名，见 [isAdoptableDirName]。
      */
     fun rebuildMissingInstances(instancesRoot: File, knownIds: Set<String>): List<DshInstance> {
         if (!instancesRoot.isDirectory) return emptyList()
         val dirs = instancesRoot.listFiles() ?: return emptyList()
         return dirs
-            .filter { it.isDirectory && it.name !in knownIds }
+            .filter { it.isDirectory && it.name !in knownIds && isAdoptableDirName(it.name) }
             .map { DshInstance(id = it.name, name = it.name) }
             .sortedBy { it.id }
     }
+
+    /**
+     * 收编孤儿目录时必须**逐字节等于** `safeInstanceDirName` 的不动点（★ R49 / BL-251）。
+     *
+     * ## 为什么（宿主与 guest 的两套解析会分叉）
+     *
+     * 宿主侧拼路径一律走 [DshPaths.instanceDir] → `safeInstanceDirName`（只折 `/` `\` NUL）；
+     * 而 guest 侧（`DshRuntime` / `DshInstaller` 传给 proot 的 `INSTANCE_DIR`）用的是**裸 id**。
+     * 于是收编一个名为 `weird\name` 的目录（Linux 上 `\` 是合法文件名字符）会得到：
+     *
+     * ```
+     * 宿主：instances/weird_name   （折叠后）
+     * proot：/opt/dsh/instances/weird\name  （裸 id，那个目录不存在）
+     * ```
+     *
+     * ⇒ 实例永远起不来，而且**看起来像"目录丢了"**（两边都不报"名字被折叠了"）。
+     * 更糟的一种：`a\b` 与 `a_b` 折到同一个宿主目录 ⇒ 两个逻辑实例共享 `home/` `workspace/`，
+     * 删一个连带删掉另一个的全部用户数据（R43 已登记为已知折叠缺陷）。
+     *
+     * ## 为什么是"拒绝"而不是"收编时改名"
+     *
+     * 改名 = 把用户的目录换一个身份，那是不可逆的破坏，且会让"我的实例怎么不见了"变成新问题。
+     * 拒绝收编是**保守**的一侧：目录原样留在盘上（不删、不动），只是不出现在实例列表里 ——
+     * 唯一的代价是用户看不见它，而它本来就因为名字而**起不来**。日志里会点名。
+     *
+     * ## 为什么判据是"不动点"而不是字符黑名单
+     *
+     * 黑名单要枚举 `/` `\` NUL 三个字符，与 [DshPaths.safeInstanceDirName] 的折叠集合
+     * **各写一遍**，就是又一套口径（改一处漏一处）。判"折叠后是否等于原名"自动跟随那个函数。
+     * 附带收益：`isSafeInstanceIdComponent` 已经是这条语义的现成实现，两者不会分叉。
+     *
+     * ⚠️ 这条**只堵住收编这一侧**。`DshPaths.instanceGuestDir` 那半条（guest 侧改用折叠名）
+     *   要改 `DshPaths.kt` / `DshRuntime.kt` / `DshInstaller.kt`，不在本轮文件范围。
+     */
+    internal fun isAdoptableDirName(name: String): Boolean = DshPaths.isSafeInstanceIdComponent(name)
 
     /**
      * BL-101a：instances.json 的备份清单（`instances.json.<kind>-<毫秒>`，与 manifest 同目录）。

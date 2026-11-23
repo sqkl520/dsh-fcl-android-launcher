@@ -82,6 +82,32 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/btn_filter" />
 
+    <!-- ===== R49/B-2：落盘失败横幅 =====
+         日志写不进 = 排障现场正在丢。它必须出现在**用户能看见的地方**，而"日志写不进"
+         最自然的告知位置就是日志页本身。
+         形态与 manifest 横幅一致：常驻、不可关闭、**随恢复自动消失**（判定见
+         DshLogBus.logFileWriteFailure 的状态流语义 —— 成功写回会把它清回 null）。
+         为什么放在控制台上方而不是底部：底部 48dp 被动态岛占着（见文件头 BL-024 的说明），
+         而且"最新一行"就在底部，横幅压在那里会盖住最需要看的内容。
+         不失败时 visibility=GONE ⇒ ConstraintLayout 自动折叠尺寸与 margin，
+         页面高度与今天完全一致（这是显式回归项，改动时必须复核）。 -->
+    <com.tungsten.fcllibrary.component.view.FCLTextView
+        android:id="@+id/write_failure_banner"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/bg_container_white"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:textSize="12sp"
+        android:visibility="gone"
+        app:auto_text_tint="true"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/switch_auto_scroll" />
+
     <!-- ===== 控制台 ===== -->
     <ScrollView
         android:id="@+id/log_scroll"
@@ -96,7 +122,7 @@
         app:layout_constraintBottom_toTopOf="@id/log_info"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/switch_auto_scroll">
+        app:layout_constraintTop_toBottomOf="@id/write_failure_banner">
 
         <!-- 日志正文。
              ⚠️ 这里**刻意不挂** `app:auto_text_tint`（那一族取的是"与用户主题色对比的黑/白"）：

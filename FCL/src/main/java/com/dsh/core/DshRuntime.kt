@@ -630,6 +630,48 @@ object DshRuntime {
      */
     private val rejectedUrlNoted = java.util.concurrent.atomic.AtomicLong(-1L)
 
+    /**
+     * ★ R49/H-1（审计 S-04）：本次 run 里**脚本亲自报出的监听端口**，0 = 还没拿到可信值。
+     *
+     * 为什么要这个字段：`onProcessLine` 的端口门基准原来是 [startLocked] 的 `launchPort`，
+     * 而 `launchPort == 0`（= 默认配置：新实例端口 0，或配置端口被占后避让为 0）时端口这一维
+     * **整维弃权**（见 [webUiUrlAllowed] 的 KDoc）。而 `port == 0` 是**默认值**
+     * （[DshInstance.port]），所以绝大多数用户实际只有 host + scheme 两道门。
+     *
+     * 取值的来源是脚本自己那一行 `[start-dsh] READY port=<n>`
+     * （`start-dsh.sh` 在就绪收尾处打印；PORT=0 时它从真实 token URL 里解出内核挑中的端口，
+     * 该脚本 :833-848 的 K35 注释）。**必须先 `Probe.isPortOpen(n)` 通过才采信** —— 这一条是
+     * 本字段唯一的把关，理由见下。
+     *
+     * ## 诚实登记：这是"收窄"，不是"闭合"
+     * 这一行和 `dsh web: …` 走的是**同一条输出流**（脚本 `flush_new` 原样透传 node 的 stdout），
+     * 所以 rootfs 内有执行能力的代码**也能伪造它**。真正不可伪造的判据是"这个端口由我们自己的
+     * 脚本/node 绑定"，而在 proot **没有网络隔离**（`ProotCommand` 的 argv 里没有 `--net`）的
+     * 前提下，宿主无法区分"node 监听的端口"和"rootfs 内攻击者监听的端口"——
+     * 这一条既有 KDoc 里已经写过（[webUiUrlAllowed] 的"代价"段），本轮没有、也不可能在
+     * Kotlin 这一层解决它（要 `docs/PLAN-SANDBOX.md` 的沙箱）。
+     *
+     * 那补这一维换来的是什么：攻击者要从"只要往 stdout 写一行任意端口的 URL"升级成
+     * ① 还得在 rootfs 内**真的 bind 那个端口**（[Probe.isPortOpen] 会拒掉不存在的端口）+
+     * ② 还得伪造脚本的协约行 `READY port=`。这与"端口不匹配即拒"在**固定端口档**上的效果一致，
+     * 只是多了一个可伪造的来源；它挡住的是"顺手写一行 `http://127.0.0.1:40404/…`"这类
+     * 成本最低的形态，**挡不住**已经能在 node 进程里跑代码的插件（那种能力本来就是完整的）。
+     *
+     * ## 为什么不"首值锁定"
+     * 允许后续 `READY port=` 覆盖（而不是只认第一个）：脚本一次 run 只打印一行（就绪收尾处），
+     * 所以正常路径没有覆盖；而万一攻击者在 READY 之前先塞了一个（此时 [Probe.isPortOpen]
+     * 可通过，因为他能在 rootfs 里 bind），随后的**真实** READY 行能把锚点纠正回来，
+     * 真实 URL 仍能被采信 —— 避免把一次投毒变成"实例永远起不来"的自伤。
+     *
+     * 清空时机：每**真正 fork 新进程**那一刻（`++runGen` 旁），与 [runGen] 同一条纪律 ——
+     * 旧 run 的端口一格都不许带进新 run。写入侧也要求 `gen == runGen`（stale 行只进日志）。
+     *
+     * 只在 `launchPort <= 0` 时被 [onProcessLine] 采信：固定端口档的基准是**宿主自己选的**、
+     * 由 [resolveLaunchPort] 的预检唯一决定，比任何回读值都可信，不许被这里覆盖。
+     */
+    @Volatile
+    private var verifiedScriptPort: Int = 0
+
     // --- 启动 ---------------------------------------------------------------
 
     fun runningInstanceId(): String? = (_state.value as? State.Running)?.instanceId
@@ -927,7 +969,7 @@ object DshRuntime {
         // 两道互相独立：即便这里的探测判定"空闲"，脚本启动瞬间端口仍可能被别人抢走。
         val launchPort = resolveLaunchPort(instance)
 
-        val instancePathInRootfs = "${ProotCommand.GUEST_ROOT}/instances/${instance.id}"
+        val instancePathInRootfs = DshPaths.instanceGuestDir(instance.id)
 
         // ★ R28（锐评 C2-5）：用户自定义的「启动目录」若不存在，**在这里建出来**。
         //
@@ -1236,6 +1278,10 @@ object DshRuntime {
         // ★ BL-038 世代隔离：在**真正 fork 新进程**的这一刻递增世代号（上面的"复用早退"走不到
         //   这里，所以它永远打不脏还活着的当前 run）；onLine/onExit 闭包各自捕获自己的 gen。
         val gen = ++runGen
+        // ★ R49/H-1：上一个 run 回读到的可信端口一格都不许带进新 run（与 runGen 同一条纪律：
+        //   "停后秒启"时旧 run 的迟到输出会被 gen 挡掉，这个字段也必须一起归零 ——
+        //   否则新 run 在拿到自己的 READY 行之前，端口门会拿**旧进程的端口**当基准）。
+        verifiedScriptPort = 0
         val h = try {
             ProotRunner.start(
                 spec = spec,
@@ -1819,6 +1865,19 @@ object DshRuntime {
             // 返回值：`null` = 状态已不属本实例的 Stopping（什么都不做、也不收服务）；
             // `false` = 本实例已停止（Idle）；`true` = 停止未完成（Failed + 原因见 failedReason）。
             var failedReason: String? = null
+            // ★ R49/H-2（审计 P2-6）：停止未完成的文案取在此处（锁外）。
+            //   为什么必须提前到这里：下面那个 `synchronized(this@DshRuntime)` 与 `startLocked`/
+            //   `stop` 共用同一把对象监视器，而取词会走 `LocaleUtils.setLanguage` →
+            //   `createConfigurationContext`（解析一份资源表）。虽无 IO，但纪律是"监视器里只做
+            //   状态与句柄的配对写"（同段既有注释），别把取词也拖进去。
+            //   用 [DshUiText] 而不是 `appContext.getString`：后者只跟随**系统**语言，不跟随用户在
+            //   启动器设置里选的语言 —— 那正是这条文案要修的病灶（见 [DshUiText] 的 KDoc）。
+            //   兜底串保持英文：改之前是英文，取不到资源时行为不变，不会更差。
+            val stopIncompleteReason = DshUiText.getString(
+                R.string.dsh_reason_stop_incomplete,
+                "Stop incomplete: the dsh process may still be running. " +
+                    "Start the instance again to clean it up."
+            )
             val weOwnedTheStop: Boolean? = synchronized(this@DshRuntime) {
                 // ★ Round24 N-2：句柄在这里才清 —— 且只在"仍是本次停的那个句柄"时清。
                 //   ① 进程确实已不在（prootPid<=0 = 拿不到 pid，无从判活，按已结束处理）；
@@ -1847,17 +1906,19 @@ object DshRuntime {
                 //    ⇒ 下一次 start 走"没有在跑"的快路径，不白等 13s；句柄与 pid 文件都留着
                 //    （上面 stopSucceeded 分支），`start()` 入口的 `killStale` + [terminateNodeProcess]
                 //    能按 cmdline 身份收掉这个残留。
-                // 4) 文案：**直接内联一句英文**，与 [R.string.dsh_start_port_in_use] 当初的处置同款
-                //    （那条也只因"必须落在这个文件里"才写成内联字面量）。本任务不许改 res/，
-                //    所以这里不写一个"取不到就兜底"的假资源引用 —— 那种写法会让读者以为文案已本地化。
-                //    ⚠️ 待补：`dsh_reason_stop_incomplete`（三语）。
+                // 4) 文案：★ R49/H-2（审计 P2-6）已改为**三语资源** [R.string.dsh_reason_stop_incomplete]。
+                //    原来这里是内联英文字面量，中/繁界面下照样显示英文。
+                //    取词放在**锁外**（见下面的 `stopIncompleteReason`）—— 这条临界区与
+                //    `startLocked` / `stop` 共用同一个对象监视器，资源解析不该拖在里面。
+                //    资源里不带占位符（`dsh_*` 里带 `%` 的必须登记进 `DshResourceFormatTest` 的
+                //    callSites，那是另一个 agent 的文件，本轮不动它），pid 用语言中立的
+                //    `(pid=N)` 后缀在锁内拼 —— 纯字符串拼接，没有 IO。
                 if (stopSucceeded) {
                     _state.value = State.Idle
                     stopRequestedFor = null
                     false
                 } else {
-                    val reason = "Stop incomplete: the dsh process may still be running (pid=$prootPid). " +
-                        "Start the instance again to clean it up."
+                    val reason = "$stopIncompleteReason (pid=$prootPid)"
                     _state.value = State.Failed(instanceId, name, reason)
                     // ★ stopRequestedFor **不清**：它表达"接下来那次进程退出是我们要的"，而这个 proot
                     //   还没走。清掉的话，它日后真退出时 onProcessExit 会把这次退出当意外崩溃上报
@@ -2441,12 +2502,49 @@ object DshRuntime {
         //   端口基准是 [launchPort]（本次真正让脚本绑定的值），**不是** `instance.port` ——
         //   配置端口被占时前者是 0、后者是旧值，用后者会把真实 URL 全判死。见
         //   [webUiUrlAllowed] 的 KDoc。
+        // ★ R49/H-1（审计 S-04）：`expectedPort <= 0`（= 默认配置：新实例端口是 0，或配置端口被占
+        //   后避让为 0）时端口这一维原来是**整维弃权**的，于是绝大多数用户实际只有 host + scheme
+        //   两道门。现在补一个可信（至少是"脚本自述 + 端口真的在监听"的）基准。
+        //
+        //   两个来源，优先级从高到低：
+        //   ① 固定端口档的 [launchBaselinePort]（= 形参 `expectedPort`，即宿主 `resolveLaunchPort`
+        //      的预检结果）—— 由宿主自己选、由预检唯一决定，**任何回读值都不许覆盖它**；
+        //   ② 本行自己带的 `READY port=<n>`（且回环 connect 成功）；
+        //   ③ 之前那行记下的 [verifiedScriptPort]。
+        //
+        //   为什么要把②单独算一遍（而不是只靠③）：脚本的 `READY url=` 与 `READY port=` 是**相邻
+        //   两行**（先 port 后 url），只靠③的话第一行 url 用不上自己的 port；而脚本在"端口通了但
+        //   20s 没等到 token URL"的退化就绪路径上**只打 port 不打 url**（`start-dsh.sh` 的
+        //   PORT_OPEN_SINCE 分支），那种情况下这一行必须是自带基准，否则整维又弃权。
+        //   把②做成"本行局部"而不是直接写字段，是为了让**旧 run 的迟到输出改不了新 run 的锚点**：
+        //   字段写入严格排在下面的世代校验之后（见那里的注释）。
+        //
+        //   ⚠️ 下面这行**故意**复用 `expectedPort` 这个名字做局部遮蔽：紧邻的门
+        //   `webUiUrlAllowed(it, expectedPort)` 是本仓既有的回归锚（`R34PortGateTest` 按源码文本
+        //   钉住"调用点必须走双参版"），改名会让那条锚失效，而它守的是一个真缺陷。
+        val launchBaselinePort = expectedPort
+        // 探测放在这里（世代校验之前）是有意的：它只读网络状态、不改任何字段 ——
+        // 与上方 `registerSecret` 的同类处置一致。固定端口档不探（用不上，省 10ms/行）。
+        val scriptPortThisLine = UrlScanner.findMarkerPort(line)
+            ?.takeIf { launchBaselinePort <= 0 && Probe.isPortOpen(it) }
+        val expectedPort = when {
+            launchBaselinePort > 0 -> launchBaselinePort
+            scriptPortThisLine != null -> scriptPortThisLine
+            else -> verifiedScriptPort
+        }
         val candidates = listOfNotNull(
             UrlScanner.findAuthenticatedUrl(line),
             UrlScanner.findMarkerUrl(line),
             UrlScanner.findMarkerPort(line)?.let { "http://127.0.0.1:$it/" }
         )
-        val url = candidates.firstOrNull { webUiUrlAllowed(it, expectedPort) }
+        // 端口基准仍不可知时（自动端口档、脚本的 READY 行还没到）退一步：要求候选的端口**真的在
+        // 监听**（[autoPortCandidateIsLive]）。这一条与到达顺序无关，正好补上"伪造行比真 READY
+        // 行先到"的那个窗口 —— 不这样做的话，先到的那行会以"端口不可知"为由被采信，端口维度
+        // 等于没补。代价见 [verifiedScriptPort] 的 KDoc（挡得住"顺手写一行"，挡不住已能在
+        // rootfs 内 bind 的代码）。
+        val url = candidates.firstOrNull {
+            webUiUrlAllowed(it, expectedPort) && (expectedPort > 0 || autoPortCandidateIsLive(it))
+        }
         if (url == null && candidates.isNotEmpty() && rejectedUrlNoted.getAndSet(gen) != gen) {
             // 每代只记一次：攻击者刷行不应放大日志面。只记"有几个候选被拒"，**不打印主机名**
             // （打印主机名等于把伪造内容抄进日志，是二次污染）。
@@ -2473,6 +2571,20 @@ object DshRuntime {
         // 记进内存是给"pid 文件被脚本收尾删掉、但进程还没死透"这种边角情况兜底的。
         NODE_PID_LINE.find(line)?.let { m ->
             m.groupValues[1].toLongOrNull()?.takeIf { it > 0 }?.let { nodePid = it }
+        }
+        // ★ R49/H-1（审计 S-04）：把本行探活过的脚本端口**持久化**成后续行的基准。
+        //
+        // 为什么放在**世代校验之后**：旧 run 的迟到输出不许改新 run 的锚点 —— 与 `nodePid` /
+        // `_state` 完全同一条纪律。（探测本身在门之前做，但它只读不写，见那里的注释。）
+        // 只写 `scriptPortThisLine`（已经过 `launchBaselinePort <= 0` + `Probe.isPortOpen` 两道关），
+        // **不**在这里重新解析或重新探测 —— 一行只问一次网络。
+        if (scriptPortThisLine != null && verifiedScriptPort != scriptPortThisLine) {
+            verifiedScriptPort = scriptPortThisLine
+            DshLogBus.appendFor(
+                instance.id,
+                "[runtime] script-reported port $scriptPortThisLine adopted as the port baseline " +
+                    "for later lines (auto-port run; loopback connect to it succeeded)"
+            )
         }
         // 1) dsh 自己打印的带 token URL（形如 dsh web: http://127.0.0.1:3080/?token=XXX）
         // 2) start-dsh.sh 的就绪标记（形如 [start-dsh] READY url=http://...）
@@ -3524,6 +3636,42 @@ fun webUiPortAllowed(url: String?, expectedPort: Int): Boolean {
     if (expectedPort <= 0) return true
     if (url.isNullOrBlank()) return false
     return UrlScanner.portOf(url) == expectedPort
+}
+
+/**
+ * ★ R49/H-1（审计 S-04）：**端口基准还不可知时**（自动端口档 `launchPort <= 0`、脚本的
+ * `READY port=` 行尚未到达）的退让判据 —— 候选 URL 上的端口**此刻真的有人在监听**吗。
+ *
+ * ## 它补的是哪一个洞
+ * [webUiPortAllowed] 在 `expectedPort <= 0` 时返回 true（那一维弃权），而这个条件是**默认配置**
+ * （[DshInstance.port] 默认 0）。如果只补"从 `READY port=` 取锚点"而不加这一条，攻击者仍能把
+ * 伪造行**排在真 READY 行之前**：那一刻锚点还是 0，端口维度照样弃权，伪造行照样被采信。
+ * 加这一条之后，"先到的那行"至少要指向一个**真在监听**的端口。
+ *
+ * ## 为什么不是"直接拒"（`expectedPort <= 0` ⇒ false）
+ * 那正是既有 KDoc 明确否决过的改法：自动端口实例会拿不到任何 URL，state 卡在 Starting 直到
+ * 180s 看门狗判超时 —— 把安全门做成功能回归。
+ *
+ * ## 判别力的诚实边界
+ * proot **没有网络隔离**，rootfs 内进程能 bind 回环端口。所以这一条挡不住"已经能在 rootfs 里
+ * 跑代码的插件"，它挡的是"往 stdout 顺手写一行 `http://127.0.0.1:40404/?token=…`"
+ * （那个端口没人监听 ⇒ 拒）。同样的道理，`Probe.isPortOpen` 证明的是"有人在这个端口上监听"，
+ * 不证明"监听者是我们的 node"。要真正闭合，得靠 `docs/PLAN-SANDBOX.md` 的沙箱。
+ *
+ * ## 为什么把 `isPortOpen` 做成参数
+ * 它是唯一的非纯依赖（`Socket().connect`）。做成参数后本判据可在 JVM 单测里被穷举，
+ * 不必真去占端口；生产调用点传默认值 [Probe.isPortOpen]。
+ *
+ * @param isPortOpen 端口探测（默认 [Probe.isPortOpen]；单测注入桩）
+ */
+fun autoPortCandidateIsLive(
+    url: String?,
+    isPortOpen: (Int) -> Boolean = { Probe.isPortOpen(it) }
+): Boolean {
+    if (url.isNullOrBlank()) return false
+    // 解析不出端口 ⇒ 无从证明有人监听 ⇒ 拒（与 [webUiPortAllowed] "取严"的取向一致）。
+    val port = UrlScanner.portOf(url) ?: return false
+    return port in 1..65535 && isPortOpen(port)
 }
 
 /** 端口连通性探测（判断孤儿进程是否还活着、是否已就绪） */

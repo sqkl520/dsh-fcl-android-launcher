@@ -1,15 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 本檔只覆蓋 dsh_* 條目。FCL 基座自帶的條目（app_name、dialog_positive、
-         crash_reporter_* 等）刻意不放在這裡：本專案沒有可靠的上游繁體來源，自行編造
-         會與 FCL 官方譯法分家。這些條目在繁體語系下會回落到 values/strings.xml 的
-         預設（英文），這是刻意接受的取捨。
+    <!-- 本檔只覆蓋 dsh_* 條目，外加下面兩條 **R49 / E-1 例外**。
+         FCL 基座自帶的其他條目（app_name、crash_reporter_* 等）刻意不放在這裡：本專案沒有
+         可靠的上游繁體來源，自行編造會與 FCL 官方譯法分家。這些條目在繁體語系下會回落到
+         values/strings.xml 的預設（英文），這是刻意接受的取捨。
+
+         ★ 為什麼 dialog_positive / dialog_negative 是例外：它們是**所有確認框的正/負按鈕**
+           （dialog_alert.xml:79/88/98/107、dialog_edit.xml:33/41、dialog_color_picker.xml:77/87、
+           dialog_item_selection.xml:29）。繁體使用者刪實例、重裝、覆寫檔案時，看到的按鈕原本是
+           "OK / Cancel" —— 那不是「譯法分歧」這種可有可無的差異，而是**每次破壞性操作都要讀英文**。
+           「等上游」在這個位置不成立：按鈕文字只有「確定/取消」兩個詞，沒有需要跟官方統一的術語，
+           而缺了它的代價是繁體語系的核心操作不可讀。故在此明確覆蓋，不隨其他 FCL 基座條目回落。
+
          改 dsh_* 文案時，記得同步三處：values/strings.xml（預設英文）、
          values-zh/strings.xml（簡體）、values-zh-rTW/strings.xml（繁體）。 -->
+    <!-- R49 / E-1：確認框按鈕。用「確定」而非「確認」—— 按鈕是動作，不是狀態陳述。 -->
+    <string name="dialog_positive">確定</string>
+    <string name="dialog_negative">取消</string>
     <string name="dsh_action_clear">清空</string>
         <string name="dsh_action_close">關閉</string>
         <string name="dsh_back_again_to_exit">再按一次返回鍵結束</string>
-        <string name="dsh_action_configure">前往設定</string>
         <string name="dsh_action_copy">複製</string>
         <string name="dsh_action_delete">刪除</string>
         <string name="dsh_action_download">下載</string>
@@ -21,13 +31,10 @@
              靜態按鈕文案，等舊版面退役後要一起刪；詳情頁需要一條獨立的、可隨頁面走的條目 -->
         <string name="dsh_action_open_web">開啟介面</string>
         <string name="dsh_action_prepare_runtime">準備執行環境</string>
-        <string name="dsh_action_refresh">重新整理</string>
         <string name="dsh_action_reinstall">重新安裝</string>
         <string name="dsh_action_retry">重試</string>
-        <string name="dsh_action_save">儲存</string>
         <string name="dsh_action_settings">設定</string>
         <string name="dsh_action_start">啟動</string>
-        <string name="dsh_action_start_anyway">仍要啟動</string>
         <string name="dsh_action_stay">留在本頁</string>
         <string name="dsh_action_stop">停止</string>
         <string name="dsh_action_verify_runtime">執行環境檢測</string>
@@ -39,11 +46,7 @@
         <string name="dsh_delete_title">刪除實例</string>
         <!-- fix12：清單讀取失敗期間 delete() 直接拒絕（不寫盤就不動目錄），要把「為什麼沒刪」說出來 -->
         <string name="dsh_delete_refused">無法刪除：實例清單讀取失敗中</string>
-        <string name="dsh_disk_usage">佔用空間：%1$s</string>
-        <string name="dsh_download_error">載入失敗：%1$s</string>
         <string name="dsh_download_show_prerelease">顯示預覽版</string>
-        <string name="dsh_download_title">安裝 dsh 版本</string>
-        <string name="dsh_download_warning">目前顯示的是快取資料（%1$s）</string>
         <string name="dsh_install_cancelled">已取消安裝</string>
         <string name="dsh_install_done">已安裝 %1$s</string>
         <!-- 安裝失敗原因：只要能從 npm 的輸出裡認出是哪一類，就說清楚「是什麼 + 怎麼辦」。
@@ -69,17 +72,17 @@
              與實例卡片的 dsh_state_broken（損壞）是措辭差異，不是同一句話 ——
              版本頁每列就是一個版本、角標緊鄰安裝按鈕，語境已把它錨定在「這個版本」上。 -->
         <string name="dsh_installed_broken">安裝失敗</string>
-        <string name="dsh_install_skipped">%1$s 已安裝，可直接啟動</string>
-        <!-- fix12 / E6-4：詳情頁動作列依 DispatchReason 分叉。dsh_install_skipped 仍是「安裝入口
-             發現目標版本已就緒，於是跳過」（帶版本號）；下面兩條是不帶版本號的**結論**文案，
-             給「你點的這個版本已經裝好了」和「這個版本正在裝」兩種狀態用。 -->
+        <!-- fix12 / E6-4：詳情頁動作列依 DispatchReason 分叉。這裡只留兩條不帶版本號的
+             **結論**文案，給「你點的這個版本已經裝好了」和「這個版本正在裝」兩種狀態用。
+             （帶版本號的 `dsh_install_skipped` 已在 R49 作為死資源刪除：它的兩處舊呼叫點已改走
+             `DshDownloadViewModel.kt:437` 的 `DispatchReason` 與
+             `DshInstanceSettingPage.kt:1054` 的 `dsh_install_in_flight`，
+             歷史註解指出它對「安裝中」的實例是說謊文案。） -->
         <string name="dsh_install_already_installed">該版本已安裝，可直接啟動</string>
         <string name="dsh_install_in_flight">該版本正在安裝中</string>
-        <string name="dsh_instance_gone">實例已不存在</string>
         <string name="dsh_instance_subtitle">版本 %1$s · 連接埠 %2$s · %3$s</string>
         <!-- 實例詳情頁：一個實例 = 一個頁面，頁內再用 tab 切換執行／日誌／設定。
              標題帶上實例名稱，是因為從通知或外殼選單直接跳進來時使用者看不到來源清單 -->
-        <string name="dsh_instance_detail_title">實例：%1$s</string>
         <string name="dsh_instance_detail_tab_run">執行</string>
         <string name="dsh_instance_detail_tab_logs">日誌</string>
         <string name="dsh_instance_detail_tab_config">設定</string>
@@ -87,7 +90,6 @@
         <!-- 詳情頁是在實例已消失（在別處被刪）時也可能被打開的頁面，需要一句墊底文案 -->
         <string name="dsh_instance_detail_empty">該實例已不存在</string>
         <string name="dsh_instances_empty">還沒有實例。\n點選左側「版本」標籤安裝一個 dsh 版本。</string>
-        <string name="dsh_instances_title">DeepSeek Harness</string>
         <!-- fix12：實例清單（manifest）讀／寫失敗時的橫幅與拒寫回饋。四條一組 ——
              橫幅（load/write）+ 橫幅上的重試 + 重試又失敗。前兩條是「這一屏的事」，
              後兩條是「使用者按了重試之後」，所以順序不能按字母排。 -->
@@ -102,12 +104,10 @@
         <string name="dsh_logs_clear_confirm">確定清空目前檢視的全部日誌？此操作無法復原。</string>
         <string name="dsh_logs_copied">日誌已複製到剪貼簿</string>
         <string name="dsh_logs_empty">暫無日誌</string>
-        <string name="dsh_logs_path">日誌檔案：%1$s</string>
         <!-- 日誌頁頂端的範圍標示：同一個日誌元件要同時服務「全部實例」與「單一實例」兩種視角，
              不標出來使用者無法判斷自己看的是誰的日誌 -->
         <string name="dsh_logs_scope_app">應用程式日誌（全部實例）</string>
         <string name="dsh_logs_scope_instance">%1$s 的日誌</string>
-        <string name="dsh_logs_title">執行日誌</string>
         <string name="dsh_name_required">名稱不能為空</string>
         <string name="dsh_notify_running">執行中</string>
         <string name="dsh_notify_starting">啟動中…</string>
@@ -125,6 +125,8 @@
         <string name="dsh_reason_deleted">實例被刪除</string>
         <string name="dsh_reason_from_notification">從通知列停止</string>
         <string name="dsh_reason_service_recycled">已停止：背景服務被系統回收</string>
+        <!-- R49/H-2（審計 P2-6）：停止未完成的失敗原因。不帶佔位符，pid 由程式碼補成「(pid=N)」。 -->
+        <string name="dsh_reason_stop_incomplete">停止未完成：dsh 行程可能仍在執行。請重新啟動此實例以清理它。</string>
         <string name="dsh_start_port_in_use">連接埠被佔用（EADDRINUSE）。下次啟動會自動改用系統指派的連接埠。</string>
         <string name="dsh_task_deleted">已刪除</string>
         <string name="dsh_task_deleted_with_leftover">已刪除（有檔案殘留）</string>
@@ -135,19 +137,12 @@
         <string name="dsh_notify_text">%1$s · %2$s</string>
         <string name="dsh_reinstall_pick_version">還沒有成功安裝過任何版本，請到「版本」頁選擇一個版本。</string>
         <string name="dsh_runtime_exited">dsh 行程已退出（退出碼 %1$d）</string>
-        <string name="dsh_saved">已儲存</string>
         <!-- fix12：拒寫期改名／改連接埠的回饋。dsh_saved 只說「成了」，而 saveAsync() 回傳 false
              時記憶體改了、磁碟上沒有，必須明說「沒儲存」以及原因（清單不可寫）。 -->
         <string name="dsh_change_not_saved">未儲存：實例清單目前無法寫入</string>
-        <string name="dsh_settings_model">模型</string>
-        <string name="dsh_settings_name_hint">實例名稱</string>
-        <string name="dsh_settings_port_hint">連接埠（留空＝自動分配）</string>
-        <string name="dsh_settings_profile">Profile</string>
         <string name="dsh_settings_section_env">執行環境</string>
         <string name="dsh_settings_section_instance">實例設定</string>
         <string name="dsh_settings_section_maintain">維護</string>
-        <string name="dsh_settings_title">實例設定</string>
-        <string name="dsh_settings_version">已安裝 dsh：%1$s</string>
         <string name="dsh_size_calculating">正在計算大小…</string>
         <string name="dsh_stage_prepare">正在準備 Node 執行環境並安裝 dsh…</string>
         <!-- ▼ 安裝階段：指令碼輸出的是**穩定 key**（`[setup] STAGE=<key> [args]`），
@@ -194,29 +189,19 @@
         <string name="dsh_tab_instances">實例</string>
     <string name="dsh_tab_versions">版本</string>
     <string name="dsh_tab_settings">設定</string>
-    <string name="dsh_settings_no_instance">還沒有實例，請先到"下載"頁建立一個。</string>
     <string name="dsh_right_current_instance">目前實例</string>
     <string name="dsh_right_no_instance">暫無實例</string>
     <string name="dsh_action_open_webui">開啟介面</string>
     <string name="dsh_setting_group_common">一般</string>
     <string name="dsh_setting_group_runtime">執行環境</string>
     <string name="dsh_setting_group_dsh">DeepSeek Harness</string>
-    <string name="dsh_setting_group_hint">FCL 啟動器設定</string>
     <string name="dsh_setting_language">語言</string>
     <string name="dsh_setting_language_desc">跟隨系統語言</string>
     <string name="dsh_setting_about">關於本啟動器</string>
     <string name="dsh_setting_runtime_check">執行環境檢測</string>
     <string name="dsh_setting_runtime_check_desc">檢查 proot、rootfs、Node.js 與啟動指令碼狀態</string>
-    <string name="dsh_setting_logs">執行日誌</string>
-    <string name="dsh_setting_logs_desc">檢視 dsh 安裝與執行日誌</string>
-    <string name="dsh_setting_download">dsh 版本管理</string>
-    <string name="dsh_setting_download_desc">瀏覽並安裝不同版本的 DeepSeek Harness</string>
-    <string name="dsh_setting_instance">實例管理</string>
-    <string name="dsh_setting_instance_desc">管理實例名稱、API Key、模型、profile 與連接埠</string>
     <string name="dsh_setting_export_logs">複製日誌</string>
     <string name="dsh_setting_export_logs_desc">將目前日誌複製到剪貼簿</string>
-    <string name="dsh_setting_theme_coming">主題模式設定將在下一步接入 ThemeEngine</string>
-    <string name="dsh_about_version">版本：%1$s</string>
     <string name="dsh_action_open">開啟</string>
     <string name="dsh_setting_group_appearance">外觀</string>
     <string name="dsh_setting_theme_mode">主題模式</string>
@@ -288,8 +273,6 @@
     <string name="dsh_setup_state_running">進行中</string>
     <string name="dsh_setup_state_failed">失敗</string>
     <string name="dsh_setup_hint_space">首次準備需要約 1.5 GB 可用空間，耗時可能數分鐘。已裝過的裝置升級所需空間遠小於此。</string>
-    <string name="dsh_setup_enter">進入</string>
-    <string name="dsh_setup_running_now">正在準備執行環境</string>
     <string name="dsh_tasks_header">進行中</string>
     <string name="dsh_tasks_cancel">取消</string>
     <string name="dsh_tasks_stop">停止</string>
@@ -316,8 +299,6 @@
     <string name="dsh_home_must_be_absolute">必須是執行環境內的絕對路徑（以 / 開頭）</string>
     <string name="dsh_home_no_dot_segments">路徑裡不能包含 . 或 .. 這樣的相對段（請填寫輸入框下方顯示的完整路徑）</string>
     <string name="dsh_home_not_guest_root">不能用 / —— 那是執行環境的根目錄，不是工作區。請選一個子目錄，例如 /opt/dsh/instances/...</string>
-    <string name="dsh_settings_row_key">API Key</string>
-    <string name="dsh_settings_row_key_status">連線狀態</string>
     <string name="dsh_settings_row_version">已安裝 dsh</string>
     <string name="dsh_settings_row_disk">佔用空間</string>
     <string name="dsh_settings_row_path">實例路徑</string>
@@ -330,11 +311,7 @@
     <string name="dsh_settings_desc_open_browser">立刻用瀏覽器開啟 dsh 介面</string>
     <string name="dsh_settings_desc_open_browser_unavailable">沒有可用的瀏覽器，請改用「複製存取連結」</string>
     <string name="dsh_settings_desc_name">顯示在實例清單裡的名稱</string>
-    <string name="dsh_settings_desc_model">對話使用的模型</string>
-    <string name="dsh_settings_desc_profile">啟動時載入的 dsh profile</string>
     <string name="dsh_settings_desc_port">留空表示自動分配連接埠</string>
-    <string name="dsh_settings_desc_key">只儲存在本機，Keystore 加密</string>
-    <string name="dsh_settings_desc_key_status">上一次測試或讀取的結果</string>
     <string name="dsh_settings_desc_path">點選複製到剪貼簿</string>
     <string name="dsh_settings_desc_copy_url">點選複製帶本次工作階段存取憑據的連結</string>
     <string name="dsh_settings_desc_verify">在 proot 內跑一遍最小鏈路（9 項）</string>
@@ -462,4 +439,5 @@
     <string name="dsh_file_edit_empty_message">launcher.patch.yml 清空後，啟動器就不再傳 --patch，/assets 快取標頭和 HMR 輪詢間隔這兩條優化會一起失效。dsh 本身仍能正常啟動。確定要儲存嗎？</string>
     <string name="dsh_file_edit_running">先停止實例，再改它的設定</string>
     <string name="dsh_file_edit_backup_note">上一份內容會在同目錄留一個 .bak 備份。</string>
+    <string name="dsh_logs_write_failed">日誌寫入檔案失敗，最近的紀錄可能已遺失。請清理儲存空間後重試。</string>
 </resources>

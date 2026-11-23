@@ -10,8 +10,17 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="dsh/" />
+        <!-- ★ R49 S-15：WebView cookie 库（30 天会话凭据）——理由见 backup_rules.xml 同一行。 -->
+        <exclude domain="file" path="app_webview/" />
+        <exclude domain="file" path="app_textures/" />
+        <exclude domain="database" path="webviewCookiesChromium.db" />
+        <exclude domain="database" path="webviewCookiesChromiumNoPartition.db" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="dsh/" />
+        <!-- 设备间迁移同理：把一个仍有效的会话 cookie 搬到另一台设备没有正当用途。 -->
+        <exclude domain="file" path="app_webview/" />
+        <exclude domain="database" path="webviewCookiesChromium.db" />
+        <exclude domain="database" path="webviewCookiesChromiumNoPartition.db" />
     </device-transfer>
 </data-extraction-rules>

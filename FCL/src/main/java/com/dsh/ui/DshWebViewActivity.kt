@@ -3,14 +3,20 @@ package com.dsh.ui
 import android.annotation.SuppressLint
 import com.dsh.fcl.androidlauncher.BuildConfig
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PersistableBundle
 import android.os.SystemClock
+import android.security.NetworkSecurityPolicy
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -33,6 +39,7 @@ import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
 import com.dsh.core.DshRuntime
 import com.dsh.core.UrlScanner
+import com.dsh.core.webUrlOrNull
 import com.dsh.fcl.androidlauncher.R
 import com.tungsten.fcllibrary.component.FCLActivity
 import com.tungsten.fcllibrary.component.dialog.FCLAlertDialog
@@ -413,6 +420,7 @@ class DshWebViewActivity : FCLActivity() {
         if (BuildConfig.DEBUG) {
             runCatching { WebView.setWebContentsDebuggingEnabled(true) }
                 .onFailure { logWeb("[wsdiag] enable webview debugging failed: ${it.message}") }
+            reportCleartextPolicy()
         }
 
         webView.webChromeClient = object : WebChromeClient() {
@@ -424,9 +432,20 @@ class DshWebViewActivity : FCLActivity() {
 
             override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
                 msg?.let {
-                    logWeb("[web] ${it.message()} @${it.sourceId()}:${it.lineNumber()}")
+                    // ★ R49/S-12（F-6）：交给日志总线**之前**先过 [redactFrontendLog]。
+                    // 总线的 sanitize 只认 `token=` 与**已注册**的 secret，而 API Key 从来没被
+                    // 注册过（App 刻意不读它）⇒ 插件一句 `console.log(key)` 就会原样落盘。
+                    // 这里补的是"键形态"脱敏，范围限于 `[web]` 这一路（不改 DshLogBus：
+                    // 那是别的 agent 的文件，且动它要牵连 registerSecret 的既有契约）。
+                    // 残差见 [redactFrontendLog] 的 KDoc（非 `sk-`/`Bearer` 形态仍可能落日志）。
+                    logWeb(
+                        "[web] ${redactFrontendLog(it.message())} " +
+                            "@${it.sourceId()}:${it.lineNumber()}"
+                    )
                     // R16/fix4（BL-140）：老 WebView 上 SPA 崩坏的信号（is not a function 类）
                     // → 补弹一次带升级指引的对话框（每次加载最多一次，见字段注释）。
+                    // 判据喂**原始**消息：`isOldWebViewSpaCrash` 找的是 "is not a function"，
+                    // 与凭据形态无关；用脱敏后的串只是多绕一次，没有安全收益。
                     maybeShowCrashUpgradeHint(it.message())
                 }
                 return true
@@ -439,8 +458,33 @@ class DshWebViewActivity : FCLActivity() {
                 request: WebResourceRequest?
             ): Boolean {
                 val url = request?.url?.toString() ?: return false
-                // 只允许回环地址留在 WebView 内；其余交给系统浏览器
-                if (isLoopback(url)) return false
+                // ★ R49/S-01（F-1）：判据换成与 `loadUrlChecked` **同一份**门。
+                //
+                // 改前这里是 `if (isLoopback(url)) return false` —— 只看 host、不看端口。
+                // 而 cookie **不区分端口**（RFC 6265；dsh 的 `dsh-auth-*` 是 `Path=/`），
+                // `setAcceptThirdPartyCookies(false)` 也拦不住（同 host 同 scheme 在 Chromium
+                // 里算 same-site）。于是 rootfs 里任何进程在 `127.0.0.1:40404` 起个监听、
+                // 让聊天里出现一条链接、用户点一下 ⇒ 本 WebView 内导航过去，请求头里就带着
+                // 那条会话 cookie 交到了对方手上（30 天有效）。这条链**不需要读文件**，
+                // 只要一次点击 —— 所以端口这一维必须与加载侧同口径。
+                //
+                // 具体做法：判据与端口基准都走 [`webNavAction`]（与 `loadUrlChecked` 的
+                // `webUiUrlAllowed(url, expectedPort)` 同一个函数、同一个基准
+                // `State.Running.port`），本方法不再自带任何 host 清单。
+                // 注意 `expectedPort <= 0`（端口此刻不可知）时该函数对回环 http(s) 放行 ——
+                // 与监听侧 `webUiPortAllowed` 的"弃权"语义一致，不是本方法的口径漂移。
+                when (webNavAction(url, expectedWebUiPort())) {
+                    WebNavAction.StayInWebView -> return false
+                    // F-2/S-02：既不是 http(s) 也不是 mailto（`intent://` / `file://` /
+                    // `javascript:` / `data:`）⇒ **不跳**也不留在 WebView，见 [`webNavAction`]
+                    // 的 KDoc。留一条日志别静默 —— 这是"页面里有东西想调组件"的信号，
+                    // 排障时值得看见（urlSkeleton 只留 scheme://host[:port]，不记 path/query）。
+                    WebNavAction.Block -> {
+                        logWeb("[web] blocked link with unsupported scheme: " + urlSkeleton(url))
+                        return true
+                    }
+                    WebNavAction.OpenExternal -> Unit // 落到下面的外跳
+                }
                 // BL-205（R23-E1-01）：BL-183 的"外跳留痕"此前只覆盖了门禁那一支，
                 // 页面内容里的站外链接（聊天里贴的 URL）走这条路径时**零日志、失败静默** ——
                 // 出事后无法回溯"我们把什么交给了谁"，用户点不开也不知道为什么。
@@ -907,7 +951,9 @@ class DshWebViewActivity : FCLActivity() {
         val running = st as? DshRuntime.State.Running ?: return
         // ★ 端口还是 0（dsh 尚未打印真实端口）时不要拼出 http://127.0.0.1:0/ 去加载：
         // 那样只会得到一个"页面加载失败"，看起来像 dsh 坏了。显示"启动中"更准确。
-        val url = running.url ?: if (running.port > 0) "http://127.0.0.1:${running.port}/" else null
+        // ★ U3（R49 架构）：这条判据与 core 的认领路径、READY port 兜底是同一件事，
+        //   合成口径已收敛到 [com.dsh.core.webUrlOrNull]（含上面这句"端口 0 不拼 URL"的规则）。
+        val url = webUrlOrNull(running.url, running.port)
         if (url == null) {
             showLoading(getString(R.string.dsh_webview_starting))
             return
@@ -916,7 +962,13 @@ class DshWebViewActivity : FCLActivity() {
         loadedUrl = url
         if (running.url == null) {
             // 没拿到 token：先试 cookie 是否还有效；不行会走 401 兜底提示
-            logWeb("[web] 未捕获到 token URL，尝试用已保存的 cookie 访问 $url")
+            // ★ R49/P2-10（F-8）：这条原来是**原样打 `$url`**，而同一份 URL 在
+            // `shouldOverrideUrlLoading` / `openExternalFresh` 里都走 `urlSkeleton()` ——
+            // 同一件事两套口径，日志里既有带 token 的整条 URL 又有骨架，事后对比时极易
+            // 把"两条不同来源的记录"读成同一件事。统一走 `urlSkeleton()`。
+            // 本分支 `running.url == null` 时 URL 本就是裸的，但"裸"不能靠**入口条件**来保证 ——
+            // 这个函数的入参来自状态流，任何一天上游多给一个带 token 的 url 就会漏。
+            logWeb("[web] 未捕获到 token URL，尝试用已保存的 cookie 访问 ${urlSkeleton(url)}")
         }
         // BL-221：与 render 里那两处同款守卫 —— gateCopied 为真时面板就是正确现场，
         // 先 showWeb 再被 loadUrlChecked 摆回来同样是一闪。
@@ -956,6 +1008,12 @@ class DshWebViewActivity : FCLActivity() {
         //   **不能**取 `UrlScanner.portOf(url)`：那是被校验的对象，拿它当基准等于恒等放行。
         //   state 此刻不是 Running 时（四个调用点都只在 Running 下触发，这里是防御）退化为 0，
         //   即端口这一维弃权 —— 与上游 `expectedPort <= 0` 的语义一致（见 `webUiUrlAllowed` 的 KDoc）。
+        // ★ R49：这条内联表达式与 [expectedWebUiPort] **故意保持两份**：
+        //   R34PortGateTest 的接线断言逐字钉着本方法体里的 `DshRuntime.State.Running` + `.port`
+        //   （判据：端口基准必须来自宿主算出的运行期端口，不能是 `portOf(url)`）。
+        //   抽走它等于让那条测试变红，而它守的正是"端口基准来源"这个安全性质。
+        //   两份的值恒等（都是同一个 `State.Running.port` 字段），同源关系由
+        //   `R49WebViewFixTest.portBaselineIsTheSameInBothGates` 钉住（它比对两处的取值表达式）。
         val expectedPort = (DshRuntime.state.value as? DshRuntime.State.Running)?.port ?: 0
         if (!com.dsh.core.webUiUrlAllowed(url, expectedPort)) {
             loadedUrl = null
@@ -1136,7 +1194,9 @@ class DshWebViewActivity : FCLActivity() {
             .setPositiveButton(getString(R.string.dsh_action_copy)) {
                 val copied = runCatching {
                     val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("dsh access url", url))
+                    // R49/S-14（F-7）：走 [sensitiveClip] 打 EXTRA_IS_SENSITIVE（API 33+）——
+                    // 这条 URL 是活凭据，不加标记时剪贴板预览/历史/云同步都会带出来。
+                    cm.setPrimaryClip(sensitiveClip("dsh access url", url))
                 }
                 if (copied.isFailure) {
                     // BL-207：失败时不能复用 open_link_failed（"已自动复制链接，请手动粘贴"）——
@@ -1254,7 +1314,9 @@ class DshWebViewActivity : FCLActivity() {
     /** BL-197：当前状态下"能重新过门禁并加载"的 URL；拿不到返回 null。 */
     private fun runnableUrlOrNull(): String? {
         val st = DshRuntime.state.value as? DshRuntime.State.Running ?: return null
-        return st.url ?: if (st.port > 0) "http://127.0.0.1:${st.port}/" else null
+        // ★ U3（R49 架构）：合成口径见 [com.dsh.core.webUrlOrNull] —— 与 [loadBestUrl] 同一处，
+        //   不再各写一份 `url ?: if (port > 0) "http://127.0.0.1:$port/" else null`。
+        return webUrlOrNull(st.url, st.port)
     }
 
     /**
@@ -1406,29 +1468,39 @@ class DshWebViewActivity : FCLActivity() {
         runCatching {
             val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                 as android.content.ClipboardManager
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("dsh", url))
+            // R49/S-14（F-7）：同 [sensitiveClip] —— 这条 URL 带活 token。
+            cm.setPrimaryClip(sensitiveClip("dsh", url))
             clipboardOk = true
         }.onFailure {
             logWeb("[web] external open: clipboard fallback failed: ${it.message}")
         }
 
+        // ★ R49/S-13（F-4）：外跳 intent 统一由 [externalBrowserIntent] 构造。
+        // 它把 `CATEGORY_BROWSABLE` 加上（收窄到"浏览器"这一类 handler，排除只声明了
+        // VIEW 的任意 App）并返回可记录的接收方包名。注意这里**仍不改用显式包名**：
+        // dsh 的 token 只活几分钟，首次使用强制用户先选一次浏览器会直接劝退；
+        // manifest 的 `<queries>` 才是本轮能做到的那一半（可见性 + 可留痕）。
+        val viewIntent = externalBrowserIntent(url)
         val ok = runCatching {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            startActivity(viewIntent.intent)
         }.isSuccess
         if (ok) {
             // BL-183：成功分支此前**零日志**，出事后无法回溯"我们到底把什么交给了谁"。
             // 只记骨架：scheme://host:port + 有无 token，token 值绝不落盘（DshLogBus 虽会脱敏
-            // `token=` 前缀，但不把凭据交给日志是最稳的口径）。"交给哪个 App"当前记不了 ——
-            // manifest 无 <queries> + targetSdk=34 ⇒ resolveActivity 恒 null（E1-C-13），
-            // 这条限制写在日志里，免得后来人以为漏了。
+            // `token=` 前缀，但不把凭据交给日志是最稳的口径）。
             //
             // R30/BL-225：补记**实际交给 Intent 的完整 URL 的长度与 query 有无** ——
             // 只记结构不记值，但足以区分"我们传的本来就是裸 URL"和"传的是带 token 的"。
+            //
+            // ★ R49/S-13（F-4）：`target` 从"记不了"变成**真的记下接收方包名** ——
+            // manifest 补了 `<queries>` 之后 `resolveActivity` 才有结果。仍然可能出现
+            // "解析不到"（用户禁用/卸载所有浏览器后系统弹框选），那时记 `(unresolved)`，
+            // 不要假装知道了。
             val q = Uri.parse(url).query
             logWeb(
                 "[web] external open dispatched: ${urlSkeleton(url)} " +
                     "(urlLen=${url.length} queryLen=${q?.length ?: 0} clipboard=$clipboardOk) " +
-                    "(target app not resolvable: no <queries> in manifest)"
+                    "target=${viewIntent.targetPackage ?: "(unresolved)"}"
             )
             if (clipboardOk) {
                 Toast.makeText(this, R.string.dsh_webview_open_external_copied, Toast.LENGTH_LONG)
@@ -1450,7 +1522,7 @@ class DshWebViewActivity : FCLActivity() {
             //   在日志里完全看不到，事后只能靠猜。
             val copied = runCatching {
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("dsh url", url))
+                cm.setPrimaryClip(sensitiveClip("dsh url", url))
             }.onFailure {
                 logWeb("[web] fallback copy failed: ${it.message ?: it.javaClass.simpleName}")
             }.isSuccess
@@ -1647,10 +1719,127 @@ class DshWebViewActivity : FCLActivity() {
         }
     }
 
+    /**
+     * 回环 **host** 判据（只有 host，没有 scheme、没有端口）。
+     *
+     * 只用于"这个页面是不是 dsh 自己的界面"这类**非安全**判据
+     * （[onPageStarted] / [onPageFinished] 的 UI 分支、首次引导提示）。
+     *
+     * **绝不能用它做导航/加载的决定**：
+     * - 没有端口维度 ⇒ 挡不住"回环但端口不对"（S-01/F-1 的整条攻击链）；
+     * - 没有 scheme 维度 ⇒ `javascript:` / `data:` 里只要 host 片段长得像回环就放行。
+     * 导航判据一律走 [`webNavAction`]（它委托 core 的 `webUiUrlAllowed(url, port)`）。
+     *
+     * ★ R49/S-03（F-3）：清单**去掉了 `::1`**（而不是往 NSC 里补）。理由：
+     * 1. dsh **只绑** `127.0.0.1`（`DshRuntime` 的 `"HOST" to "127.0.0.1"`，`:1140`），
+     *    `::1` 从来不是合法的 dsh 地址 —— 认它没有功能价值，只有口径漂移的风险。
+     * 2. "往 NSC 里补"这条路**能不能走通是不能假设的**：`<domain>` 的匹配口径
+     *    （是否解析 IPv6 字面量、要不要方括号）在 AOSP 里没有公开文档，而本仓的沙箱
+     *    **没有设备**、也没有 framework 的 `NetworkSecurityConfig` 实现可以本地跑。
+     *    若写进去而系统不认，等于把"口径不一致"**藏起来**而不是修掉 —— 那种静默失效
+     *    比现在的显式收窄更糟。
+     * 3. 于是取"两边都不认"：`isLoopback` 去掉 `::1`，NSC **不动**（它只放行
+     *    `127.0.0.1` / `localhost`，与 dsh 实际绑定的地址完全一致）。
+     * 4. 这条决定**留了可推翻的证据口**：[reportCleartextPolicy]（DEBUG 包）会把
+     *    `isCleartextTrafficPermitted("::1")` 的真实结果打进日志。若真机报 `true`，
+     *    说明 NSC 的 `<domain>` 确实吃 IPv6 字面量 —— 那时把 `::1` 加回 NSC 与这里
+     *    （**两边一起改**）是安全且正确的；报 `false`（预期）则证明补 NSC 本来就不通。
+     * 5. 与 core 的 [`com.dsh.core.webUiUrlAllowed`] 仍有一处差异：那边认 `::1` / `[::1]`
+     *    （`adoptionHostIsLoopback`）。那不构成安全问题 —— 它管的是"能不能**认领**成 dsh
+     *    的 URL"，多认一个回环 host 只是多一次探活；而真正的导航/加载判据会再叠"端口必须
+     *    对"，`::1` 上根本没有 dsh 监听 ⇒ 端到端仍是否决。差异记在这里，别当成漏改。
+     */
     private fun isLoopback(url: String?): Boolean {
         if (url == null) return false
         val host = runCatching { Uri.parse(url).host }.getOrNull() ?: return false
-        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+        return host == "127.0.0.1" || host == "localhost"
+    }
+
+    /** 导航判据的端口基准：与 [loadUrlChecked] 同源（`State.Running.port`，非 Running 时 0）。 */
+    private fun expectedWebUiPort(): Int =
+        (DshRuntime.state.value as? DshRuntime.State.Running)?.port ?: 0
+
+    /**
+     * ★ R49/S-13（F-4）：构造"用外部浏览器打开"的 intent，并解析出**实际接收方**。
+     *
+     * ## 为什么加 `CATEGORY_BROWSABLE`
+     * 隐式 `ACTION_VIEW` 的接收方由系统挑。只写 `ACTION_VIEW + data:http` 时，任何声明了
+     * 该 intent-filter 的 App 都在候选里（不必是浏览器）。加 `CATEGORY_BROWSABLE` 之后只剩
+     * "声明自己能处理可浏览内容"的那批 —— 仍然**不是**安全边界（恶意 App 也可以声明
+     * BROWSABLE），但它把候选面从"任意 App"收窄到"自称浏览器的 App"，且不动用户既有习惯
+     * （不强制选包，BL-225 的现场是用户要"点一下就能进"）。
+     *
+     * ## 为什么还要返回包名
+     * F-4 的判定是"接收方**不可校验**"。真正能校验需要显式 `setPackage`（要用户先选一次），
+     * 代价见上。本轮做到的是**可校验 + 可留痕**：manifest 补了 `<queries>` 之后
+     * `resolveActivity` 不再恒 null，于是日志里能写下"到底交给了谁"。
+     * 出事后至少能回答"是不是被别的 App 截走了"。
+     *
+     * ## 解析不到时
+     * `targetPackage = null`（正常情况下系统会弹"用哪个应用打开"）。调用方记成
+     * `(unresolved)` —— 不许假装知道。
+     *
+     * @return [ExternalBrowserIntent.intent] 可直接 `startActivity`；
+     *   [ExternalBrowserIntent.targetPackage] 仅供日志，`null` = 解析不到
+     */
+    private fun externalBrowserIntent(url: String): ExternalBrowserIntent {
+        // 先按"浏览器"这一档找：`CATEGORY_BROWSABLE` 把候选从"任意声明了 VIEW 的 App"
+        // 收窄到"自称浏览器"的那批。仍不是安全边界（恶意 App 也能声明），但排除了
+        // 大量只想接 VIEW 的普通 App。
+        val browseable = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addCategory(Intent.CATEGORY_BROWSABLE)
+        // resolveActivity 在 API 33+ 需要 flags；低版本忽略该参数。
+        // 用 MATCH_DEFAULT_ONLY：与 startActivity 的解析口径一致（只要默认 handler）。
+        val resolved: ResolveInfo? = runCatching {
+            packageManager.resolveActivity(browseable, PackageManager.MATCH_DEFAULT_ONLY)
+        }.getOrNull()
+        val pkg = resolved?.activityInfo?.packageName?.takeIf { it.isNotBlank() }
+        if (pkg != null) return ExternalBrowserIntent(browseable, pkg)
+
+        // ★ 兜底：带 BROWSABLE 解析不到时退回不带 category 的裸 ACTION_VIEW ——
+        // 少数 ROM 上浏览器的 VIEW filter 只写 scheme、不写 category。硬套 BROWSABLE
+        // 会把"本来能跳"变成 ActivityNotFoundException，进而落进 BL-225 的
+        // "复制链接 + 回壳"兜底（能用但多一步）。宁可多一档解析，也不改坏既有路径。
+        val plain = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        val plainResolved: ResolveInfo? = runCatching {
+            packageManager.resolveActivity(plain, PackageManager.MATCH_DEFAULT_ONLY)
+        }.getOrNull()
+        return ExternalBrowserIntent(
+            plain,
+            plainResolved?.activityInfo?.packageName?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    /**
+     * ★ R49/S-03（F-3）：把 NSC 的**实际**明文放行结果打进日志（仅 DEBUG 包）。
+     *
+     * ## 为什么需要这一行
+     * S-03 的事实是"`isLoopback` 认 `::1`、NSC 没放行 `::1`"。修法选的是**两边都不认**
+     * （理由见 [isLoopback] 的 KDoc），但这属于"删除一个可能性"—— 删得对不对，不该靠读
+     * XML 的人心算：`<domain>` 的匹配口径（是否解析 IPv6 字面量、要不要方括号）在 AOSP 里
+     * 没有公开文档，而本机沙箱**没有设备**、也没有 framework 的 `NetworkSecurityConfig` 实现
+     * 可以跑。所以这里把系统的**结论**打出来，让下一次真机验证能一眼对上：
+     *
+     * - `127.0.0.1` / `localhost` 必须为 true（否则 dsh 的明文 UI 根本加载不出来）；
+     * - `::1` / `[::1]` 的结果**如实记录**，不假设。若真机上 `::1` 是 true，说明 NSC 的
+     *   `<domain>` **能**吃 IPv6 字面量 —— 那时"两边都不认"就是过度收紧，可以按这条证据
+     *   把 `::1` 加回 NSC 与 [isLoopback]（同一份改动，两边一起改）。若为 false（预期），
+     *   就证明"补 NSC"那条路本来就不通，本轮的选择是对的。
+     *
+     * 只看不改：`NetworkSecurityPolicy` 是查询接口，没有任何副作用。仅在 `BuildConfig.DEBUG`
+     * 下调用（出货包不打这条），与既有 `[wsdiag]` 诊断同一档。
+     */
+    private fun reportCleartextPolicy() {
+        runCatching {
+            val p = NetworkSecurityPolicy.getInstance()
+            fun q(h: String) = runCatching { p.isCleartextTrafficPermitted(h) }.getOrNull()
+            logWeb(
+                "[wsdiag] cleartext policy: " +
+                    "127.0.0.1=${q("127.0.0.1")} localhost=${q("localhost")} " +
+                    "::1=${q("::1")} [::1]=${q("[::1]")} " +
+                    "(if ::1 is true here, the NSC <domain> does accept IPv6 literals)"
+            )
+        }.onFailure { logWeb("[wsdiag] cleartext policy query failed: ${it.message}") }
     }
 
     /**
@@ -1676,8 +1865,16 @@ class DshWebViewActivity : FCLActivity() {
                 .mapNotNull { it.substringBefore("=").trim().ifEmpty { null } }
             val dshNames = com.dsh.core.DshAuthCookie.sessionCookieNames(all)
             val expected = com.dsh.core.DshAuthCookie.nameFor(authority)
+            // ★ R49/S-11（F-5）：这里原来打的是**原始 URL**（`url=$pageUrl`）。
+            // 正常流是 token→303 之后的**无 token** 地址，但"dsh 没走 303 而直接渲染带
+            // token 页"时它就是带 token 的。虽然 `DshLogBus.sanitize` 的 `token=` 正则兜住了
+            // （实测不会真泄漏），口径却与本文件其它出口不一致 —— `urlSkeleton` 的 KDoc
+            // 明确写着"绝不把凭据交给日志是最稳的口径"。统一走它。
+            // `authority` 同样剥掉 userinfo（`http://u:p@host` 的 authority 含凭据），
+            // 与 `urlSkeleton` 内部 substringAfterLast('@') 同一处理。
+            val authoritySafe = authority.substringAfterLast('@')
             logWeb(
-                "[wsdiag] url=$pageUrl authority=$authority " +
+                "[wsdiag] url=${urlSkeleton(pageUrl)} authority=$authoritySafe " +
                     "cookies=${names.size} dshCookies=${dshNames.size} " +
                     "expected=$expected present=${names.contains(expected)}"
             )
@@ -1947,4 +2144,171 @@ fun gateResumeAction(
     copied -> GateResume.DeferredPanel
     else -> GateResume.ReloadGate
 }
+
+/**
+ * ★ R49/S-01 + S-02（F-1 / F-2）：`shouldOverrideUrlLoading` 的**导航判据**（纯函数，可单测）。
+ *
+ * ## 为什么必须是纯函数、而且只有这一份
+ * F-1 的病根是**同一件事存在两份口径**：`loadUrlChecked` 走
+ * `webUiUrlAllowed(url, expectedPort)`（scheme + 回环 host + **端口绑定**），
+ * 而页面内导航侧只判 host。cookie **不区分端口**（RFC 6265），于是"回环但端口不对"的
+ * 页面一旦被放进 WebView，会话 cookie 就跟着请求头交给了那个端口上的监听者。
+ * 修法不能是"再抄一份带端口的清单"—— 那是第三次口径漂移的种子
+ * （`com.dsh.core.webUiUrlAllowed` 的 KDoc 亲口警告过）。所以这里**直接委托**同一个函数，
+ * 并把它抽成顶层纯函数，让单测能真正跑它的**行为**（而不是只对源码文本做断言）。
+ *
+ * ## 三个出口，各自的语义
+ * - [WebNavAction.StayInWebView]：`webUiUrlAllowed(url, expectedPort)` 通过 ⇒ 是本实例的 dsh
+ *   界面，留在这里加载（对应 `shouldOverrideUrlLoading` 返回 `false`）。
+ * - [WebNavAction.Block]：scheme 既不是 http(s) 也不是 `mailto:`（`intent://` / `file://` /
+ *   `javascript:` / `data:` …）⇒ **不留在 WebView，也不外跳**（返回 `true`）。
+ *   为什么不外跳：`intent://` 会被系统解析成"启动某个组件"，`file://` 会把手交给有 handler
+ *   的 App —— 拿到页面执行能力的一方（XSS / 插件注入）能借本 App 的身份发起任意组件跳转
+ *   （S-02）。档位选"白名单"而不是"黑名单 intent/file"：`ACTION_VIEW` 接受的
+ *   scheme 随系统版本变化，黑名单必然漏（`UrlScanner.hasHttpScheme` 的 KDoc 同条理由）。
+ *   为什么不留在 WebView：`javascript:` 在**当前页面的同源上下文**里执行，`data:` 能渲染
+ *   任意内容 —— 留在这里比跳出去更糟。
+ * - [WebNavAction.OpenExternal]：`mailto:`，或 http(s) 但不是本实例的 dsh 界面
+ *   （站外，**或回环但端口不对**）⇒ 交给系统。第二类是 F-1 的行为变化：以前"回环但端口
+ *   不对"会留在 WebView 里。
+ *
+ * ## 为什么 `mailto:` 单独放行（F-2 的"别改坏功能"那一半）
+ * dsh 前端自己的链接渲染器就把它列在白名单里（实测读数来自出货产物
+ * `dsh-web-frontend/dist/assets/index-8VXBH-f-.js`：
+ * `switch(new URL(e).protocol){case"http:":case"https:":case"mailto:":return e}`）。
+ * 这里若一并 Block，用户点聊天里的邮箱地址会**从能发信变成没反应** —— 那是 S-02 的修法
+ * 越界。它也不带会话凭据（落到邮件 App 的撰写界面，收件人可见）。
+ * 判据与 [com.dsh.core.UrlScanner.hasHttpScheme] 分开写是有意的：那是"能不能进 WebView"
+ * 的 scheme 门（只能 http(s)），这里是"能不能交给外部"的 scheme 门（多一个 mailto）——
+ * 混成一个函数会让 `loadUrlChecked` 侧也跟着放 mailto 进 WebView。
+ *
+ * ## 与 S-04 的关系（必须如实说）
+ * [expectedPort] `<= 0`（自动端口实例、端口此刻不可知）时 `webUiPortAllowed` **弃权**，
+ * 判据退化成"scheme + 回环 host" —— 与加载侧**完全一致**的残余风险，不是本函数引入的。
+ * 那是 core 已登记的前提（`webUiUrlAllowed` 的 KDoc：没有网络隔离时"端口号本身不是身份"）。
+ * 本函数不擅自"更严格"：两侧口径必须**同一份**，否则又变成两套判据。
+ *
+ * 写成**顶层函数**（而不是成员）：单测 harness 的 classpath 里没有 androidx，
+ * 经 Activity 访问会连带加载整条父类链直接崩（同 [trimDeltaFor] / [gateResumeAction] 的理由）。
+ *
+ * @param url 待判定的绝对 URL（页面点击的目标）
+ * @param expectedPort 本次运行真正绑定的端口（`State.Running.port`）；`<=0` = 不可知
+ */
+fun webNavAction(url: String?, expectedPort: Int): WebNavAction {
+    if (url.isNullOrBlank()) return WebNavAction.Block
+    // ① scheme 白名单：只有"能被浏览器/邮件 App 处理的公开方案"才放行。
+    //    `intent://` / `file://` / `javascript:` / `data:` 一律 Block（既不留也不跳）。
+    val httpish = com.dsh.core.UrlScanner.hasHttpScheme(url)
+    if (!httpish && !MAILTO_SCHEME_RE.containsMatchIn(url)) return WebNavAction.Block
+    // ② mailto: 走外跳。它不该进 WebView（WebView 打不开，且 `loadUrl` 侧也不认它）；
+    //    但**必须**放行 —— dsh 前端自己的 markdown 渲染器就把它列在白名单里
+    //    （实测出货产物 `dsh-web-frontend/dist/assets/index-8VXBH-f-.js` 的
+    //    `switch(new URL(e).protocol){case"http:":case"https:":case"mailto:":return e}`），
+    //    这里 Block 掉等于把"聊天里点邮箱地址"从能用改成没反应。
+    //    安全上它不带会话凭据：落到邮件 App 的撰写界面，用户看得见收件人。
+    if (!httpish) return WebNavAction.OpenExternal
+    // ③ 能进 WebView ⇔ scheme + 回环 host + **端口绑定**（与 loadUrlChecked 逐字同一份判据）
+    if (com.dsh.core.webUiUrlAllowed(url, expectedPort)) return WebNavAction.StayInWebView
+    // ④ 其余 http(s)：站外链接，**以及回环但端口不对的**（F-1 的行为变化）→ 交给系统浏览器。
+    return WebNavAction.OpenExternal
+}
+
+/** `mailto:` scheme（唯一的非 http(s) 放行项；理由见 [webNavAction] 的 ②）。 */
+private val MAILTO_SCHEME_RE = Regex("""(?i)^\s*mailto:""")
+
+/** [webNavAction] 的三个出口（语义见其 KDoc）。 */
+enum class WebNavAction {
+    /** 是本实例的 dsh 界面：留在 WebView 内加载（`shouldOverrideUrlLoading` 返回 false）。 */
+    StayInWebView,
+
+    /** 非 http(s)：不留在 WebView，也不外跳（返回 true）。 */
+    Block,
+
+    /** http(s) 但非本实例界面（含"回环但端口不对"）：交给系统浏览器。 */
+    OpenExternal,
+}
+
+/**
+ * ★ R49/S-13（F-4）：外跳 intent 与它的**接收方**（`null` = 解析不到）。
+ *
+ * 写成顶层 data class 而不是内联的 `Pair`：`targetPackage` 是"给谁了"的**唯一证据**，
+ * 它必须是具名字段，否则调用点很容易在重构里把它丢掉（日志退化成"反正记不了"）。
+ */
+class ExternalBrowserIntent(val intent: Intent, val targetPackage: String?)
+
+/**
+ * ★ R49/S-14（F-7）：把一段文本放进剪贴板，并**标记为敏感**。
+ *
+ * 带 token 的 dsh 访问链接是活凭据（拿到就能进 UI，且会换到 30 天 cookie）。
+ * 不加 `ClipDescription.EXTRA_IS_SENSITIVE` 时：Android 10+ 的剪贴板预览会**显示内容**、
+ * 部分 ROM 的剪贴板历史会留存、云同步可能带走。
+ *
+ * ## API 33 保护
+ * `EXTRA_IS_SENSITIVE` 是 API 33 才有的常量，而 minSdk = 26 —— 低版本上该字段**不存在**
+ * （不是"值无效"，是常量字段本身 33 起才有），所以必须版本门。
+ * `setExtras` / `PersistableBundle` 是 API 24 起，门内两行都安全。
+ *
+ * ## 低版本怎么办（如实说明）
+ * API 26~32 上**没有**等价机制：`ClipDescription` 的敏感标记就是 33 引入的，
+ * 那之前的系统本来也不做剪贴板预览。所以这里不是"降级处理"，而是"低版本无此概念"。
+ * 不为了补齐它去截断/改写 URL —— 那会让粘贴出来的链接失效。
+ *
+ * 复制动作本身的结果（成功/失败）由调用方判断：本函数抛异常即失败，
+ * 与 BL-207「失败不能假装成功」的口径一致。
+ *
+ * @param label 剪贴板的 user-visible label（系统在预览里会显示，故不含凭据）
+ * @param text 要复制的文本（可能含 token —— 正因如此才要打敏感标记）
+ */
+fun sensitiveClip(label: String, text: String): ClipData {
+    val clip = ClipData.newPlainText(label, text)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        clip.description.extras = PersistableBundle().apply {
+            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+    }
+    return clip
+}
+
+/**
+ * ★ R49/S-12（F-6）：前端 `console` 内容进日志总线**之前**的一道脱敏。
+ *
+ * ## 为什么不能只靠 `DshLogBus.sanitize`
+ * `sanitize`（`DshLogBus.kt`）覆盖两件事：`token=` 结构化打码 + **已注册** secret 的全文替换。
+ * 而注册面只有 dsh 的**启动 token** —— **没有任何地方注册 API Key**（App 刻意不读它，
+ * 见 `DshRuntime` 的"不注入 API Key"设计）。于是"某个插件 `console.log(key)`"会原样落进
+ * `logs/runtime.log` 与 `logs/instance-<id>.log`。
+ *
+ * ## 为什么改在这里，而不是改 `DshLogBus`
+ * 脱敏集合在 `DshLogBus.kt` 里，那是**另一个 agent 的文件**（本轮并行修改中），
+ * 而且往 `registerSecret` 里塞启发式会牵连它自己那套"长度+形状+保护词表"的既有契约
+ * （`MIN_SECRET_LENGTH` / `TOKEN_SHAPE_RE` / `protectedLogVocabulary`）。
+ * 所以本函数只在 **[web] 这一路**（`onConsoleMessage`）入口处动手，影响面收得住。
+ *
+ * ## 打什么、为什么只打这些（误伤风险要写清）
+ * - **`sk-…` 形态**：DeepSeek / OpenAI 系 API Key 的公认前缀。要求前缀后至少 16 个
+ *   `[A-Za-z0-9_-]`，把"`sk-` 后面跟个短词"这种正常文本排除掉。
+ * - **`Bearer <token>`**：HTTP 头形态，值是 20+ 个 base64url 字符。前端偶尔会打印请求头。
+ * - **不做**"40+ 连续 base64url 一律打码"：`registerSecret` 的 `MIN_SECRET_LENGTH`
+ *   事故（`DshLogBus.kt` 里记着"单字符 secret 把整个日志打成马赛克"）已经证明
+ *   启发式打码的误伤代价。一条 console 里像哈希/ID 的长串极多（构建产物名、
+ *   traceId），全打掉会让 `[web]` 这一路**失去排障价值**，而它恰恰是前端报错的唯一出口。
+ *   ⇒ 残差**如实登记**：非 `sk-` / 非 `Bearer` 形态的凭据仍可能落日志。
+ *   （SECURITY S-12 的结论也是"登记为残余风险，不加宽启发式"。）
+ *
+ * 纯函数、无 Android 依赖 ⇒ 单测能直接跑行为。
+ */
+fun redactFrontendLog(text: String): String {
+    var out = text
+    // `sk-` 形态（DeepSeek/OpenAI 系）：前缀 + 至少 16 个 token 字符才打码
+    out = SK_KEY_RE.replace(out) { m -> m.groupValues[1] + "***" }
+    // `Bearer <value>` 形态（HTTP 头）
+    out = BEARER_RE.replace(out) { m -> m.groupValues[1] + "***" }
+    return out
+}
+
+/** `sk-` 前缀的 API Key（`sk-` + 16 个以上 base64url 字符；保留前缀便于排障时辨认形态）。 */
+private val SK_KEY_RE = Regex("""(?i)\b(sk-)[A-Za-z0-9_\-]{16,}""")
+
+/** `Bearer <token>`（保留 `Bearer` 一词，只抹值）。 */
+private val BEARER_RE = Regex("""(?i)\b(Bearer\s+)[A-Za-z0-9_\-.=]{20,}""")
 

@@ -1,5 +1,6 @@
 package com.dsh.core
 
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -124,8 +125,85 @@ object DshLogBus {
         }
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * ★ R49 / B-4：同一个失败（同一条描述）只在**首现**与每 [FLUSH_FAILURE_LOG_EVERY] 次时
+     * 各记一行 —— 见 [flushExceptionHandler]。
+     *
+     * 为什么必须防刷屏：handler 记的那一行本身会 `append` 进总线 ⇒ `dirty = true` ⇒
+     * [scheduleFlush] 排下一轮 ⇒ 若 [flush] 是**稳定复现**地抛（如 OOM 后内存仍紧张），
+     * 每 200ms 就多一行失败行。2000 行的环形缓冲约 7 分钟就会被失败行整圈挤掉 ——
+     * 那正好是排障最需要的那段现场。首现必记（用户/开发者要看见），之后只留心跳。
+     */
+    private const val FLUSH_FAILURE_LOG_EVERY = 100
+
+    /**
+     * ★ R49 / B-4：[flush] 抛出的 Throwable 原来落到线程默认 handler，**进程级无痕迹**。
+     *
+     * 为什么这不是小事：`armFlushJob` 用 `scope.launch` 起的是**根协程**（不是某个请求的子任务），
+     * `SupervisorJob` 只会让"别的任务不受牵连"，异常本身既不进状态流也不进日志 ——
+     * 于是"日志页不刷新 / 落盘悄悄停了"在 App 侧表现为**完全静默**：用户看不到任何东西，
+     * 开发者拿到的日志文件也停在崩溃前那一行。
+     *
+     * 记进总线（而不是只写 stderr）的理由：真机上 stderr 没人收；总线是唯一"用户能看见
+     * + 能复制导出"的出口。措辞带 `flush job` 前缀，便于在日志里直接检索。
+     */
+    private val flushExceptionHandler = CoroutineExceptionHandler { _, t ->
+        // handler 自己绝不能再抛（协程框架会把它当 uncaught 再走一遍默认 handler）
+        runCatching { recordFlushFailure(t) }
+    }
+
+    private val flushFailureLock = Any()
+
+    /** 上一条已记录的失败描述（同描述 = 同一条失败在重复），见 [FLUSH_FAILURE_LOG_EVERY] */
+    private var flushFailureDesc: String? = null
+
+    /** 当前这条失败描述已重复的次数（首现后从 0 起累加；描述变了就重置） */
+    private var flushFailureRepeat = 0
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + flushExceptionHandler)
     private val lock = Any()
+
+    /**
+     * ★ R49 / B-4：[flushExceptionHandler] 的记录体（拆成独立函数便于单测直接钉措辞）。
+     *
+     * 去重规则（见 [FLUSH_FAILURE_LOG_EVERY]）：同一条描述首现记一行原文，之后每第
+     * [FLUSH_FAILURE_LOG_EVERY] 次记一行带重复计数的"心跳"；描述变了则重新按"首现"记。
+     * [flush] 正常跑完会清空这条记忆（见函数尾），于是"故障消失后再犯"仍会立刻记一行。
+     */
+    private fun recordFlushFailure(t: Throwable) {
+        val desc = "log flush job failed: ${t.javaClass.simpleName}" +
+            (t.message?.let { ": $it" } ?: "")
+        val repeat = synchronized(flushFailureLock) {
+            if (desc == flushFailureDesc) {
+                flushFailureRepeat++
+                flushFailureRepeat
+            } else {
+                flushFailureDesc = desc
+                flushFailureRepeat = 0
+                0
+            }
+        }
+        if (repeat == 0) append(desc)
+        else if (repeat % FLUSH_FAILURE_LOG_EVERY == 0) {
+            append("$desc (repeated $repeat time(s))")
+        }
+    }
+
+    /**
+     * 测试 seam（R49/B-4）：把一次失败**真的**投进总线 scope —— 走的正是生产路径
+     * （`SupervisorJob + Dispatchers.IO + flushExceptionHandler` 的根协程），
+     * 从而证明 handler 真的接上了，而不是只断言"字段里有个 handler 对象"。
+     */
+    fun launchFailingJobForTest(t: Throwable) {
+        scope.launch { throw t }
+    }
+
+    /**
+     * 测试 seam（R49/B-4）：scope 上下文中注册的 [CoroutineExceptionHandler]（结构性断言用）。
+     * 生产代码不要调。
+     */
+    fun scopeExceptionHandlerForTest(): CoroutineExceptionHandler? =
+        scope.coroutineContext[CoroutineExceptionHandler]
 
     /**
      * Separate monitor for **file** mutations (append + rotate + the attach-time truncation).
@@ -301,10 +379,84 @@ object DshLogBus {
      * write fails; deliberately sticky once set — the in-memory warning lines (see [appendToFile])
      * tell the chronological story, this just answers "did anything ever fail, and where".
      * Format: `log file write failed: <absolute path> (<ExceptionClass>: <message>)`.
+     *
+     * ★ R49/B-2：**粘性**是它与 [logFileWriteFailure] 的分工所在 —— 本字段回答"这个进程里
+     *   有没有失败过（以及在哪）"，永不自动消失；那条流回答"**此刻**是不是还在失败"，
+     *   写成功即清空。UI 要的是后者（横幅该随恢复而消失），排障要的是前者。
      */
     @Volatile
     var lastFileWriteError: String? = null
         private set
+
+    /**
+     * ★ R49 / B-2：**当前是否正处在落盘失败状态** —— 给 UI 订阅的那条流。
+     *
+     * ## 缺陷本体
+     * 改前 [lastFileWriteError] 只有定义和内部赋值，`grep -rn 'lastFileWriteError' FCL/src/main/java/`
+     * 在 main 侧**零消费**（只有测试读）。后果：磁盘满导致日志写不进时，**除了打开日志页
+     * 并恰好翻到失败那一刻，用户完全不知情** —— 而日志写不进恰恰是"排障现场正在丢"的那一类
+     * 故障，越是不知情越无从下手。
+     *
+     * ## 为什么单独开一条流而不是让 UI 读那个字段
+     * 1. 那个字段是 [@Volatile] 的普通字段，**没有可订阅性**：UI 只能在某个时刻轮询一次，
+     *    既看不到"刚刚失败"，也看不到"已经恢复"（横幅会永远挂在屏幕上或是永远不出现）；
+     * 2. 粘性语义与横幅语义**相反**：字段记"发生过"，横幅要"现在还在发生"。
+     *
+     * ## 语义（与 [lastFileWriteError] 的分工）
+     * - 落盘/轮转/启动截断任一失败 → 置为该次失败的描述（与 [lastFileWriteError] 同串）；
+     * - **同一路径**上任何一次写成功 → 清回 `null`（横幅随之消失）；
+     * - 别的路径成功不清它（A 文件坏了不代表 B 文件修好了 A）。
+     *
+     * ⚠️ 它是 [MutableStateFlow]，**订阅时立刻回放当前值** —— UI 在故障期间才打开日志页
+     * 也能看到横幅（不需要"恰好撞上失败那一帧"）。
+     */
+    private val _logFileWriteFailure = MutableStateFlow<String?>(null)
+    val logFileWriteFailure: StateFlow<String?> = _logFileWriteFailure.asStateFlow()
+
+    /** [logFileWriteFailure] 当前值对应的路径（清空判据用；与流同锁更新，见 [noteFileWriteError]） */
+    @Volatile
+    private var fileWriteFailurePath: String? = null
+
+    /**
+     * ★ R49 / B-2：**记一次落盘失败**的唯一入口（[lastFileWriteError] + [logFileWriteFailure]
+     * 一起置位，两者永远说同一件事）。
+     *
+     * 为什么收敛成一个函数：本文件有三条失败路径（[appendToFile] 的批写失败、
+     * [rotateIfTooBig] 的轮转读失败、[attachFile] 的启动截断失败）。改前只有两条会置
+     * [lastFileWriteError]，第三条（B-1）根本是裸 `runCatching` —— 同一个概念三套口径。
+     * 现在三条都走这里，新增失败路径也只需要记一次。
+     */
+    private fun noteFileWriteError(path: String, description: String) {
+        synchronized(fileIoLock) {
+            lastFileWriteError = description
+            fileWriteFailurePath = path
+            _logFileWriteFailure.value = description
+        }
+    }
+
+    /**
+     * ★ R49 / B-2：某路径**写成功**了 —— 若当前挂着的失败正是这条路径，清掉它（横幅消失）。
+     *
+     * 只在"同一个文件"上清：日志写失败是**按文件**的（全局 `runtime.log` 与各实例文件各自
+     * 独立失败），A 文件恢复不该让 B 文件的横幅消失。
+     */
+    private fun clearFileWriteErrorIfPath(path: String) {
+        synchronized(fileIoLock) {
+            if (fileWriteFailurePath == path) {
+                fileWriteFailurePath = null
+                _logFileWriteFailure.value = null
+            }
+        }
+    }
+
+    /** 测试 seam（R49/B-2）：把失败状态清回"从未失败"，避免状态泄漏给别的用例。 */
+    fun resetFileWriteErrorForTest() {
+        synchronized(fileIoLock) {
+            lastFileWriteError = null
+            fileWriteFailurePath = null
+            _logFileWriteFailure.value = null
+        }
+    }
 
     /**
      * BL-075: consecutive write-failure counter per file path (guarded by [fileIoLock]). A failed
@@ -533,6 +685,26 @@ object DshLogBus {
                         file.writeText(tail.joinToString("\n", postfix = "\n"))
                     }
                 }
+            }.onFailure { e ->
+                // ★ R49/B-1：启动截断失败**不许静默**。
+                //
+                // 缺陷本体：同一份文件里 [rotateIfTooBig] 用 `.getOrElse` 把读失败记进
+                // [lastFileWriteError]，而这里（唯一的另一处"读全文件再覆写"）是裸 `runCatching`
+                // —— 同一个概念两套口径。失败场景都是真实的：1MB 文件读进 `readLines()` 时 OOM、
+                // 文件被并发删掉（`FileNotFoundException`）、覆写时 ENOSPC。
+                //
+                // 静默的代价：截断没做成 ⇒ 文件继续超限 ⇒ **每一轮** flush 的尾部都会触发
+                // [rotateIfTooBig] 的全量读 + 重写（`appendToFile` 每次落盘后都调它），在
+                // `fileIoLock` 上把**所有实例**的日志写盘拖慢 —— 而现场唯一的痕迹是"日志页卡"，
+                // 没有任何一行说明为什么。
+                //
+                // 措辞与 [rotateIfTooBig] 对齐（`log file rotate failed: <path> (<Class>: <msg>)`），
+                // 只把动作名换成 `truncate` 以区分"启动时的一次性截断"与"落盘后的轮转"。
+                noteFileWriteError(
+                    file.absolutePath,
+                    "log file truncate failed: ${file.absolutePath} (${e.javaClass.simpleName}" +
+                        (e.message?.let { ": $it" } ?: "") + ")"
+                )
             }
         }
     }
@@ -934,14 +1106,62 @@ object DshLogBus {
      * 行颜色仍由 UI 自己决定，本函数不接管颜色判定。
      */
     fun classifyLevel(line: String): LogLevel = when {
+        // ★ R49/B-3：沙箱探测的**降级证据**显式提升为 ERROR（见 [isSandboxProbeDegraded]）。
+        //   放在最前：它必须压过 ERROR_RE / WARN_RE 的文本判级，而不是"碰巧命中某个词"。
+        isSandboxProbeDegraded(line) -> LogLevel.ERROR
         ERROR_RE.containsMatchIn(line) -> LogLevel.ERROR
         WARN_RE.containsMatchIn(line) -> LogLevel.WARN
         else -> LogLevel.INFO
     }
 
     /**
+     * ★ R49 / B-3：沙箱探测里"沙箱不可用"的证据行必须判 ERROR。
+     *
+     * ## 缺陷本体（实测，见 `docs/reports/round49/agents/RELIABILITY.md` §4.3 / P1-7）
+     * `start-dsh.sh` 的探测输出形如 `[start-dsh] sandbox-probe …`，其中**最关键的两行**是：
+     * - `sandbox-probe bwrap=absent` —— 一级证据（bwrap 根本不存在）；
+     * - `sandbox-probe landlock=UNUSABLE (kernel 4.14.190; …)` —— 二级证据。
+     * 两行都**不含** [ERROR_RE] 的任何关键词（`absent`/`UNUSABLE` 都不在词表里）⇒ 判 INFO ⇒
+     * 日志页的「警告及以上」/「仅错误」两个档位**完全看不见**。而本机（Android 内核 4.14 <
+     * Landlock 要求的 5.13）是**必现**的：dsh 的沙箱链 `bwrap → landlock` 两级全挂，
+     * `workspace-write` 模式下所有命令被拒。用户看到的是"每条命令都报沙箱错误"，
+     * 而**唯一能解释这件事的日志行被过滤档位藏掉了**。
+     *
+     * ## 为什么是"前缀约束的例外"而不是"往 [ERROR_RE] 里加词"
+     * `absent` 是个通用词（`file absent, using default` 这类正常行满地都是），加进 [ERROR_RE]
+     * 会把一大批正常行染红 —— 假错误比没有错误更贵（排障时会被引去查一个不存在的问题）。
+     * 所以判据是**两个条件同时成立**：
+     * 1. 行里出现探测器的固定标签 [SANDBOX_PROBE_TAG]（`sandbox-probe`，脚本每条探测行都带）；
+     * 2. 行内命中 [SANDBOX_PROBE_BAD_RE]（`absent` / `UNUSABLE` / `DENIED`，大小写不敏感）。
+     *
+     * ## 为什么这三个词而不是全部
+     * [SANDBOX_PROBE_BAD_RE] 只收"这条路**已经断了**"的三种断言。同组里
+     * `landlock=launcher-not-found` / `stat-FDCWD=BROKEN` / `tracerpid=…` 之类是**细节诊断**，
+     * 保留 INFO —— 把它们也升成 ERROR 会让"仅错误"档位里一半是探测细节，真正的
+     * `bwrap=absent` 反而被稀释（本修复要的正是"一眼看见沙箱挂了"）。
+     *
+     * ⚠️ 这条例外**不改变** [ERROR_RE] 本体：词表仍是 DshLogsUI 迁来的那一份，语义等价
+     * 测试照旧成立（UI 已改为只消费快照预计算的级别，`grep ERROR_RE` 全仓只有本文件一处）。
+     */
+    private fun isSandboxProbeDegraded(line: String): Boolean =
+        line.contains(SANDBOX_PROBE_TAG) && SANDBOX_PROBE_BAD_RE.containsMatchIn(line)
+
+    /** 探测器标签（`start-dsh.sh` 每条探测行都以 `[start-dsh] sandbox-probe ` 起头） */
+    private const val SANDBOX_PROBE_TAG = "sandbox-probe"
+
+    /**
+     * ★ R49/B-3：探测行里的"已断"断言。大小写不敏感（脚本现在写 `UNUSABLE`/`DENIED`，
+     * 未来改成小写不该让这条修复静默失效）。
+     */
+    private val SANDBOX_PROBE_BAD_RE = Regex("""absent|UNUSABLE|DENIED""", RegexOption.IGNORE_CASE)
+
+    /**
      * K27: 以下两个正则**逐字照抄** DshLogsUI 的 `ERROR_RE` / `WARN_RE`（含 IGNORE_CASE），
      * 是"口径等价"的物理载体 —— 修改它们等于单方面改变 UI 的过滤语义。
+     *
+     * ★ R49/B-3 补充：上面那条 `sandbox-probe` 例外**刻意不写进本正则**（理由见
+     * [isSandboxProbeDegraded]）。本词表仍与迁入时逐字一致 —— `DshLogBusLevelTest.errorKeywordsAllClassifyAsError`
+     * 的 11 个关键词断言照旧钉着它。
      */
     private val ERROR_RE =
         Regex("""error|failed|failure|fatal|exception|denied|错误|失败|异常|拒绝|不可用""", RegexOption.IGNORE_CASE)
@@ -1310,6 +1530,13 @@ object DshLogBus {
             }
         }
         if (rearm) armFlushJob()
+
+        // ★ R49/B-4：这一轮完整跑完了 ⇒ 清掉失败记忆。于是"故障消失后再犯"仍会**立刻**
+        //   记一行（而不是被当成上一次那条的第 N 次重复、静默吞掉）。
+        synchronized(flushFailureLock) {
+            flushFailureDesc = null
+            flushFailureRepeat = 0
+        }
     }
 
     /**
@@ -1356,6 +1583,11 @@ object DshLogBus {
                 fileWriteFailCounts.remove(f.absolutePath)
                 fileWriteDropWarned.remove(f.absolutePath)
             }
+            // ★ R49/B-2：这次写成功就是"这个文件恢复可写了"的**证据** —— 清掉它挂着的
+            //   失败状态（[logFileWriteFailure] 回 null），UI 横幅随之消失。
+            //   放在计数清零**之后**且用同一个判据（按路径），两条语义一致：
+            //   "同一路径的成功把这一轮失败收尾"。
+            clearFileWriteErrorIfPath(f.absolutePath)
             return
         }
         handleFileWriteFailure(w, failure)
@@ -1403,7 +1635,8 @@ object DshLogBus {
         val path = f.absolutePath
         val desc = "log file write failed: $path (${failure.javaClass.simpleName}" +
             (failure.message?.let { ": $it" } ?: "") + ")"
-        lastFileWriteError = desc
+        // ★ R49/B-2：走统一入口（同时置 [lastFileWriteError] 与 UI 订阅的那条流）
+        noteFileWriteError(path, desc)
 
         val attempt = synchronized(fileIoLock) {
             val c = (fileWriteFailCounts[path] ?: 0) + 1
@@ -1485,8 +1718,12 @@ object DshLogBus {
             if (f.length() <= FILE_MAX_BYTES) return
             val keepBytes = (FILE_MAX_BYTES / 2).toInt()
             val bytes = runCatching { f.readBytes() }.getOrElse { e ->
-                lastFileWriteError = "log file rotate failed: ${f.absolutePath} " +
-                    "(${e.javaClass.simpleName}${e.message?.let { ": $it" } ?: ""})"
+                // ★ R49/B-2：走统一入口（同时置 UI 订阅的那条流）
+                noteFileWriteError(
+                    f.absolutePath,
+                    "log file rotate failed: ${f.absolutePath} " +
+                        "(${e.javaClass.simpleName}${e.message?.let { ": $it" } ?: ""})"
+                )
                 return
             }
             // 按**字节**取尾部。从 keepBytes 处对齐到一个 UTF-8 字符的起始字节
@@ -1527,6 +1764,9 @@ object DshLogBus {
             fileWriteFailCounts.clear()
             fileWriteDropWarned.clear()
         }
+        // ★ R49/B-2：失败状态也是"单例状态"，同样不许泄漏给下一个用例（否则下个用例
+        //   一开始就看见一条本不属于它的横幅，接线断言会假绿）。
+        resetFileWriteErrorForTest()
     }
 
     /** Test hook: current number of resident per-instance streams (K10 cap regression anchor). */

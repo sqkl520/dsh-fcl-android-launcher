@@ -3,6 +3,7 @@ package com.tungsten.fcl;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.StrictMode;
 
@@ -78,7 +79,55 @@ public class FCLApp extends Application implements Application.ActivityLifecycle
         initStep("dshInstances", com.dsh.core.DshInstances::init);
         // 任务聚合（首页"进行中任务"区）需要 Application Context 来取 installer 实例
         initStep("appContext", () -> com.dsh.core.DshAppContextHolder.init(this));
+        // ★ L1 + L2（R49 架构）：把两项"core 需要、只有 UI 侧才知道"的能力注册给 core。
+        //   详见 registerUiCapabilitiesForCore 的注释（**关键**：这里刻意不用 initStep）。
+        registerUiCapabilitiesForCore();
         initStep("dshTasks", com.dsh.core.DshTasks::startDefault);
+    }
+
+    /**
+     * ★ L1 + L2（R49 架构）：core 对 UI 的两处依赖，全部在这一处反转成注入。
+     *
+     * ## L1：外壳入口
+     * `DshRuntimeService` 原先是 `Intent(context, DshMainActivity::class.java)` —— 全仓**唯一**
+     * 一条 `core → ui` 的编译期依赖。有它在，"core 可以独立于 ui 存在"这条分层前提就不成立。
+     * 现在 core 只认 `com.dsh.core.DshShellEntry`（一个 fun interface），"哪个类当外壳"
+     * 由本行（App 组装层）回答。**没有**改成"把 Activity 类名当字符串 / 反射"——
+     * 那只是把编译期依赖藏进运行时，问题原样保留。
+     *
+     * 未注册/注册失败也不崩：`DshRuntimeService.resolveShellIntent` 有三层退化
+     * （注册实现 → PM 的 LAUNCHER 入口 → 通知不挂点击目标），`R49LayeringFixTest` 逐个钉住。
+     *
+     * ## L2：取词 Context
+     * `DshUiText.contextOrNull()` 原先直接读 `FCLApp.getActivity()`。现在 core 只认
+     * `com.dsh.core.DshStringProvider`，由这里注入。返回 null = 此刻没有前台 Activity，
+     * core 会退到 `DshAppContextHolder.context` —— 与改造前"没有前台 Activity"同一条退路，
+     * 所以即便注入缺席也不会让任何文案比改动前更差。
+     *
+     * ## 为什么**不**用 initStep 包起来（与上面六步不同）
+     * `initStep` 的职责是"这一步可能抛，失败要登记并继续启动"。
+     * 这里两件事都**不可能抛**：
+     * 1. `register(...)` 的实现体是一个 `@Volatile` 引用赋值；
+     * 2. 传进去的 lambda **此刻不求值** —— `new Intent(...)` 与 `getActivity()` 都要等到
+     *    真正构建通知/取词时才会执行（而它们各自的调用点已有 runCatching 与退化）。
+     * 反过来，如果套上 `initStep`，`FCLApp.onCreate` 的受保护步骤就从 6 步变 8 步 ——
+     * 而 `R31StartupChainTest.everyInitStepIsGuardedIndividually` 用**硬编码 6** 钉住那条链
+     * （它的意图是"六个真步骤一个都不能漏"，不是"只许有六个"）。为一个不可能抛的动作去改
+     * 那条回归闸门的常数，等于用"放宽闸门"换"多包一层没用的 try"。
+     *
+     * ⚠️ 若将来这两处注册真的变成可能抛（例如在注册时就去解析某个资源），
+     * 正确的做法是**把它们拆成真正的 initStep 步骤并同步更新上面那条测试的期望值**，
+     * 而不是在这里加 try/catch —— 那会绕过"失败要落盘登记"这条取证要求。
+     */
+    private void registerUiCapabilitiesForCore() {
+        // L1：通知点回 App 的目标。**刻意不用** DshMainActivity.intentForShell：那个入口带
+        // FLAG_ACTIVITY_REORDER_TO_FRONT（给 WebView 页"返回外壳"用），而通知的语义是
+        // "把 App 拉到前台"，改造前就是裸 Intent + NEW_TASK|SINGLE_TOP（后两个标志由
+        // DshRuntimeService 统一补）。借那个入口等于顺手改了通知的启动语义。
+        com.dsh.core.DshNavigation.register(
+                context -> new Intent(context, com.dsh.ui.shell.DshMainActivity.class));
+        // L2：取词用的 Context（前台 Activity 优先，拿不到由 core 退回 App Context）。
+        com.dsh.core.DshStrings.register(() -> getActivity());
     }
 
     /**

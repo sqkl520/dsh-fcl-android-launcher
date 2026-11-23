@@ -153,6 +153,11 @@ class ProotProcessExecutor(
                             terminate(active)
                         }
                     } catch (_: InterruptedException) {
+                        // ★ R49 / W1-C-2：与本文件顶层 catch（见 Companion.reportRunFailure）同一规范 ——
+                        //   吞掉 InterruptedException 必须**恢复中断标志**，否则"本线程被要求退出"这条
+                        //   事实就此消失（Java 并发约定的硬要求）。当前这条线程跑一次就退出、恢复与否
+                        //   都不改变行为，但留下一个裸 `catch { }` 会让后来者以为"不恢复是允许的"。
+                        Thread.currentThread().interrupt()
                     }
                 }.apply { isDaemon = true; name = "dsh-proot-watchdog"; start() }
             } else null
@@ -316,6 +321,8 @@ class ProotProcessExecutor(
                     }
                 }
             } catch (_: InterruptedException) {
+                // ★ R49 / W1-C-2：同 [dsh-proot-watchdog] —— 恢复中断标志（规范一致性，见那里的说明）。
+                Thread.currentThread().interrupt()
             }
         }.apply { isDaemon = true; name = "dsh-proot-kill"; start() }
     }
@@ -734,10 +741,31 @@ object ProotRunner {
         /**
          * 在 pid 解析失败时打一条英文诊断行（R-LOG），包在 runCatching 里：诊断本身不许抛异常，
          * 否则"为失败加的诊断"反而把调用方（启动/停止路径）带崩。
+         *
+         * ★ R49 / W1-C-1：可见性从 `private` 放宽到 `internal` —— [ProotRunner.start] 在**预解析**
+         *   那一步的 `runCatching { handle.pid() }.onFailure { … }` 里要调它（Kotlin 的外层 object
+         *   够不到嵌套类的 `private` 成员，实测编译器报 `cannot access ... it is private in`）。
+         *   用 internal 而不是 public：只在模块内可见，不扩大对外 API。
+         *
+         * 为什么预解析的失败回调也要调它：[pid] 内部只在**解析结果为 -1** 时打诊断；若 [pid] 整个
+         * 抛了出去（今天不会 —— 三条路径各自包了 `runCatching`，但那条防线是**结构性的**、不是
+         * 不变式，将来新加代码或改坏守卫都可能让异常穿出），那行诊断**不会**出现，而
+         * [ProotRunner.start] 又把这个异常 `runCatching` 掉了 —— 于是 pid 静默为 -1、日志里一条
+         * 原因都没有。本处是**防御性接线**，不是修一个正在发生的 bug。
+         * 幂等：内部 `pidFailureLogged` 保证每个 Handle 只打一次，与 [pid] 自己那次互不重复。
+         *
+         * @param cause 让 [pid] 抛出去的那个异常（null = 只是解析结果为 -1，不是异常路径）。
+         *              有它时行尾追加 `thrown=<类名>: <message>` —— 否则只看 /proc 现场（tids/children/
+         *              差集）根本分不清"三条路都失败"与"某处抛了个 IllegalArgumentException"。
          */
-        private fun logPidFailureOnce() {
+        internal fun logPidFailureOnce(cause: Throwable? = null) {
             if (!pidFailureLogged.compareAndSet(false, true)) return
-            runCatching { DshLogBus.append("[proot] " + describePidFailure()) }
+            runCatching {
+                val thrown = cause?.let {
+                    "; thrown=" + it.javaClass.name + ": " + (it.message ?: "<no message>")
+                }.orEmpty()
+                DshLogBus.append("[proot] " + describePidFailure() + thrown)
+            }
         }
 
         /**
@@ -939,7 +967,13 @@ object ProotRunner {
         val handle = Handle(process, preExisting, identityMarkerFromArgv(spec.argv))
         // 立刻解析一次 pid 并缓存：此刻进程一定还活着、/proc 目录一定在。
         // 拖到调用方（DshRuntime 写 dsh.pid）再解析也行，但那时进程可能已经退出，白扫一遍。
-        runCatching { handle.pid() }
+        // ★ R49 / W1-C-1：这里过去是**裸** `runCatching { handle.pid() }` —— 一旦 pid() 整体抛出
+        //   （三条路径内部的 runCatching 之外的意外），异常被吞、pid 静默为 -1，而
+        //   `Handle.pid()` 自己的诊断（`if (resolved <= 0) logPidFailureOnce()`）根本没机会跑。
+        //   上层只剩一句"无法取得 proot 进程 pid"，看不出**为什么**（反射不可用？/proc 差集为空？
+        //   还是别的东西炸了）。这里补一次现场快照，与 [Handle.logPidFailureOnce] 同源（幂等，
+        //   不会与 pid() 内部那次重复）。
+        runCatching { handle.pid() }.onFailure { handle.logPidFailureOnce(it) }
         scope.launch(Dispatchers.IO) {
             // BL-045：与一次性路径（BL-002）同款 —— 单行 onLine 回调抛异常**不许跳出读循环**
             // （跳出会停止排空管道，child 写满 stdout 就憋在那里、onExit 也永远不来）。

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  R49 / E-5：全库尺寸的单一来源。
+
+  为什么要有这个文件：`8dp` 这个圆角原来在 4 个 drawable 里各写一次，而且写法还不统一
+  （两个写 `8.0dip`、两个写 `8dp`，见下面各条的原始行号）。改一个角等于改四处，
+  漏一处就是"这张卡片和那张卡片圆角不一样"这种只在截图对比时才看得出来的缺陷。
+
+  ★ 命名口径：`corner_radius` 这一档是**卡片/面板**圆角（8dp，全库最大宗）。
+    子元素单独改四角时用同一档的 `corner_radius_tl/tr/bl/br`，不要在旁边另写一个 8dp 字面量
+    —— 那样只是把"四处重复"变成"四处的其中三处重复"。
+
+  ★ 覆盖范围（R49 实测）：硬编码 8dp 圆角的 drawable 一共 **10 个**，不是任务单上写的 4 个。
+    以 `grep -rlE '="8dp"|="8\.0dip"' FCL/src/main/res/drawable/` 为准，清完该命令输出为空。
+      corner_radius      : bg_item_rounded, bg_game_menu, bg_log_console, dialog_background
+      corner_radius_tl.. : bg_container_white, bg_container_white_clickable,
+                           bg_item_rounded_top, bg_item_rounded_bottom,
+                           bg_tab_top_rounded, bg_right_menu
+-->
+<resources>
+    <!-- 卡片、对话框、日志控制台的统一圆角（原散落在 bg_item_rounded / bg_container_white /
+         bg_log_console / dialog_background 四个 drawable 里） -->
+    <dimen name="corner_radius">8dp</dimen>
+
+    <!-- 四角分开写的场合（GradientDrawable 的 <corners> 支持逐个指定）：
+         取值与 corner_radius 同源，改这一档时四个一起改才是"圆角变了" -->
+    <dimen name="corner_radius_tl">8dp</dimen>
+    <dimen name="corner_radius_tr">8dp</dimen>
+    <dimen name="corner_radius_bl">8dp</dimen>
+    <dimen name="corner_radius_br">8dp</dimen>
+</resources>

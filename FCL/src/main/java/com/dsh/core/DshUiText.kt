@@ -4,6 +4,68 @@ import android.content.Context
 import com.tungsten.fcllibrary.util.LocaleUtils
 
 /**
+ * core 从 ui / App 层要"取词用的 Context"的**最小契约**（L2 修复）。
+ *
+ * ## 为什么需要它
+ * 改造前 [DshUiText.contextOrNull] 直接写死了 `com.tungsten.fcl.FCLApp.getActivity()` ——
+ * core 层要取一句给用户看的文案，就得向 **UI 层要"当前前台 Activity"**。这是典型的
+ * UI 概念漏进 core：core 的字符串正确性取决于"此刻有没有 Activity 在前台"，
+ * 而这与"core 想表达什么"毫无关系。
+ *
+ * 现在 core 只认这个接口：由 App 组装层（本项目的 `FCLApp.onCreate` → `initStep("dshStrings", …)`）
+ * 注入一个实现，回答"拿哪个 Context 取词语言才正确"。
+ *
+ * ## 未注入时怎么办（**不能因此变差**）
+ * 返回 null 不是失败，是"没有更优的 Context 可用"：调用方 [DshUiText.contextOrNull] 会退到
+ * [DshAppContextHolder.context]（core 自己持有的 Application Context，只跟随系统语言）。
+ * 这是**与注入失败前完全同一条退路** —— 改造前后"拿不到前台 Activity"这一态的后果一模一样，
+ * 所以注入方即便整体失败也不会让现状回退。
+ *
+ * ## 为什么只有这一个方法
+ * 语言包装（`LocaleUtils.setLanguage`）留在 [DshUiText] 里，不进接口：它是**纯静态工具**
+ * （读 `launcher.lang` + `createConfigurationContext`），没有 Activity/全局 UI 状态，
+ * 不属于"UI 全局"。把它也塞进接口会让"注入失败 = 全部文案退回系统语言"，
+ * 那是把一个低风险重构变成本项目最忌讳的静默语言回归（BL-107 的全部意义就在于此）。
+ */
+fun interface DshStringProvider {
+    /** 当前前台 Activity 的 Context；没有则 null（**不是**错误，见接口 KDoc 的退化说明）。 */
+    fun foregroundContext(): Context?
+}
+
+/**
+ * [DshStringProvider] 的**可空注册点**（L2）。
+ *
+ * 与 [DshNavigation] 同一套形态与理由：注册方是 App 层，读取方是 core 的长驻链路
+ * （安装器 / 运行时 / 底座引导 / 任务聚合），读写不同线程 ⇒ `@Volatile` 保证可见性；
+ * 写入的是不可变引用，不需要锁。
+ */
+object DshStrings {
+
+    @Volatile
+    private var injected: DshStringProvider? = null
+
+    /** 当前注入取词 Context 的提供者；未注入为 null。 */
+    val provider: DshStringProvider?
+        get() = injected
+
+    @JvmStatic
+    fun register(provider: DshStringProvider) {
+        injected = provider
+    }
+
+    /**
+     * 撤销注入 —— 生产路径**永远不调**，只给单测夹具用。
+     *
+     * harness 在同一个 JVM 里跑全部测试类，注入过的假实现不还原就会漏给后面的用例
+     * （与 `DshAppContextHolder` 在 `R31Fix233Test.clearHolder` 里被还原同一理由）。
+     */
+    @JvmStatic
+    fun clear() {
+        injected = null
+    }
+}
+
+/**
  * 「给用户看的文案」该用哪个 Context 取。
  *
  * ## 为什么不能直接用调用方传进来的那个
@@ -18,7 +80,8 @@ import com.tungsten.fcllibrary.util.LocaleUtils
  * 英文界面下取到的仍然是中文** —— 换资源本身解决不了这件事，必须连"用哪个 Context 取"一起换。
  *
  * ## 做法
- * 优先取当前前台 Activity 的 Context（拿不到再退回 Application 的），并显式套一次
+ * 优先取当前前台 Activity 的 Context（由 [DshStringProvider] 注入，拿不到再退回
+ * [DshAppContextHolder] 的 Application Context），并显式套一次
  * [LocaleUtils.setLanguage] —— 后者返回的是 `createConfigurationContext(...)` 出来的新 Context，
  * 语言与用户在设置页选的一致。
  *
@@ -49,10 +112,15 @@ object DshUiText {
      *
      * 需要"整条链都兜住"的调用方请用 [getString]，或者自己给本方法套 try。
      * `DshBootstrap` 有 6 处直接消费本方法（`:361`/`:418`/`:591`/`:691` 等），它们不受兜底保护。
+     *
+     * ★ L2（R49）：**不再直接引用 `FCLApp.getActivity()`**。拿前台 Activity 这件事
+     * 收敛到 [DshStringProvider]，由 App 层注入（见 `FCLApp.onCreate` 的
+     * `initStep("dshStrings", …)`）。注入缺失/失败时走 [DshAppContextHolder.context]，
+     * 与改造前"没有前台 Activity"完全同一条退路 —— 不会让现状回退。
      */
     @JvmStatic
     fun contextOrNull(): Context? =
-        (com.tungsten.fcl.FCLApp.getActivity() ?: DshAppContextHolder.context)
+        (DshStrings.provider?.foregroundContext() ?: DshAppContextHolder.context)
             ?.applicationContext
             ?.let { localizedOrRaw(it) }
 

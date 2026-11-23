@@ -410,6 +410,32 @@ class DshLogsUI(
 
         binding.runtimeStatus.text = scopeLabel()
 
+        // ★ R49/B-2：落盘失败横幅的订阅。
+        //
+        //   为什么要订阅而不是读一次：DshLogBus 的语义是"**此刻**还在失败吗"——
+        //   同一个路径写成功后它会把值清回 null，横幅必须随之消失。读一次的话，
+        //   一次磁盘满会永久挂着一句"日志可能已丢失"，即使早就恢复了。
+        //
+        //   为什么用 StateFlow 而不是旧的 lastFileWriteError 字段：后者是**粘性**的
+        //   （排障要看历史，成功后不重置），拿它驱动横幅会让横幅永不消失。
+        //   两者分工见 DshLogBus.logFileWriteFailure 的 KDoc。
+        //
+        //   横幅本身在布局里（activity_dsh_logs.xml 的 write_failure_banner），
+        //   默认 gone；这里只切可见性 + 填文案。用 XML 而不是代码建 View：
+        //   代码建 View 时 auto_text_tint / ltColor 要走 ThemeEngine.registerEvent 手动刷，
+        //   而 XML 的 FCLTextView 自带那套（UI 审查 §6.2 记过这个坑）。
+        scope.launch {
+            DshLogBus.logFileWriteFailure.collect { err ->
+                val banner = binding.writeFailureBanner
+                if (err == null) {
+                    banner.visibility = android.view.View.GONE
+                } else {
+                    banner.visibility = android.view.View.VISIBLE
+                    banner.text = context.getString(R.string.dsh_logs_write_failed)
+                }
+            }
+        }
+
         // ★ 订阅源在**这里**定下来（理由见类注释：中途换流会让 lastRevision 错乱）
         val source = instanceId?.let { DshLogBus.snapshotFor(it) } ?: DshLogBus.snapshot
         scope.launch {

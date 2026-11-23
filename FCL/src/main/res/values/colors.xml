@@ -2,6 +2,24 @@
 <resources>
     <color name="default_theme_color">#7797CF</color>
     <color name="default_theme_color_dark">#4E77C1</color>
+    <!-- ===== R49 / E-2：Material「on」色 =====
+         这两条是 `colorOnPrimary` / `colorOnSecondary` 的取值。**不是**派生色，必须与
+         `colorPrimary` 同值改（R49 前它们三个都指向 default_theme_color，也就是
+         正文与背景同一个色，对比度 1:1，字等于消失）。
+
+         取值依据（实测 WCAG 对比度，底色 #7797CF）：
+           · #FFFFFF → 2.95:1  ✗ 连大字号 3:1 都不到
+           · #000000 → 7.11:1  ✓
+           · #0E0E0E → 6.54:1  ✓（与 @color/primary_text 的亮色值相同，全库正文色统一）
+         故取 #0E0E0E。它与 FCL 自己的 `ThemeData.autoTint` 同一取向（luminance ≥ 0.5 给黑，
+         `ThemeData.kt:55`）—— 两边都在这块蓝底上选深色文字。
+
+         ★ 为什么写**字面值**而不是 `@color/primary_text`：后者在 values-night 里被覆盖成
+           #FFFFFF（`values-night/colors.xml:3`），而 `default_theme_color` 在 values-night
+           里**没有**覆盖、仍是 #7797CF。跟着 primary_text 走就会在暗色模式下变回白字压蓝底
+           （2.95:1），等于把刚修好的问题在另一半场景里再犯一次。on 色由**底色**决定，
+           与亮暗模式无关，所以这里必须钉死。 -->
+    <color name="on_theme_color">#0E0E0E</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="ui_bg_color">#40F4F4F4</color>
@@ -10,6 +28,20 @@
     <color name="primary_text">#0E0E0E</color>
     <!-- 原 FCLLibrary 模块颜色（模块已并入 FCL） -->
     <color name="dialog_background">#F4F4F4</color>
+
+    <!-- ===== R49 / E-8：对话框内条目卡片底色 =====
+         `com/mio/ui/DialogCard.kt:16` 现在把 `#F8F8F8`（亮）/ `#323232`（暗）**硬编码在 Kotlin 里**，
+         既不在 FCL 色板中，也无法被 night 覆盖（夜间靠 `ThemeEngine.isNightMode()` 在代码里 if 一下）。
+         这里给出资源化的两档，等 Kotlin 侧改成 `context.getColor(R.color.dialog_card_bg)` 即可；
+         本次不动 .kt（见报告 W1-E §E-8）。
+
+         取值说明：
+           · 亮色沿用 #F8F8F8 —— 比 dialog_background(#F4F4F4) 略亮，卡片才从对话框底上"浮"出来；
+             反过来若比底色暗，就成了凹陷的输入框观感。
+           · 暗色沿用 #323232 —— 比 dialog_background(#232323) 略亮，同理靠**更亮**区分层级。
+         实测量化（相对 dialog_background 的对比度，都是"刚好可辨"这一档，不抢正文）：
+           亮色 #F8F8F8 / #F4F4F4 → 1.04:1；暗色 #323232 / #232323 → 1.23:1 -->
+    <color name="dialog_card_bg">#F8F8F8</color>
 
     <!-- ===== 日志控制台 =====
          底色取 **FCL 自己的中性面板色**（与 dialog_background 同值），**刻意不跟用户主题色**：

@@ -85,11 +85,24 @@ class DshAboutUI(context: Context) : DshPageUI(context, R.layout.ui_dsh_about) {
         }.isSuccess
         if (!ok) {
             com.dsh.core.DshLogBus.append("[about] external open failed, no browser handler? url=$url")
-            runCatching {
+            // ★ R49/D-1（BL-207 同款口径，此前只修了 WebView 页、漏了这里）：
+            //   兜底复制**自己也会失败**（剪贴板被占用 / 无 CLIPBOARD_SERVICE / 系统限制），
+            //   而这里原来是裸 `runCatching { ... }` —— 失败时既无日志，紧接着又弹
+            //   `open_link_failed`（"已自动复制链接，请手动粘贴"）。那句话在描述一件
+            //   **没有发生**的事，剪贴板里可能还是上一条旧内容，用户照着粘贴一个错的链接，
+            //   还会认定"这个 App 复制都不会"。所以失败必须单独留痕、单独措辞。
+            //   （文案键 dsh_copy_url_failed 三语齐全，见 values/values-zh/values-zh-rTW。）
+            val copied = runCatching {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("dsh link", url))
             }
-            android.widget.Toast.makeText(context, R.string.open_link_failed, android.widget.Toast.LENGTH_LONG).show()
+            if (copied.isFailure) {
+                com.dsh.core.DshLogBus.append("[about] copying link to clipboard also failed: ${copied.exceptionOrNull()}")
+                android.widget.Toast.makeText(context, R.string.dsh_copy_url_failed, android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                com.dsh.core.DshLogBus.append("[about] link copied to clipboard as browser-open fallback")
+                android.widget.Toast.makeText(context, R.string.open_link_failed, android.widget.Toast.LENGTH_LONG).show()
+            }
         }
     }
 

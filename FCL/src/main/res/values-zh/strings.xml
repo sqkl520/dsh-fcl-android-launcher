@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="upload_failed">上传失败：%s</string>
-    <string name="message_copy">复制成功！</string>
     <string name="world_time">yyyy 年 MM 月 dd 日 HH:mm:ss</string>
     <string name="open_link_failed">未能自动跳转至浏览器，已自动复制链接，请手动打开浏览器粘贴进入。</string>
     <string name="crash_reporter_title">崩溃报告</string>
@@ -21,11 +20,9 @@
     <string name="log_upload_open">打开</string>
     <string name="log_upload_share">分享</string>
     <string name="log_upload_share_template">我在启动器里遇到问题了，以下是日志链接：\n%s</string>
-    <string name="close">关闭</string>
     <string name="dsh_action_clear">清空</string>
         <string name="dsh_action_close">关闭</string>
         <string name="dsh_back_again_to_exit">再按一次返回键退出</string>
-        <string name="dsh_action_configure">去配置</string>
         <string name="dsh_action_copy">复制</string>
         <string name="dsh_action_delete">删除</string>
         <string name="dsh_action_download">下载</string>
@@ -37,13 +34,10 @@
              静态按钮文案，等旧布局退役后要一起删；详情页需要一条独立的、可随页面走的条目 -->
         <string name="dsh_action_open_web">打开界面</string>
         <string name="dsh_action_prepare_runtime">准备运行时</string>
-        <string name="dsh_action_refresh">刷新</string>
         <string name="dsh_action_reinstall">重新安装</string>
         <string name="dsh_action_retry">重试</string>
-        <string name="dsh_action_save">保存</string>
         <string name="dsh_action_settings">设置</string>
         <string name="dsh_action_start">启动</string>
-        <string name="dsh_action_start_anyway">仍然启动</string>
         <string name="dsh_action_stay">留在此页</string>
         <string name="dsh_action_stop">停止</string>
         <string name="dsh_action_verify_runtime">运行时自检</string>
@@ -55,11 +49,7 @@
         <string name="dsh_delete_title">删除实例</string>
         <!-- fix12：清单读取失败期间 delete() 直接拒绝（不写盘就不动目录），要把"为什么没删"说出来 -->
         <string name="dsh_delete_refused">无法删除：实例清单读取失败中</string>
-        <string name="dsh_disk_usage">占用空间：%1$s</string>
-        <string name="dsh_download_error">加载失败：%1$s</string>
         <string name="dsh_download_show_prerelease">显示预览版</string>
-        <string name="dsh_download_title">安装 dsh 版本</string>
-        <string name="dsh_download_warning">当前展示的是缓存数据（%1$s）</string>
         <string name="dsh_install_cancelled">已取消安装</string>
         <string name="dsh_install_done">已安装 %1$s</string>
         <!-- 安装失败原因：只要能从 npm 的输出里认出是哪一类，就说清楚"是什么 + 怎么办"。
@@ -85,17 +75,17 @@
              与实例卡片的 dsh_state_broken（损坏）是措辞差异，不是同一句话 ——
              版本页每行就是一个版本、角标紧挨安装按钮，语境已把它锚定在"这个版本"上。 -->
         <string name="dsh_installed_broken">安装失败</string>
-        <string name="dsh_install_skipped">%1$s 已安装，可直接启动</string>
-        <!-- fix12 / E6-4：详情页动作行按 DispatchReason 分叉。dsh_install_skipped 仍是"安装入口
-             发现目标版本已就绪，于是跳过"（带版本号）；下面两条是不带版本号的**结论**文案，
-             给"你点的这个版本已经装好了"和"这个版本正在装"两种状态用。 -->
+        <!-- fix12 / E6-4：详情页动作行按 DispatchReason 分叉。这里只留两条不带版本号的
+             **结论**文案，给"你点的这个版本已经装好了"和"这个版本正在装"两种状态用。
+             （带版本号的 `dsh_install_skipped` 已在 R49 作为死资源删除：它的两处旧调用点已改走
+             `DshDownloadViewModel.kt:437` 的 `DispatchReason` 与
+             `DshInstanceSettingPage.kt:1054` 的 `dsh_install_in_flight`，
+             历史注释指出它对"安装中"的实例是说谎文案。） -->
         <string name="dsh_install_already_installed">该版本已安装，可直接启动</string>
         <string name="dsh_install_in_flight">该版本正在安装中</string>
-        <string name="dsh_instance_gone">实例已不存在</string>
         <string name="dsh_instance_subtitle">版本 %1$s · 端口 %2$s · %3$s</string>
         <!-- 实例详情页：一个实例 = 一个页面，页内再用 tab 切运行/日志/配置。
              标题带上实例名，是因为从通知或外壳菜单直接跳进来时用户看不到来源列表 -->
-        <string name="dsh_instance_detail_title">实例：%1$s</string>
         <string name="dsh_instance_detail_tab_run">运行</string>
         <string name="dsh_instance_detail_tab_logs">日志</string>
         <string name="dsh_instance_detail_tab_config">配置</string>
@@ -103,7 +93,6 @@
         <!-- 详情页是在实例已消失（在别处被删）时也可能被打开的页面，需要一句兜底文案 -->
         <string name="dsh_instance_detail_empty">该实例已不存在</string>
         <string name="dsh_instances_empty">还没有实例。\n点击左侧「版本」标签安装一个 dsh 版本。</string>
-        <string name="dsh_instances_title">DeepSeek Harness</string>
         <!-- fix12：实例清单（manifest）读/写失败时的横幅与拒写反馈。四条一组 ——
              横幅（load/write）+ 横幅上的重试 + 重试又失败。前两条是"这一屏的事"，
              后两条是"用户点了重试之后"，所以顺序不能按字母排。 -->
@@ -118,12 +107,10 @@
         <string name="dsh_logs_clear_confirm">确定清空当前视图的全部日志？此操作无法撤销。</string>
         <string name="dsh_logs_copied">日志已复制到剪贴板</string>
         <string name="dsh_logs_empty">暂无日志</string>
-        <string name="dsh_logs_path">日志文件：%1$s</string>
         <!-- 日志页顶部的范围标示：同一个日志组件要同时服务"全部实例"与"单个实例"两种视角，
              不标出来用户无法判断自己看的是谁的日志 -->
         <string name="dsh_logs_scope_app">应用日志（全部实例）</string>
         <string name="dsh_logs_scope_instance">%1$s 的日志</string>
-        <string name="dsh_logs_title">运行日志</string>
         <string name="dsh_name_required">名称不能为空</string>
         <string name="dsh_notify_running">运行中</string>
         <string name="dsh_notify_starting">启动中…</string>
@@ -141,6 +128,8 @@
         <string name="dsh_reason_deleted">实例被删除</string>
         <string name="dsh_reason_from_notification">从通知栏停止</string>
         <string name="dsh_reason_service_recycled">已停止：后台服务被系统回收</string>
+        <!-- R49/H-2（审计 P2-6）：停止未完成的失败原因。不带占位符，pid 由代码补成「(pid=N)」。 -->
+        <string name="dsh_reason_stop_incomplete">停止未完成：dsh 进程可能仍在运行。请重新启动该实例以清理它。</string>
         <string name="dsh_start_port_in_use">端口被占用（EADDRINUSE）。下次启动会自动改用系统分配的端口。</string>
         <string name="dsh_task_deleted">已删除</string>
         <string name="dsh_task_deleted_with_leftover">已删除（有文件残留）</string>
@@ -151,19 +140,12 @@
         <string name="dsh_notify_text">%1$s · %2$s</string>
         <string name="dsh_reinstall_pick_version">还没有成功安装过任何版本，请到「版本」页选择一个版本。</string>
         <string name="dsh_runtime_exited">dsh 进程已退出（退出码 %1$d）</string>
-        <string name="dsh_saved">已保存</string>
         <!-- fix12：拒写期改名/改端口的反馈。dsh_saved 只说"成了"，而 saveAsync() 返回 false
              时内存里改了、盘上没有，必须明说"没保存"以及原因（清单不可写）。 -->
         <string name="dsh_change_not_saved">未保存：实例清单当前不可写</string>
-        <string name="dsh_settings_model">模型</string>
-        <string name="dsh_settings_name_hint">实例名称</string>
-        <string name="dsh_settings_port_hint">端口（留空＝自动分配）</string>
-        <string name="dsh_settings_profile">Profile</string>
         <string name="dsh_settings_section_env">运行环境</string>
         <string name="dsh_settings_section_instance">实例配置</string>
         <string name="dsh_settings_section_maintain">维护</string>
-        <string name="dsh_settings_title">实例设置</string>
-        <string name="dsh_settings_version">已安装 dsh：%1$s</string>
         <string name="dsh_size_calculating">正在统计体积…</string>
         <string name="dsh_stage_prepare">正在准备 Node 运行时并安装 dsh…</string>
         <!-- ▼ 安装阶段：脚本输出的是**稳定 key**（`[setup] STAGE=<key> [args]`），
@@ -210,29 +192,19 @@
         <string name="dsh_tab_instances">实例</string>
     <string name="dsh_tab_versions">版本</string>
     <string name="dsh_tab_settings">设置</string>
-    <string name="dsh_settings_no_instance">还没有实例，请先到"下载"页创建一个。</string>
     <string name="dsh_right_current_instance">当前实例</string>
     <string name="dsh_right_no_instance">暂无实例</string>
     <string name="dsh_action_open_webui">打开界面</string>
     <string name="dsh_setting_group_common">通用</string>
     <string name="dsh_setting_group_runtime">运行环境</string>
     <string name="dsh_setting_group_dsh">DeepSeek Harness</string>
-    <string name="dsh_setting_group_hint">FCL 启动器设置</string>
     <string name="dsh_setting_language">语言</string>
     <string name="dsh_setting_language_desc">跟随系统语言</string>
     <string name="dsh_setting_about">关于本启动器</string>
     <string name="dsh_setting_runtime_check">运行时自检</string>
     <string name="dsh_setting_runtime_check_desc">检查 proot、rootfs、Node.js 与启动脚本状态</string>
-    <string name="dsh_setting_logs">运行日志</string>
-    <string name="dsh_setting_logs_desc">查看 dsh 安装与运行日志</string>
-    <string name="dsh_setting_download">dsh 版本管理</string>
-    <string name="dsh_setting_download_desc">浏览并安装不同版本的 DeepSeek Harness</string>
-    <string name="dsh_setting_instance">实例管理</string>
-    <string name="dsh_setting_instance_desc">管理实例名称、API Key、模型、profile 与端口</string>
     <string name="dsh_setting_export_logs">复制日志</string>
     <string name="dsh_setting_export_logs_desc">将当前日志复制到剪贴板</string>
-    <string name="dsh_setting_theme_coming">主题模式设置将在下一步接入 ThemeEngine</string>
-    <string name="dsh_about_version">版本：%1$s</string>
     <string name="dsh_action_open">打开</string>
     <string name="dsh_setting_group_appearance">外观</string>
     <string name="dsh_setting_theme_mode">主题模式</string>
@@ -306,8 +278,6 @@
     <string name="dsh_setup_state_running">进行中</string>
     <string name="dsh_setup_state_failed">失败</string>
     <string name="dsh_setup_hint_space">首次准备需要约 1.5 GB 可用空间，耗时可能几分钟。已装过的设备升级所需空间远小于此。</string>
-    <string name="dsh_setup_enter">进入</string>
-    <string name="dsh_setup_running_now">正在准备运行环境</string>
     <string name="dsh_tasks_header">进行中</string>
     <string name="dsh_tasks_cancel">取消</string>
     <string name="dsh_tasks_stop">停止</string>
@@ -334,8 +304,6 @@
     <string name="dsh_home_must_be_absolute">必须是运行环境内的绝对路径（以 / 开头）</string>
     <string name="dsh_home_no_dot_segments">路径里不能包含 . 或 .. 这样的相对段（请填写输入框下方显示的完整路径）</string>
     <string name="dsh_home_not_guest_root">不能用 / —— 那是运行环境的根目录，不是工作区。请选一个子目录，例如 /opt/dsh/instances/...</string>
-    <string name="dsh_settings_row_key">API Key</string>
-    <string name="dsh_settings_row_key_status">连接状态</string>
     <string name="dsh_settings_row_version">已安装 dsh</string>
     <string name="dsh_settings_row_disk">占用空间</string>
     <string name="dsh_settings_row_path">实例路径</string>
@@ -348,11 +316,7 @@
     <string name="dsh_settings_desc_open_browser">立刻用浏览器打开 dsh 界面</string>
     <string name="dsh_settings_desc_open_browser_unavailable">没有可用的浏览器，请改用「复制访问链接」</string>
     <string name="dsh_settings_desc_name">显示在实例列表里的名字</string>
-    <string name="dsh_settings_desc_model">对话使用的模型</string>
-    <string name="dsh_settings_desc_profile">启动时加载的 dsh profile</string>
     <string name="dsh_settings_desc_port">留空表示自动分配端口</string>
-    <string name="dsh_settings_desc_key">只保存在本机，Keystore 加密</string>
-    <string name="dsh_settings_desc_key_status">上一次测试或读取的结果</string>
     <string name="dsh_settings_desc_path">点击复制到剪贴板</string>
     <string name="dsh_settings_desc_copy_url">点击复制带本次会话访问凭据的链接</string>
     <string name="dsh_settings_desc_verify">在 proot 内跑一遍最小链路（9 项）</string>
@@ -482,4 +446,5 @@
     <string name="dsh_file_edit_empty_message">launcher.patch.yml 清空后，启动器就不再传 --patch，/assets 缓存头和 HMR 轮询间隔这两条优化会一起失效。dsh 本身仍能正常启动。确定要保存吗？</string>
     <string name="dsh_file_edit_running">先停止实例，再改它的配置</string>
     <string name="dsh_file_edit_backup_note">上一份内容会在同目录留一个 .bak 备份。</string>
+    <string name="dsh_logs_write_failed">日志写入文件失败，最近的记录可能已丢失。请清理存储空间后重试。</string>
 </resources>

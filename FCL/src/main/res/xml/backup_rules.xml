@@ -12,4 +12,12 @@
 -->
 <full-backup-content>
     <exclude domain="file" path="dsh/" />
+    <!-- ★ R49 S-15：WebView 的 cookie 库不在 dsh/ 下，而是 filesDir 的**兄弟目录** app_webview/。
+         它存着 dsh 的会话 cookie（服务端有效期 30 天）—— 进了云备份/换机迁移就等于把
+         一个仍有效的登录凭据复制到另一台设备。与 dsh/ 的排除理由不同：不是体积，是凭据。
+         另外 app_textures / cache 之类没有备份价值，一并排除减少配额占用。 -->
+    <exclude domain="file" path="app_webview/" />
+    <exclude domain="file" path="app_textures/" />
+    <exclude domain="database" path="webviewCookiesChromium.db" />
+    <exclude domain="database" path="webviewCookiesChromiumNoPartition.db" />
 </full-backup-content>

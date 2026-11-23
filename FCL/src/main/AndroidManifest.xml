@@ -14,6 +14,29 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- ★ R49/S-13（F-4）：包可见性声明。
+         没有它时（targetSdk=30+ 的默认行为），`resolveActivity` / `queryIntentActivities`
+         对本 App **恒返回 null/空** —— 于是"我们把带 token 的 URL 交给了哪个 App"这件事
+         在代码里**无法校验、也无法记录**（旧注释就写着"targetSdk=34 ⇒ resolveActivity 恒 null"）。
+         外跳用的是隐式 `ACTION_VIEW`，接收方由系统挑，装了恶意 App 并注册 http(s) VIEW 的设备上
+         一次"在浏览器中打开"就把活 token 交出去了（拿到即换 30 天 cookie）。
+
+         这里只声明**外跳真正会用的那两种** intent（http / https 的 VIEW），
+         不写 `<package>` 白名单、不开 `QUERY_ALL_PACKAGES` —— 可见面收到最小：
+         本 App 只需要知道"谁能打开一个网页链接"。
+         有了它之后 `externalBrowserIntent()` 才能①优先用 `CATEGORY_BROWSABLE` 收窄到浏览器，
+         ②把实际接收方包名记进日志（排障与取证都要）。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
     <application
         android:name="com.tungsten.fcl.FCLApp"
         android:allowBackup="true"

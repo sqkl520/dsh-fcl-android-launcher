@@ -152,7 +152,20 @@ object DshWebViewCompat {
             fun restoreClient() {
                 if (restored) return
                 restored = true
+                // ★ R49/D-2：还原**自己也会失败**（WebView 已销毁 / render 进程已崩 /
+                //   posted 任务跑在 detached view 上）。原来的裸 `runCatching {}` 把它吞了 ——
+                //   而上面那段注释刚点明这处失败的后果是"自伤型诊断 bug"：
+                //   宿主那套 onPageFinished/401 处理没装回去，页面**加载成功**但界面永远停在
+                //   "加载中"。用户报障时贴回来的日志里会一个字节都没有，我们连"诊断步骤自己
+                //   把宿主弄坏了"这个假设都提不出来。
+                //   记日志（而不是 Toast）：用户在门禁框前面，弹提示只会和框抢视线。
                 runCatching { webView.webViewClient = originalClient }
+                    .onFailure {
+                        DshLogBus.append(
+                            "[webview-compat] restore original WebViewClient FAILED — " +
+                                "host page callbacks may be missing (page will load but appear stuck loading): $it"
+                        )
+                    }
             }
             val probeClient = object : android.webkit.WebViewClient() {
                 override fun onPageFinished(view: android.webkit.WebView?, u: String?) {

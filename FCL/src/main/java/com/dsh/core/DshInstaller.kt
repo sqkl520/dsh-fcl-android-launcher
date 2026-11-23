@@ -1116,7 +1116,7 @@ class DshInstaller(
             return false
         }
 
-        val instancePathInRootfs = "${ProotCommand.GUEST_ROOT}/instances/${instance.id}"
+        val instancePathInRootfs = DshPaths.instanceGuestDir(instance.id)
         // 本次安装真正写进 dsh-install.pid 的 pid（0 = 本次没解析到/没写）。
         // ★ AtomicLong 而不是普通变量：回调来自 [ProotProcessExecutor.run] 的 pid 解析侧，
         //   与读它的 finally 不一定同线程。CAS(0, pid) 同时保证"只认第一次回调"（防御重放）。
@@ -1413,7 +1413,21 @@ class DshInstaller(
      * @return 版本号（判定"安装完整"时）；不完整返回 null
      */
     private fun readInstalledVersion(instance: DshInstance, requestedVersion: String?): String? {
-        val dir = DshPaths.effectiveDshDir(instance.id)
+        // ★ R49 / BL-250：**必须**用 ownDshDir（只管实例自己的树），不能用 effectiveDshDir。
+        //
+        //   effectiveDshDir（DshPaths.kt:196-201）在实例目录没有 package.json 时**回退到
+        //   rootfs/opt/dsh-preinstalled/**。用它判"这个实例装好了没"的后果：
+        //   一个从没装过任何东西的实例，只要 rootfs 自带预装 dsh，就会被判"安装完整"。
+        //
+        //   触发点就在下面两处调用（:573 取消后复查 / :595 npm 成功但产物残缺）：
+        //   目录空也标 READY + 任务区报「取消时其实已装完」，而用户实际用的是**预装那份**。
+        //
+        //   这行代码自己的邻居早把坑写出来了 —— DshPaths.kt:212-222 给 effectiveDshPackageJson
+        //   打的 @Deprecated 文案就是「本函数会回退预装，**用它判'装好了没'会复活预装冒充**」，
+        //   而当时 effectiveDshDir 本身没标 @Deprecated，所以这个调用点 IDE 不报警。
+        //
+        //   口径与 nodeModulesBudgetBytes（:942-949）一致：判"这个实例"只能看实例自己的树。
+        val dir = DshPaths.ownDshDir(instance.id)
         val fromDisk = readVersionFromPackageJson(File(dir, "package.json"))
         if (fromDisk != null && !File(dir, "lib/bin.js").isFile) {
             // 实例级：缺入口文件是**这个实例**装坏了（"能读出版本却启动不了"的原因就在这行）。

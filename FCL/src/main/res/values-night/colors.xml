@@ -4,6 +4,11 @@
     <!-- 原 FCLLibrary 模块颜色（模块已并入 FCL） -->
     <color name="dialog_background">#232323</color>
 
+    <!-- R49 / E-8：对话框内条目卡片底色（暗色档）。亮色档见 values/colors.xml 同名项。
+         原先是 DialogCard.kt:16 里的字面量 `#323232`，硬编码 + 无法被资源系统覆盖。
+         比 dialog_background(#232323) 略亮，卡片才从对话框底上浮出来。 -->
+    <color name="dialog_card_bg">#323232</color>
+
     <!-- ===== 日志控制台（暗色）=====
          与 values/colors.xml 里的同名项一一对应；只覆盖这 6 个，其余颜色沿用默认值。
          暗色下底色换成深中性色，5 个分级色相应**提亮并降饱和** —— 把亮色那套深色值直接搬到暗底上
