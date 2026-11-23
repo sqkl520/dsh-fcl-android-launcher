@@ -69,7 +69,7 @@ cd <仓库根>
 > 早期打包曾把 APK 放那里，后来统一改到 `output/`。
 
 第二轮加固（2026-09-22）后，assets 里的 `version` 与 `scripts/version` 已提到 **2**
-（子项版本变化会触发增量重解压）。**之后脚本又迭代多次，当前 `scripts/version` = 13**；
+（子项版本变化会触发增量重解压）。**之后脚本又迭代多次，当前 `scripts/version` = 23**；
 rootfs 的 `version` 已改为版本串形式（`debian-…-slim1`，见 `ROOTFS.md`），不再是整数。
 
 > **fix22（code 128）** 新增了 `scripts/launcher-assets.mjs`，`scripts/version` 11 → 12 ——
@@ -170,9 +170,19 @@ proot 二进制来源：proot-distro 项目的预编译产物、termux 的 proot
 ## 密钥与令牌（安全约定）
 
 - **出货签名私钥不入库（T-D1，2026-10-19 起）**：`release-key/dsh-release.jks`（密码在
-  `local.properties` 的 `dsh.pwd`）——两仓的排除清单都加了 `/release-key/`；本机另有
+  `local.properties` 的 `dsh.pwd`）——`release-key/`、`*.jks`、`*.keystore`、`dsh.pwd`
+  都写进了**受版本控制的 `.gitignore`**（2026-11-23 修正，见下）；本机另有
   `D:\Backup\dsh-release-key-2026-10-19\` 离线备份（换机/灾备时从备份恢复，不要只依赖一处）。
   旧包签名用的 `.config/debug-key.jks`（与 FCL 上游同 blob、密码公开）**只再用于 fordebug 调试通道**。
+
+  > **2026-11-23 修正（R49 BUILD 审查 🔴）**：这段原先写的是「两仓的排除清单都加了
+  > `/release-key/`」，**与事实不符**——当时它只在 `.git/info/exclude` 里，而那是
+  > `.git` 内部的、不受版本控制的文件，新机器 clone 下来是空的。
+  > 实测：fresh clone 后把 `release-key/` 放回工作区，`git add -A --dry-run` 第一行
+  > 就是 `add 'release-key/dsh-release.jks'`，即**私钥会被提交到公开仓**。
+  > 现在已补进 `.gitignore`（每个 clone 都带），fresh clone 复测确认私钥不再被暂存。
+  > 教训：**"排除清单"有两套，只有 `.gitignore` 跟着仓库走；`info/exclude` 是本地约定，
+  > 不能作为唯一防线。**
 - **API key 不再落盘、不再经启动器**：0.1.5 起 Key 完全由 dsh 自己管
   （启动器**不再保存、不再注入、不再在启动前检查**，旧版的 `credentials.env` / `credentials.enc`
   会在启动时自动删除，见 `RELEASES.md` 0.1.5 升级须知）。

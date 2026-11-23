@@ -10,7 +10,7 @@
 ![Version](https://img.shields.io/badge/version-0.1.6--SNAPSHOT-orange?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20arm64-blue?style=flat-square)
 ![No Root](https://img.shields.io/badge/root-not%20required-success?style=flat-square)
-![Tests](https://img.shields.io/badge/unit%20tests-1060%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/unit%20tests-1096%20passing-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 **不需要 root** · **不需要电脑** · **不花一分钱** —— 装个 APK 就能在手机上跑 dsh
@@ -96,7 +96,7 @@ Android App (本仓库)
 | 发行版 | **Debian 12 bookworm arm64**（瘦身后约 148 MB，内置 Node 22） |
 | 运行时 | **Node.js 22** + npm，用来装 dsh 及其依赖 |
 | 界面 | Android **WebView** 加载 `http://127.0.0.1:<port>/` |
-| 测试 | 自制 MiniRunner（1060 条单测）+ 运行时脚本自检（33 条） |
+| 测试 | 自制 MiniRunner（1096 条单测）+ 运行时脚本自检（40 条） |
 
 技术选型细节见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)，
 无 root 的原理见上方「W^X 绕过」。
@@ -145,7 +145,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 修复轮次 **fix26**（R45：`launcher.patch.yml` 不再整份覆盖，保留用户配的 provider） | ✅ 已发布（code 132，当前最新） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
-**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **1060/1060** · 脚本自检 33/33
+**质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **1096/1096** · 脚本自检 40/40
 （每轮修复都跑全量；关键修复均钉成断言）
 
 > 版本号唯一真源仍是 `gradle.properties` 的 `dshVersion` / `dshVersionCode`；

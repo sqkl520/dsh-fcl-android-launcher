@@ -17,7 +17,7 @@
 | adb 可执行文件 | `D:\Android\Sdk\platform-tools\adb.exe`（**未加 PATH**） | 本机 `ls` 已核对存在 |
 | adb 版本 | 1.0.41 / 37.0.1 | 本机 `adb version` |
 | 安装后包名 | **fix6 起出货包**：`com.dsh.fcl.androidlauncher`（无后缀）；**调试通道**（`assembleFordebug`）：`com.dsh.fcl.androidlauncher.debug` | `FCL/build.gradle.kts`：`applicationId`（+ fordebug 的 `applicationIdSuffix=".debug"`） |
-| 当前版本 | `0.1.6-SNAPSHOT-fix6`（code 112） | `gradle.properties` 的 `dshVersion` / `dshFixLabel` |
+| 当前版本 | `0.1.6-SNAPSHOT-fix40`（code 146） | `gradle.properties` 的 `dshVersion` / `dshFixLabel` |
 | APK 产物 | `output/dsh-fcl-android-launcher-<ver>-arm64.apk` | `build-apk.sh`，本机 `output/` 已有 0.1.3/0.1.4/0.1.5 |
 | 应用私有根 | `<filesDir>/dsh/`，debug 包 filesDir = `/data/data/com.dsh.fcl.androidlauncher.debug/files` | `DshPaths.kt` |
 | 运行日志 | `<filesDir>/dsh/logs/runtime.log`（DshLogBus 落盘，1MB 轮转） | `DshPaths.kt:90` |
