@@ -276,8 +276,44 @@ if [ -n "$NEWER" ]; then
 fi
 
 
-rm -rf "$OUT" "$TESTOUT"
-mkdir -p "$OUT" "$TESTOUT"
+# ★ 每次运行用**私有**产物目录，不再删共用路径。
+#
+# 原来的写法是 `rm -rf "$OUT" "$TESTOUT"`（$HARNESS 固定为 /tmp/dsh-test-harness）。
+# 本仓常有多个 Agent / 多个会话并发跑本脚本 —— 一个进程刚把测试类编译进 $TESTOUT，
+# 另一个进程的 `rm -rf` 就把它删了。症状极具误导性：
+#   · `NoClassDefFoundError: com/dsh/SomeTest$Inner`（其实是内部类 .class 被删）
+#   · 测试编译失败 / 运行到一半类加载不到
+#   · 更糟：偶发红、重跑又绿，让人以为是**产品**有 flaky 缺陷
+# 实测两次踩到（同一份代码连跑三次，FAILED 依次是 2 / 0 / 1）。
+#
+# 现在：进程启动时把 $OUT/$TESTOUT 快照成**按 PID 命名**的私有目录，之后全脚本只用私有路径。
+# 代价是多占一份临时空间（几百 MB 级，跑完即弃），换来并发安全 —— 值。
+# 清理：跑完正常退出时删除自己的那份；异常退出留下的由下一次运行按"owner 已死"回收。
+RUN_ID="$$"
+PRIV="$HARNESS/run-$RUN_ID"
+PRIV_OUT="$PRIV/out"
+PRIV_TESTOUT="$PRIV/testout"
+# ★ 先挂 trap 再干活：本脚本是 `set -u`（未定义变量即报错），若 trap 里直接引用 $PRIV
+#   而退出发生在 PRIV 赋值之前（比如下面建目录失败），trap 自己会再抛一次 unbound variable。
+#   用默认值展开 `:-` 兜住，并保证 trap 不改变原退出码（最后一条命令恒为 true）。
+trap 'rm -rf "${PRIV:-}" 2>/dev/null; true' EXIT INT TERM
+
+# 回收孤儿：找出 run-* 里 PID 已不存在的。`kill -0` 判存活是 POSIX，dash/busybox 都支持。
+for _d in "$HARNESS"/run-*; do
+  [ -d "$_d" ] || continue
+  _owner=${_d##*/run-}
+  case "$_owner" in ''|*[!0-9]*) continue ;; esac   # 不是纯数字就别碰（不是我们建的）
+  [ "$_owner" = "$RUN_ID" ] && continue
+  if kill -0 "$_owner" 2>/dev/null; then continue; fi
+  rm -rf "$_d" 2>/dev/null || true
+done
+
+rm -rf "$PRIV"
+mkdir -p "$PRIV_OUT" "$PRIV_TESTOUT" || { echo "!! 建不出私有产物目录：$PRIV"; exit 1; }
+OUT="$PRIV_OUT"
+TESTOUT="$PRIV_TESTOUT"
+echo "== 产物目录（本进程私有）：$PRIV =="
+
 
 # --- 1) JUnit 桩 + MiniRunner -------------------------------------------------
 # 桩要跟着测试源码用到的 API 长。缺一个方法，症状是"测试编译失败"而不是"测试失败" ——
