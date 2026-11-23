@@ -35,7 +35,13 @@ CODE=$(sed -n 's/^dshVersionCode=//p' "$PROPS" 2>/dev/null | tr -d '\r' | head -
 if [ -n "$VER" ]; then ok "gradle.properties: dshVersion=$VER (code=$CODE)"; else bad "gradle.properties 缺少 dshVersion="; VER="?"; fi
 
 # 文档里声明的版本号：只在「声明处」比对，不在历史记录里比对
-#   声明处 = INDEX.md 的「当前版本」、README.md 的 badge、CHANGELOG.md 的「版本：」
+#   声明处 = README.md / README-EN.md 的 badge、docs/RELEASES.md 的 `## <版本>` 标题
+# ★ 2026-11-23 修：去掉了 docs/INDEX.md 与 docs/CHANGELOG.md 两条。
+#   这两个文件是**内部文档**，已移到 D:\Projects\_dsh-internal-docs，在本仓库既不存在
+#   （`ls` 确认 no such file）也不被 Git 跟踪，同时已列进 ws-tools/exclude.source-repo。
+#   保留它们只会每跑一次体检就打两行「缺少 …」的假噪音，掩盖真正的问题。
+# ★ 反过来也要守住：以后谁把声明版本号的文档移出/改名，必须同时迁移这里的校验，
+#   否则版本号就失去了一处守卫 —— 那正是本脚本存在的唯一理由。
 check_decl() {
   f="$1"; pat="$2"; label="$3"
   [ -f "$f" ] || { warn "缺少 $f"; return; }
@@ -48,9 +54,7 @@ check_decl() {
   elif [ "$got" = "$VER" ] || [ "$got_base" = "$ver_base" ]; then ok "$label = $got"
   else bad "$label = $got（应为 $VER）"; fi
 }
-check_decl "$SRC/docs/INDEX.md"     's/.*当前版本：`\([^`]*\)`.*/\1/p'          "docs/INDEX.md「当前版本」"
-check_decl "$SRC/docs/CHANGELOG.md" 's/.*｜ \*\*版本\*\*：`\([^`]*\)`.*/\1/p'  "docs/CHANGELOG.md「版本」"
-# docs/RELEASES.md 是**面向用户**的发布说明（两仓共用、会推到公开仓），最新那版必须与真源一致。
+# docs/RELEASES.md 是**面向用户**的发布说明（会推到公开仓），最新那版必须与真源一致。
 # 格式是 `## <版本>` 开头的二级标题；取第一个匹配（文件按"最新在最上面"排）。
 # ★ fix 后缀豁免：最新段的标题是产物版本串 `## 0.1.6-SNAPSHOT-fix26`，而本脚本校验的
 #   `dshVersion` 是 `0.1.6-SNAPSHOT`（fix 包不升 dshVersion，只递增 code，这是故意的）。

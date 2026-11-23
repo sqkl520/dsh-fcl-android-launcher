@@ -63,8 +63,16 @@ echo "== 2/3 Gradle 打包 arm64（release = 出货变体，T-D1 2026-10-19 起�
 #   不再由本脚本出包。release 变体签名需要 local.properties 的 dsh.pwd（或 DSH_KEYSTORE_PASSWORD）。
 ./gradlew --no-daemon -Darch=arm64 :FCL:assembleRelease
 
-APK=$(find FCL/build/outputs/apk/release -type f -name '*.apk' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)
-[ -n "$APK" ] || { echo "!! 找不到 APK 输出"; exit 1; }
+# ★ 不要用 `find … -printf '%T@ %p\n'`：`-printf` 是 **GNU find 扩展**，BSD/macOS 的 find
+#   和 Android 的 toybox find 都不支持。真机实测：`find: bad arg '-printf'`（rc=1），
+#   于是 APK 取不到、报「找不到 APK 输出」——而出包本身其实已经成功。
+#   （同样的原因，tools/run-tests.sh 也在注释里明令禁止 `find -printf %T@`，见 R25/E5-07。）
+#   改用 `ls -t`：mtime 降序，取第一行即"最新"，与原 `sort -nr | head -1` 语义一致；
+#   POSIX + toybox + BSD 全支持（写法对齐 tools/e2e-device.sh 的取包方式）。
+# ★ `set -eu` 下 glob 无匹配会让 ls 返回非 0 —— 用 `2>/dev/null | head -1` 把 pipeline
+#   状态收成 head 的 0，再显式判断结果为空，从而给出人话报错而不是被 set -e 静默吞掉。
+APK=$(ls -t FCL/build/outputs/apk/release/*.apk 2>/dev/null | head -1)
+[ -n "$APK" ] && [ -f "$APK" ] || { echo "!! 找不到 APK 输出（FCL/build/outputs/apk/release/ 下没有 *.apk）"; exit 1; }
 
 # ★ 出货三查（T-D1 起；锐评"发布错位"整改的一部分）：包名必须无 .debug、必须**不** debuggable、
 #   versionName 必须与 gradle.properties 一致。badging 读不到时（aapt2 缺失）跳过并提示，

@@ -45,6 +45,10 @@ __pycache__/
 /bebug.txt
 /docs/CHANGELOG.md
 /docs/INDEX.md
+# ★ 2026-11-23（R49/A-5）：真机实测记录，曾被 commit 进公开仓（尚未 push 到远端，
+#   已 `git rm --cached` 摘除）。内容是内部审查素材（设备型号 / 磁盘余量 / agent 并行编排），
+#   公开仓是面向用户的，不该收。盘上文件保留，不进 Git。
+/docs/PLAN-SANDBOX-ROUND49.md
 /docs/LESSONS.md
 /docs/PROJECT_REVIEW_AND_OPTIMIZATION.md
 /docs/PLAN-SANDBOX.md

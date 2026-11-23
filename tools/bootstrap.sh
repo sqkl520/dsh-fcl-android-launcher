@@ -37,10 +37,27 @@ case "${1:-}" in
 esac
 TARGET="${1:-}"
 SRC_URL="$SRC_URL_DEFAULT"
-shift 2>/dev/null || true
+# ★ 只能 shift 1（吃掉已读进 $TARGET 的那个位置参数）。
+#
+#   原来这里写的是 `shift 2>/dev/null || true`，有两处错：
+#   (1) `2>/dev/null` 被 shell 当成重定向 → 等价于 `shift`（无参，只移 1 个）。
+#       看起来"碰巧正确"，但那只是重定向歪打正着，读代码的人会以为移了 2 个。
+#   (2) 更严重：POSIX 规定非交互 shell 里**特殊内建**（shift 就是）出错会直接终止 shell，
+#       `|| true` 拦不住。`$#` 为 0 时（`sh bootstrap.sh --check` / `--install-excludes`
+#       走完各自的 shift 后就是 0）dash 直接退出 2 —— 实测 `--check` 在 dash 下根本跑不起来。
+#   改成显式守卫：有参数才移 1 个，没有就什么都不做。
+if [ $# -gt 0 ]; then shift; fi
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo) shift; SRC_URL="${1:?--repo 后面要跟 URL}" ;;
+    --repo)
+      shift
+      # ★ 这里不能用 `"${1:?--repo 后面要跟 URL}"`：dash 会把 `:?` 消息里的**非 ASCII 字节
+      #   追加到值上**（实测 `set -- https://e/x.git; X="${1:?中文}"` → `https://e/x.git中文`，
+      #   纯 ASCII 消息不复现）。后果是 SRC_URL 变成 `https://…/repo.git后面要跟`，
+      #   git fetch 必然失败，报错还是个看着像 URL 的乱码串。改成显式判断 + 纯 ASCII 消息。
+      [ -n "${1:-}" ] || die "--repo needs a URL argument"
+      SRC_URL="$1"
+      ;;
     *) die "未知参数：$1" ;;
   esac
   shift
@@ -76,7 +93,13 @@ check)
   if [ -d "$TOOLS/.git-ws-snapshot" ]; then
     echo "  [WARN] .git-ws-snapshot 还在（快照仓已于 2026-11-23 决定删除，可手动移除）"
   fi
-  grep -q '源码仓要忽略的路径' "$TOOLS/.git/info/exclude" 2>/dev/null \
+  # ★ R49 W1-A 发现的既有缺陷：这里原来 grep 的是 '源码仓要忽略的路径'，
+  #   而规范副本的标题是 '源码仓（.git）要忽略的路径'（中间多「（.git）」）——
+  #   模式永不匹配，于是这条检查**恒报 FAIL**，即使 exclude 装得好好的。
+  #   后果是 `--check` 永远说「布局不完整」，用户会去重装一遍 exclude（无害但白折腾），
+  #   更糟的是真出问题时这条检查已经失去判别力（永远 FAIL = 永远没信息）。
+  #   改用能容纳括号的宽模式，同时允许标题措辞微调。
+  grep -qE '源码仓.*要忽略的路径' "$TOOLS/.git/info/exclude" 2>/dev/null \
     && ok "源码仓 info/exclude 已安装" || no "源码仓 info/exclude 未安装（跑 --install-excludes）"
   [ -f "$TOOLS/FCL/src/main/assets/dsh/rootfs/rootfs.tar.xz" ] && ok "rootfs.tar.xz 已就位" || no "rootfs.tar.xz 缺失（见 docs/ROOTFS.md）"
   [ -f "$TOOLS/local.properties" ] && ok "local.properties 已配置" || no "local.properties 缺失（见 docs/ENVIRONMENT.md §1.2）"
