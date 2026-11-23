@@ -21,6 +21,11 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# ★ TOOLS：同族脚本都住在 tools/ 里（2026-11-23「工作流脚本纳入源码仓」之后）。
+#   本脚本自身就在 tools/ 下，所以直接用它自己的目录 —— 不要再用 $ROOT/xxx.sh：
+#   根目录一个 .sh 都没有，那样写会让第 1 步就 exit 1，而且报错文案是"体检未通过"，
+#   把"脚本不存在"误报成"体检不合格"（R49 BUILD 审查发现，这是 release.sh 原先完全跑不起来的原因）。
+TOOLS=$(cd "$(dirname "$0")" && pwd)
 if [ -n "${SRC:-}" ]; then SRC="$SRC"; elif [ -f "$ROOT/settings.gradle.kts" ]; then SRC="$ROOT"; else SRC="$ROOT/dsh-fcl-android-launcher"; fi
 [ -d "$SRC/FCL" ] || { echo "!! 找不到源码仓库：$SRC（用 SRC=<路径> 指定）"; exit 1; }
 
@@ -60,7 +65,7 @@ echo "############################################################"
 
 echo
 echo "== 1/6 一致性体检 =="
-if [ "$DRY" = "1" ]; then echo "+ sh $ROOT/check-sync.sh"; else sh "$ROOT/check-sync.sh" || { echo "!! 体检未通过，先修上面的 FAIL"; exit 1; }; fi
+if [ "$DRY" = "1" ]; then echo "+ sh $TOOLS/check-sync.sh"; else sh "$TOOLS/check-sync.sh" || { echo "!! 体检未通过，先修上面的 FAIL"; exit 1; }; fi
 
 # 体检之后，源码仓必须是干净的 —— 否则"提交"那步会把你没想提交的东西一起提交
 DIRTY_S=$(git -C "$SRC" status --porcelain | tr -d '\r')
@@ -73,12 +78,12 @@ fi
 
 echo
 echo "== 2/6 编译校验 =="
-if [ "$DRY" = "1" ]; then echo "+ sh $ROOT/run-compile.sh"; else sh "$ROOT/run-compile.sh"; fi
+if [ "$DRY" = "1" ]; then echo "+ sh $TOOLS/run-compile.sh"; else sh "$TOOLS/run-compile.sh"; fi
 
 if [ "$DO_TEST" = "1" ]; then
   echo
   echo "== 3/6 单测 =="
-  if [ "$DRY" = "1" ]; then echo "+ sh $ROOT/run-tests.sh"; else sh "$ROOT/run-tests.sh"; fi
+  if [ "$DRY" = "1" ]; then echo "+ sh $TOOLS/run-tests.sh"; else sh "$TOOLS/run-tests.sh"; fi
 else
   echo; echo "== 3/6 单测（--no-test 跳过）=="
 fi
@@ -86,7 +91,7 @@ fi
 echo
 if [ "$DO_BUILD" = "1" ]; then
   echo "== 4/6 打包 =="
-  if [ "$DRY" = "1" ]; then echo "+ sh $ROOT/build-apk.sh"; else sh "$ROOT/build-apk.sh"; fi
+  if [ "$DRY" = "1" ]; then echo "+ sh $TOOLS/build-apk.sh"; else sh "$TOOLS/build-apk.sh"; fi
 else
   echo "== 4/6 打包（--no-build 跳过）=="
 fi

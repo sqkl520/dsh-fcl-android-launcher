@@ -11,6 +11,20 @@ build/
 *.iml
 local.properties
 
+# ---- ★ 签名私钥：永远不进版本控制 ----
+#
+# R49 BUILD 审查的 🔴：`release-key/` 原先只写在 `.git/info/exclude` 里，
+# 而那个文件**在 .git 内部、不受版本控制** —— 新机器 clone 下来它是空的。
+# 实测复现：fresh clone 后把 release-key/ 放回工作区，`git add -A --dry-run`
+# 第一行就是 `add 'release-key/dsh-release.jks'`，即**私钥会被提交到公开仓**。
+#
+# 所以必须在 .gitignore（受版本控制、每个 clone 都带）里再写一遍。
+# 这是唯一能保证"任何机器上都不会误提交私钥"的位置。
+/release-key/
+*.jks
+*.keystore
+dsh.pwd
+
 # ---- 大文件：超 GitHub 单文件 100MB 限制，且都能重建 ----
 *.apk
 !*.apk.part*

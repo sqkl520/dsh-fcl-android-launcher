@@ -92,8 +92,24 @@ fi
 echo "== 3/3 落交付目录 + 版本快照 =="
 mkdir -p "$OUT_DIR" "$ARCHIVE_DIR"
 OUT="$OUT_DIR/${NAME}.apk"
-# 先删旧文件再 mv：避免「同名且 Gradle 产物更新」时 mv 变成覆盖失败/半写
-rm -f "$OUT"
+# ★ 目标已存在 ⇒ **先改名备份，绝不删除**（项目红线，见 MEMORY.md「output 老版本 APK 永不删」）。
+#
+#   原来这里是 `rm -f "$OUT"; mv "$APK" "$OUT"` —— 同版本重打包时会**静默销毁上一份 APK**。
+#   这正是 2026-10-19 那次事故的同一形态：`rm -f` 覆盖了当时唯一一份 0.1.6 正式包，
+#   且尚未发布到 GitHub Release、无任何外部备份，导致"修之前的版本"永久丢失。
+#   R49 BUILD 审查用 /tmp 复现了这条：旧 fix40 的内容被新产物覆盖、无任何残留。
+#
+#   为什么要备份而不是直接覆盖：output/ 是本机唯一集齐全版本的目录，老版本是
+#   "修之前/之后"的对照基准 + 回滚手段。哪怕别处有备份，这里也不许删。
+if [ -f "$OUT" ]; then
+  # 时间戳后缀：同一秒内重复出包会撞名，所以撞名时再加序号（不覆盖已存在的备份）。
+  _bak="$OUT_DIR/${NAME}.$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || date +%Y%m%d%H%M%S).bak"
+  _n=1
+  while [ -e "$_bak" ]; do _bak="${_bak%.bak}-$_n.bak"; _n=$((_n + 1)); done
+  mv "$OUT" "$_bak" || { echo "!! 备份旧 APK 失败（拒绝覆盖，中止）：$OUT -> $_bak"; exit 1; }
+  echo "   [keep] 已备份旧 APK：$(basename "$_bak")"
+  echo "          （红线：output/ 内老版本永不删除，只改名保留）"
+fi
 mv "$APK" "$OUT"
 
 # ★ 不再往 apk-archive/ 复制一份二进制（同一份内容占 300MB，纯浪费）。
