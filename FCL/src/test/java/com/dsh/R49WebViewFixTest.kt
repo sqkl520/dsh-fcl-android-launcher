@@ -584,13 +584,81 @@ class R49WebViewFixTest {
 
     // ============================================================ 源码读取/切片工具
 
-    /** 去掉 `//` 行注释与 `/* */` 块注释 —— 源码断言必须只看**代码**，注释里提到旧写法不算回归。 */
+    /**
+     * 去注释（**必须认字符串字面量**）。
+     *
+     * ## 为什么原来的实现是危险的（R2-TESTS §5.1 实测造成假绿）
+     *
+     * 原来那一版（用占位描述，避免把块注释的结束符写进 KDoc 里）：
+     * ```
+     * 第一步：用正则把「斜杠星号 … 星号斜杠」整段删掉（DOT_MATCHES_ALL）
+     * 第二步：逐行找「双斜杠」，把它之后的内容全切掉
+     * ```
+     * 它逐行按 `//` 切 —— 而**字符串里的 `//` 也会被切掉**。
+     *
+     * 实测用例：把 `urlSkeleton(url)` 改成 `"RAW=${url}"`（故意让 token 裸泄），
+     * 那条断言 `assertFalse(body.contains("RAW=${url}"))` 本该红，
+     * 但因为 `"RAW=${url}"` 里的内容被当成注释剥掉了，**测试全绿**。
+     * 这一条不是"判别力弱"，是**给了假的安全感**：真泄漏时它说没事。
+     *
+     * ## 现在
+     *
+     * 逐字符状态机：进 `"` 之后不再把 `//` 当注释起始；支持 `\"` 转义；
+     * 支持 Kotlin 原始字符串 `"""…"""`（里面 `//` 更不该被当注释，且无转义）；
+     * 剥掉的字符替换成空格、保留换行，报错信息里行号仍对得上。
+     *
+     * 与 `R49LayeringFixTest` / `R49LogBusFixTest` / `R49InstallPathDivergenceTest`
+     * 里那几份同语义（R2-TESTS §5.3 指出五份实现有三种行为、没有一份正确处理 `"""` ——
+     * 这几份现已统一）。
+     */
     private fun stripComments(text: String): String {
-        val noBlock = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL).replace(text, "")
-        return noBlock.lines().joinToString("\n") { line ->
-            val idx = line.indexOf("//")
-            if (idx >= 0) line.substring(0, idx) else line
+        val sb = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            val n = if (i + 1 < text.length) text[i + 1] else '\u0000'
+            when {
+                // 原始字符串 """…"""：整段原样保留（内部无转义，// 不是注释）
+                c == '"' && n == '"' && i + 2 < text.length && text[i + 2] == '"' -> {
+                    sb.append("\"\"\""); i += 3
+                    while (i + 2 < text.length &&
+                        !(text[i] == '"' && text[i + 1] == '"' && text[i + 2] == '"')) {
+                        sb.append(text[i]); i++
+                    }
+                    if (i + 2 < text.length) { sb.append("\"\"\""); i += 3 }
+                }
+                // 普通字符串：整段原样保留（含 \" 转义），内部的 // 不是注释
+                c == '"' -> {
+                    sb.append(c); i++
+                    while (i < text.length && text[i] != '"') {
+                        if (text[i] == '\\' && i + 1 < text.length) { sb.append(text[i]); i++ }
+                        if (i < text.length) { sb.append(text[i]); i++ }
+                    }
+                    if (i < text.length) { sb.append(text[i]); i++ }
+                }
+                // 字符字面量 '/':  别把它当成注释起始
+                c == '\'' -> {
+                    sb.append(c); i++
+                    while (i < text.length && text[i] != '\'') {
+                        if (text[i] == '\\' && i + 1 < text.length) { sb.append(text[i]); i++ }
+                        if (i < text.length) { sb.append(text[i]); i++ }
+                    }
+                    if (i < text.length) { sb.append(text[i]); i++ }
+                }
+                c == '/' && n == '/' -> {
+                    while (i < text.length && text[i] != '\n') { sb.append(' '); i++ }
+                }
+                c == '/' && n == '*' -> {
+                    sb.append("  "); i += 2
+                    while (i + 1 < text.length && !(text[i] == '*' && text[i + 1] == '/')) {
+                        sb.append(if (text[i] == '\n') '\n' else ' '); i++
+                    }
+                    if (i + 1 < text.length) { sb.append("  "); i += 2 }
+                }
+                else -> { sb.append(c); i++ }
+            }
         }
+        return sb.toString()
     }
 
     fun mainSourceText(): String = mainSourceRaw()

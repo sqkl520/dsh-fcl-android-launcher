@@ -24,6 +24,61 @@ import java.io.File
  */
 class R49InstallPathDivergenceTest {
 
+    // ===== DshPaths 的初始化：**必须自己做，不许依赖执行顺序** ==============
+    //
+    // R2-TESTS §6.1 实测：`DshPaths.INSTANCES_DIR` 是 `lateinit`，JVM 单测没有 Context
+    // 就没有 `loadPaths()`。全量跑能过，纯粹因为按字母序排在我前面的某个类留下过残留 ——
+    // 而用 `TEST_SRC=<子集>` 单独跑（run-tests.sh 注释里**明确推荐给并发 agent 用**的跑法）
+    // 会 5 条里红 3 条：`UninitializedPropertyAccessException: lateinit property INSTANCES_DIR`。
+    //
+    // 那是**假红**：它污染每个人对自己改动的判断，也让我这组测试的价值归零
+    // （谁会相信一个单独跑就红的测试？）。
+    //
+    // 修法：自己用反射把 DshPaths 的字段设进一个临时目录，跑完复原。
+    // 与 `DshInstancesPersistenceTest.setUpPathsForAdoptionTest` 同一手法。
+
+    private var savedPaths: Map<java.lang.reflect.Field, Any?> = emptyMap()
+    private var tmpRoot: File? = null
+
+    @org.junit.Before
+    fun setUpDshPaths() {
+        val root = java.nio.file.Files.createTempDirectory("dsh-r49-paths").toFile()
+        tmpRoot = root
+        savedPaths = DshPaths::class.java.declaredFields.associateWith { f ->
+            f.isAccessible = true
+            runCatching { f.get(DshPaths) }.getOrNull()
+        }
+        fun set(name: String, value: Any) {
+            runCatching {
+                val f = DshPaths::class.java.getDeclaredField(name)
+                f.isAccessible = true
+                f.set(DshPaths, value)
+            }
+        }
+        set("ROOT_DIR", root.absolutePath)
+        set("ROOTFS_DIR", File(root, "rootfs").absolutePath)
+        set("INSTANCES_DIR", File(root, "instances").absolutePath)
+        set("INSTANCES_MANIFEST", File(root, "instances.json").absolutePath)
+        set("SCRIPTS_DIR", File(root, "scripts").absolutePath)
+        set("NPM_CACHE_DIR", File(root, "npm-cache").absolutePath)
+        set("LOG_FILE", File(root, "logs/runtime.log").absolutePath)
+        set("TARBALL_CACHE_DIR", File(root, "tarballs").absolutePath)
+        set("TMP_DIR", File(root, "tmp").absolutePath)
+        set("isLoaded", true)
+        File(root, "instances").mkdirs()
+    }
+
+    @org.junit.After
+    fun tearDownDshPaths() {
+        savedPaths.forEach { (f, v) ->
+            f.isAccessible = true
+            runCatching { f.set(DshPaths, v) }
+        }
+        savedPaths = emptyMap()
+        runCatching { tmpRoot?.deleteRecursively() }
+        tmpRoot = null
+    }
+
     // ===== BL-250：判"装好了没"的目录来源不许回退预装 ==================
 
     /**
