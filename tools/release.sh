@@ -154,7 +154,23 @@ if [ "$DO_RELEASE" = "1" ]; then
         while (first < last && lines[first] ~ /^[[:space:]]*$/) first++
         for (i = first; i <= last; i++) print lines[i]
       }' "$SRC/docs/RELEASES.md" > "$NOTES"
-    [ -s "$NOTES" ] || printf '# %s\n\n（docs/RELEASES.md 里没有 %s 段落）\n' "$RELVER" "$SEC_PREFIX" > "$NOTES"
+    # ★ R49 修正：抽不到本版段落 ⇒ **中止**，不许发占位文案。
+    #
+    #   原来这里是 `|| printf '# %s\n\n（docs/RELEASES.md 里没有 %s 段落）\n' > "$NOTES"`
+    #   —— 写一行"没找到段落"然后**照常发布**。这是一条静默失败路径：正文抽空了，
+    #   流程不报警、不退出，用户看到的就是一句"没有段落"。
+    #
+    #   真实事故形态：用一段临时代码抽正文时版本串拼错（拼成 `0.1.6-SNAPSHOT-0.1.6-SNAPSHOT-fixNN`），
+    #   13 个 release 的正文全空。当时若走的是这个脚本，13 个都会发成"没有段落"。
+    #   发布是不可随意重来的对外动作，宁可停下来让人补文档。
+    if [ ! -s "$NOTES" ]; then
+      echo "!! 在 docs/RELEASES.md 里找不到 $SEC_PREFIX 的段落（版本串 $RELVER）" >&2
+      echo "   发布中止。请先补上该版本的说明，或用 grep 确认段落标题写法：" >&2
+      echo "     grep -n '^## ' \"$SRC/docs/RELEASES.md\" | head" >&2
+      echo "   注意标题必须是 '## $RELVER'（与 gradle.properties 的 dshVersion + dshFixLabel 同源）。" >&2
+      exit 1
+    fi
+
     # ★ 只附一行 sha256 —— 学 Aegis / NewPipe 的做法：正文里不再重复文件名和体积。
     #   APK 附件就在本页面上（GitHub 自己会列出文件名与大小），再写一遍纯属噪音；
     #   校验值本身有用（防止下到半截的包），保留但压成一行。

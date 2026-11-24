@@ -121,13 +121,30 @@ FIXLBL=$(sed -n 's/^dshFixLabel=//p' "$PROPS" 2>/dev/null | tr -d '\r' | head -1
 if [ -n "$FIXLBL" ]; then
   # 只在能拿到远端时比对（离线检查跳过，避免把"查不到"报成"没发布"）
   if command -v git >/dev/null 2>&1; then
-    _latest_tag=$(git -C "$SRC" tag --list 'v*-fix*' --sort=-v:refname 2>/dev/null | head -1 | tr -d '\r')
+    # ★ R49 修正：必须读**远端** tag，不能用 `git tag --list`（那是本地的）。
+    #   实测本机 32 个 tag、远端 46 个 —— 差的正是 fix27~fix40，因为从来没
+    #   `git fetch --tags` 过。于是这段会稳定输出一句与事实相反的话：
+    #   「代码是 fix40，但最新 tag 只到 fix26 —— fix40 尚未发布」，而它早就发布了。
+    #   那句注释本身写着"只 WARN 不 FAIL：是否发布是人的决定"，但**信号内容是错的**，
+    #   比不报更有害：下次有人据此去补发，会发现已经发过了。
+    #   `ls-remote` 直接问远端，不依赖本地是否 fetch 过。
+    #   失败时（离线 / 无权限）退回本地 tag，并把结论标成"未核实"而不是"没发布"。
+    _remote_tags=$(git -C "$SRC" ls-remote --tags origin 2>/dev/null | sed -n 's|.*refs/tags/||p' | grep -v '\^{}' )
+    if [ -n "$_remote_tags" ]; then
+      _latest_tag=$(printf '%s\n' "$_remote_tags" | grep -E '^v.*-fix[0-9]+$' | sort -V 2>/dev/null | tail -1)
+      _tag_source="远端"
+    else
+      _latest_tag=$(git -C "$SRC" tag --list 'v*-fix*' --sort=-v:refname 2>/dev/null | head -1 | tr -d '\r')
+      _tag_source="本地（未取到远端，结论不可靠）"
+    fi
+    _latest_tag=$(printf '%s' "$_latest_tag" | tr -d '\r\n')
     if [ -n "$_latest_tag" ]; then
       _latest_fix=$(echo "$_latest_tag" | sed -n 's/.*-\(fix[0-9]*\)$/\1/p')
       if [ "$_latest_fix" = "$FIXLBL" ]; then
-        ok "最新 tag $_latest_fix 与 dshFixLabel=$FIXLBL 一致"
+        ok "最新 tag ${_latest_fix} 与 dshFixLabel=$FIXLBL 一致（来源：$_tag_source）"
       else
-        warn "代码是 $FIXLBL，但最新 tag 只到 ${_latest_fix:-（无）} —— $FIXLBL 尚未发布，文档不要说它是'当前验证包'"
+        warn "代码是 $FIXLBL，但最新 tag 只到 ${_latest_fix:-（无）}（来源：$_tag_source）—— 若远端确实没有 $FIXLBL 的 tag，说明尚未发布"
+
       fi
     fi
   fi
