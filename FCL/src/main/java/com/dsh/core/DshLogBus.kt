@@ -1562,6 +1562,9 @@ object DshLogBus {
      */
     private fun appendToFile(w: FileWrite) {
         val f = w.file
+        // ★ R49 验收修正：rotateIfTooBig 自己吞异常，所以"append 成功"不等于"本轮完全成功"。
+        //   单独拎出来，见下方 if 的判据与 rotateIfTooBig 的 KDoc。
+        var rotatedButFailed = false
         val failure = runCatching {
             // K11: serialize file mutations on [fileIoLock], NOT the producer [lock]. flush() calls
             // this off-lock, but two overlapping flushes (e.g. flushNow() racing the scheduled job)
@@ -1573,11 +1576,22 @@ object DshLogBus {
                 // ★ 单次进程生命周期内日志可能无限增长（长驻 agent 能连续跑几天），
                 // 光靠 attachFile 时截断是不够的：这里在每次落盘后检查一次，超限就只留尾部。
                 // 实例文件同理：历史遗留的超大文件会在它第一次被写入时被裁到尾部。
-                rotateIfTooBig(f)
+                //
+                // ★★ R49 验收修正（R2-RELIABILITY §3a，**真 bug**）：
+                //   rotateIfTooBig **自己吞异常**（内部 `.getOrElse` 记进 lastFileWriteError），
+                //   所以它失败时这块的 `exceptionOrNull()` 仍是 null ⇒ 下面走"写成功"分支
+                //   ⇒ clearFileWriteErrorIfPath 把刚置的失败**在同一个调用栈里立刻清掉**。
+                //   实测发射序列 `SET → NULL`。
+                //
+                //   而"日志文件超限 + 轮转读失败"恰恰是**最需要横幅**的场景
+                //   （设备磁盘快满）。所以必须把 rotate 的结果单独拎出来：
+                //   append 成功 ≠ 这一轮完全成功。
+                val rotated = rotateIfTooBig(f)
+                if (!rotated) rotatedButFailed = true
             }
         }.exceptionOrNull()
 
-        if (failure == null) {
+        if (failure == null && !rotatedButFailed) {
             // 写成功：该文件的连续失败计数清零（下一轮失败重新从 1 计；丢弃警告也可再发）
             synchronized(fileIoLock) {
                 fileWriteFailCounts.remove(f.absolutePath)
@@ -1590,7 +1604,12 @@ object DshLogBus {
             clearFileWriteErrorIfPath(f.absolutePath)
             return
         }
-        handleFileWriteFailure(w, failure)
+        // ★ rotatedButFailed 时 failure 通常是 null（append 成功了，是轮转自己吞了异常
+        //   并已 noteFileWriteError 置位）。这里**不能再置一次**失败状态 —— 那会重复计数、
+        //   让重试封顶提前触发。只需要**不清**：即跳过上面的 clearFileWriteErrorIfPath 分支。
+        //   所以这一支直接 return，不调 handleFileWriteFailure。
+        if (rotatedButFailed) return
+        handleFileWriteFailure(w, failure ?: return)
     }
 
     /**
@@ -1712,10 +1731,24 @@ object DshLogBus {
      * 现有测试 `rotateTruncatesOversizedFileToTail` 全程用 `"line-$n"` 纯 ASCII，
      * 1 字符 = 1 字节，两个口径恰好相等，把这个 bug 掩盖了。
      */
-    private fun rotateIfTooBig(f: File) {
-        if (f.length() <= FILE_MAX_BYTES) return
+    /**
+     * 超限就把文件裁到尾部一半。
+     *
+     * ★ R49 验收修正（R2-RELIABILITY §3a）：**返回是否真的成功**（含"不需要轮转"= true）。
+     *
+     * 为什么必须返回：这个函数**自己吞异常**（`getOrElse` 里 noteFileWriteError + return），
+     * 于是调用方 [appendToFile] 看到的外层 `exceptionOrNull()` 是 null，
+     * 会把"append 成功但轮转失败"当成完全成功，进而调用
+     * [clearFileWriteErrorIfPath] 把刚置的失败**在同一个调用栈里立刻清掉**
+     * （实测发射序列 SET → NULL）。
+     *
+     * 而"日志文件超限 + 轮转读失败"恰恰是最需要横幅的场景（磁盘快满）。
+     * 所以把"轮转失败"与"append 失败"分开报：append 成功 ≠ 本轮完全成功。
+     */
+    private fun rotateIfTooBig(f: File): Boolean {
+        if (f.length() <= FILE_MAX_BYTES) return true
         synchronized(fileIoLock) {
-            if (f.length() <= FILE_MAX_BYTES) return
+            if (f.length() <= FILE_MAX_BYTES) return true
             val keepBytes = (FILE_MAX_BYTES / 2).toInt()
             val bytes = runCatching { f.readBytes() }.getOrElse { e ->
                 // ★ R49/B-2：走统一入口（同时置 UI 订阅的那条流）
@@ -1724,7 +1757,7 @@ object DshLogBus {
                     "log file rotate failed: ${f.absolutePath} " +
                         "(${e.javaClass.simpleName}${e.message?.let { ": $it" } ?: ""})"
                 )
-                return
+                return false
             }
             // 按**字节**取尾部。从 keepBytes 处对齐到一个 UTF-8 字符的起始字节
             // （continuation byte 形如 10xxxxxx），否则会切出半个汉字。
@@ -1736,7 +1769,8 @@ object DshLogBus {
             if (newline >= 0 && newline + 1 < tail.size) {
                 tail = tail.copyOfRange(newline + 1, tail.size)
             }
-            f.writeBytes(tail)
+            // 写回失败也算轮转失败（磁盘满时最可能在这里失败）。
+            return runCatching { f.writeBytes(tail) }.isSuccess
         }
     }
 
