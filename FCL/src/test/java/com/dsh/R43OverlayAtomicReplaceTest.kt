@@ -116,13 +116,25 @@ class R43OverlayAtomicReplaceTest {
         //   SP-08 要守的其实只有一件事：**不许删 target**（删了再 rename，rename 一失败
         //   目标位置就空了，上一份可用 overlay 也没了）。所以判据改成"对 target 的删除"。
         //
-        //   三种写法都要覆盖（原注释也这么说）：
-        //     target.delete()  /  targetFile.delete()  /  先赋给变量再删
-        //   用"变量名里含 target 或 overlay 的 X.delete()"来近似 —— 比裸 delete( 精确，
-        //   又不必做真正的数据流分析。
-        val deletesTarget = Regex(
-            """\b(?:target|targetFile|overlay|overlayFile)\s*\.\s*delete\s*\("""
-        ).containsMatchIn(body)
+        // ★ R49 审计补正：我第一版写成 `\b(?:target|targetFile|overlay|overlayFile)\s*\.\s*delete\s*\(`，
+        //   并在注释里宣称"三种写法都要覆盖，包括先赋给变量再删"。**审计实测：注释比实现强。**
+        //   那个正则对 `target?.delete()`、`target.toPath().toFile().delete()`、
+        //   `Files.deleteIfExists(target.toPath())`、`File(..., LAUNCHER_PATCH_OVERLAY).delete()`
+        //   全部不命中 —— 也就是说"删 target"至少有四种写法能骗过它。
+        //
+        //   现在改成"先取 delete 的**接收者表达式**，再看接收者里有没有 target 系标识符"，
+        //   覆盖别名之外的链式/安全调用/静态调用/构造再删。判据库本身的规格见
+        //   [R49DeleteGuardRegexTest]（那边逐写法钉了期望，含一条**如实标注的能力边界**：
+        //   `val t = target; t.delete()` 纯文本判据抓不到，需要数据流分析）。
+        val callSites = Regex("""([\w.$?()\[\], ]+?)\s*(?:\?\.)?\s*\.\s*delete(?:IfExists)?\s*\(""")
+            .findAll(body).toList()
+        val deletesTarget = callSites.any { m ->
+            val receiver = m.groupValues[1]
+            val tail = body.substring(m.range.first, minOf(body.length, m.range.last + 80))
+            Regex("""\b(?:target|targetFile|overlay|overlayFile)\b""").containsMatchIn(receiver) ||
+                receiver.contains("LAUNCHER_PATCH_OVERLAY") ||
+                (receiver.endsWith("Files") && Regex("""\btarget\b""").containsMatchIn(tail))
+        }
         assertFalse(
             "★ SP-08 复发：writeLauncherPatchOverlay 的可执行代码里删了 **target** —— " +
                 "先删旧 overlay 再 rename 会制造毁数据窗口（删成功、rename 失败 ⇒ 目标位置" +
@@ -290,13 +302,26 @@ class R43OverlayAtomicReplaceTest {
         //   的变异会让它照旧全绿（被变异的不是我查的那一侧），这条钉子等于没有任何判别力。
         //   反过来只查 overlay 也不行：writeManifest 那边哪天被"顺手加个先删"同样要有人喊。
         //   所以两侧都断言"有 rename、无 delete"，任一侧退化都会红。
+        // ★ R49 审计补正：这里原来也是宽判据 `manifestBody.contains("delete(")`。
+        //   当前 writeManifest 恰好零 delete()，所以它是绿的 —— 但那只是"还没人加"。
+        //   一旦有人为失败清理加 `tmp.delete()`（与 overlay 那边 S-08 之后必须做的一样），
+        //   这条会误报。判据与 overlay 两侧统一：只禁删 target，允许删 tmp。
+        val manifestDeletesTarget = Regex("""([\w.$?()\[\], ]+?)\s*(?:\?\.)?\s*\.\s*delete(?:IfExists)?\s*\(""")
+            .findAll(manifestBody).any { m ->
+                val receiver = m.groupValues[1]
+                val tail = manifestBody.substring(m.range.first, minOf(manifestBody.length, m.range.last + 80))
+                Regex("""\b(?:target|targetFile|overlay|overlayFile)\b""").containsMatchIn(receiver) ||
+                    receiver.contains("LAUNCHER_PATCH_OVERLAY") ||
+                    (receiver.endsWith("Files") && Regex("""\btarget\b""").containsMatchIn(tail))
+            }
         assertFalse(
-            "★ writeManifest 的可执行代码里出现了 delete( —— 它与 writeLauncherPatchOverlay 必须" +
+            "★ writeManifest 的可执行代码里删了**目标文件** —— 它与 writeLauncherPatchOverlay 必须" +
                 "共用同一个假设（rename 覆盖已存在目标是原子的），先删再 rename 会重新引入" +
                 "「删成功 + rename 失败 ⇒ 目标没了」的窗口。若确实需要变（例如支持 Windows 宿主），" +
                 "必须整段重新设计（备份 + 回滚），并同步改本文件的三条用例。" +
+                "（删 `tmp` 是允许的：失败路径要清残留。）" +
                 "实际函数体：<$manifestBody>",
-            manifestBody.contains("delete(")
+            manifestDeletesTarget
         )
         assertTrue(
             "前置：writeManifest 必须仍然走 renameTo(f)（否则这条断言守的不是同一个假设）。" +
@@ -304,10 +329,19 @@ class R43OverlayAtomicReplaceTest {
             manifestBody.contains("renameTo(f)")
         )
 
+        // ★ R49 审计补正：这里原来也是 `overlayBody.contains("delete(")` —— 与本文件另一条
+        //   `overlayWriteDoesNotDeleteTargetBeforeRename` **切的是同一个函数体**（都用 sliceFun
+        //   取 writeLauncherPatchOverlay）。我只收紧了那一条、留了这条宽判据，于是：
+        //   只要有人加回**合法**的 `tmp.delete()`（S-08 之后失败路径必须删 tmp，否则每次启动
+        //   多一个残留），断言 #1 绿、这条红 ⇒ **照样误报 SP-08 复发**。
+        //   改了一半比不改更糟：把一个自洽的宽判据拆成互相矛盾的两条。
+        //   现在两条用**同一个**判据（与 #1 一致）：只禁"删 target"，允许删 tmp。
         assertFalse(
-            "★ 同构性破裂：writeLauncherPatchOverlay 又在 rename 之前删目标了（writeManifest 不删）。" +
-                "两处对 File.renameTo 的假设必须一致：都做原子 rename、都不先删。实际函数体：<$overlayBody>",
-            overlayBody.contains("delete(")
+            "★ 同构性破裂：writeLauncherPatchOverlay 又在 rename 之前删**目标**了（writeManifest 不删）。" +
+                "两处对 File.renameTo 的假设必须一致：都做原子 rename、都不先删。" +
+                "（删 `tmp` 是允许且必需的：失败路径要清残留。）实际函数体：<$overlayBody>",
+            Regex("""\b(?:target|targetFile|overlay|overlayFile)\s*\.\s*delete\s*\(""")
+                .containsMatchIn(overlayBody)
         )
         assertTrue(
             "前置：writeLauncherPatchOverlay 必须仍然走 renameTo（否则这条断言守的不是同一个假设）。" +
