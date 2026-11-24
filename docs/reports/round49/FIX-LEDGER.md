@@ -267,7 +267,7 @@ W1-E 额外扫了全仓 `getIdentifier("X","string",…)` 这种动态取法（1
 
 **① 删死资源时误伤测试表**（W1-E ↔ `DshResourceFormatTest`）
 
-W1-E 删了 42 个零引用 string key，其中 7 个仍登记在 `DshResourceFormatTest.callSites` 里
+W1-E 删了 42 个零引用 string key，其中 8 个仍登记在 `DshResourceFormatTest.callSites` 里
 （那个表的作用是"验证带占位符的串能被正确格式化"，与"有没有人用"是两件事）。
 后果：`dshStringFormatsAcceptTheArgsPassedInCode` 抛 `@string/X 在 values 中不存在`。
 
