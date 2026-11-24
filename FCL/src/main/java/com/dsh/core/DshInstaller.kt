@@ -52,6 +52,26 @@ class DshInstaller(
     @Suppress("UNUSED_PARAMETER") scope: CoroutineScope? = null
 ) {
 
+    /**
+     * ★ R49 / BL-250 修正版的测试 seam 绑定：把 companion 的通用回调接到**本实例**的
+     * [usedPreinstalled] 上。语义与生产完全同一条（同一个 map、同一套按实例的键）。
+     *
+     * 为什么用回调而不是让 companion 直接读 map：`usedPreinstalled` 是 `private val`
+     * 在实例上，companion object 够不到。回调在构造时绑一次，之后测试调
+     * `DshInstaller.noteInstallOutputForTest(...)` 走的就是**生产那条判据**，
+     * 不是另写一份。
+     */
+    init {
+        @Suppress("UNUSED_EXPRESSION")
+        hintForTest = { instanceId: String?, mark: Boolean? ->
+            when {
+                instanceId == null -> { usedPreinstalled.clear(); null }
+                mark == null -> usedPreinstalled[instanceId] == true
+                else -> { if (mark) usedPreinstalled[instanceId] = true else usedPreinstalled.remove(instanceId); mark }
+            }
+        }
+    }
+
     /** 安装进度事件（保留原有形状，便于界面继续使用） */
     sealed class Progress {
         data class Log(val line: String) : Progress()
@@ -170,6 +190,30 @@ class DshInstaller(
      * 本节流只影响 [Progress.Log] 这个 UI 采样通道。
      */
     private val lastLogEmitMs = ConcurrentHashMap<String, Long>()
+
+    /**
+     * ★ R49 / BL-250 修正版：本次安装是否走了「命中预装、跳过下载」那条路。
+     *
+     * ## 为什么必须有这个字段
+     *
+     * `setup-node-dsh.sh:142-156` 有两种**合法的成功结局**：
+     * 1. 真下载：实例目录里出现 `node_modules/@deepseek-ai/dsh/`
+     * 2. **命中预装**：请求版本 == rootfs 预装版本时，打一行
+     *    `[setup] DONE version=X source=preinstalled` 然后 `exit 0`，
+     *    **实例目录里一个字节都不写**
+     *
+     * 所以「这次安装成功了吗」**不能**只拿实例自己的树去判 —— 结局 2 会必然判失败。
+     * 判据必须看脚本自己说了什么（[PREINSTALLED_MARKER]），在这里记下来，
+     * 交给 [readInstalledVersion] 决定读哪棵树。
+     *
+     * ## 为什么按实例分开
+     * 与 [lastLogEmitMs] 同一理由：A 命中预装不代表 B 也命中。装 A 时写进来的标记
+     * 不许影响 B 的判定（否则"装 A 成功的假象"会让 B 的残缺产物被误判成完整）。
+     *
+     * ## 清理
+     * 与 [lastLogEmitMs] 同寿命：安装收尾（[runInstall] 的 finally 与 [cancel]）一并清。
+     */
+    private val usedPreinstalled = ConcurrentHashMap<String, Boolean>()
 
     /**
      * R20：每个实例上次**活动行**（[InstallStatus.activity]）写入的时刻。
@@ -473,6 +517,7 @@ class DshInstaller(
             // 的迟到行已被 [onInstallLine] 的归属门拦住，不会再写这两张表（见字段注释）。
             pendingLogLines.remove(instance.id)
             lastLogEmitMs.remove(instance.id)
+            usedPreinstalled.remove(instance.id)
             lastActivityEmitMs.remove(instance.id)
             // F2-8（BL-048）：目标版本只存在于本次请求里 —— 存下来供 [fail] 写进 Progress.Failed
             // （新建实例的 dshVersion 快照为 null，界面收不到版本就清不掉「安装中」标记）。
@@ -1240,6 +1285,12 @@ class DshInstaller(
             bufferPendingLogLine(instance.id, line)
         }
         when {
+            // ★ R49 / BL-250 修正版：脚本命中预装时会打这一行然后 exit 0，**实例目录里
+            //   什么都不写**。记下这个事实，[readInstalledVersion] 据此改读预装树 ——
+            //   否则"安装成功"会被判成 BROKEN（详见 [usedPreinstalled] 的 KDoc）。
+            trimmed.startsWith("[setup] DONE") && trimmed.contains(PREINSTALLED_MARKER) -> {
+                usedPreinstalled[instance.id] = true
+            }
             trimmed.startsWith("[setup] STAGE=") -> {
                 // ★ 脚本给的是**稳定 key**（`[setup] STAGE=<key> [args]`），不是给人看的句子。
                 //   翻译在 [stageText] 里做，这样切到英文界面时进度也是英文 —— 改造前脚本直接
@@ -1329,6 +1380,7 @@ class DshInstaller(
     private fun flushPendingInstallLog(instanceId: String) {
         val deque = pendingLogLines.remove(instanceId) ?: return
         lastLogEmitMs.remove(instanceId)
+        usedPreinstalled.remove(instanceId)
         lastActivityEmitMs.remove(instanceId)
         val lines = synchronized(deque) { deque.toList().also { deque.clear() } }
         if (lines.isEmpty()) return
@@ -1413,21 +1465,32 @@ class DshInstaller(
      * @return 版本号（判定"安装完整"时）；不完整返回 null
      */
     private fun readInstalledVersion(instance: DshInstance, requestedVersion: String?): String? {
-        // ★ R49 / BL-250：**必须**用 ownDshDir（只管实例自己的树），不能用 effectiveDshDir。
+        // ★ R49 / BL-250 修正版（**第一次改错了，这里重做**）
         //
-        //   effectiveDshDir（DshPaths.kt:196-201）在实例目录没有 package.json 时**回退到
-        //   rootfs/opt/dsh-preinstalled/**。用它判"这个实例装好了没"的后果：
-        //   一个从没装过任何东西的实例，只要 rootfs 自带预装 dsh，就会被判"安装完整"。
+        // ## 第一次改错在哪
+        // 我把 `effectiveDshDir` 直接换成 `ownDshDir`，理由是"effectiveDshDir 会回退到
+        // rootfs 预装目录，用它判'这个实例装好了没'会复活预装冒充"。
+        // **那个理由对一半，换法全错。**
         //
-        //   触发点就在下面两处调用（:573 取消后复查 / :595 npm 成功但产物残缺）：
-        //   目录空也标 READY + 任务区报「取消时其实已装完」，而用户实际用的是**预装那份**。
+        // `setup-node-dsh.sh:142-156`：实例目录里没有 lib/bin.js 时，若请求版本命中预装版本，
+        // 脚本打一行 `[setup] DONE version=X source=preinstalled` 然后 **exit 0** ——
+        // **实例目录里什么都没写**。这是**合法的安装成功**（"bundled in runtime, no download
+        // needed"），而 rootfs 的预装版本（0.1.6-alpha.2）在下载页上是可点的。
         //
-        //   这行代码自己的邻居早把坑写出来了 —— DshPaths.kt:212-222 给 effectiveDshPackageJson
-        //   打的 @Deprecated 文案就是「本函数会回退预装，**用它判'装好了没'会复活预装冒充**」，
-        //   而当时 effectiveDshDir 本身没标 @Deprecated，所以这个调用点 IDE 不报警。
+        // 用 ownDshDir 判：该目录必然为空 ⇒ isInstallComplete=false ⇒ 判 BROKEN，
+        // 弹"Install finished but the dsh package is incomplete; please reinstall."
+        // —— 用户刚看到 DONE。更糟：`planRepair`（DshInstances.kt:988）用 pre 判定会得 READY，
+        // 于是"安装→报失败→杀掉 App 重开→变好了"，重装还会重复同一结果。
         //
-        //   口径与 nodeModulesBudgetBytes（:942-949）一致：判"这个实例"只能看实例自己的树。
-        val dir = DshPaths.ownDshDir(instance.id)
+        // ## 现在的判据
+        // 两种合法结局都要接受（真下载 / 命中预装跳过），所以**看脚本自己说了什么**：
+        // `source=preinstalled` 走预装树，否则走实例自己的树。
+        // 判"这次安装成功了吗"与判"这个实例自己有包吗"是两个问题，不能共用一个目录来源。
+        val dir = if (usedPreinstalled[instance.id] == true) {
+            DshPaths.effectiveDshDir(instance.id)
+        } else {
+            DshPaths.ownDshDir(instance.id)
+        }
         val fromDisk = readVersionFromPackageJson(File(dir, "package.json"))
         if (fromDisk != null && !File(dir, "lib/bin.js").isFile) {
             // 实例级：缺入口文件是**这个实例**装坏了（"能读出版本却启动不了"的原因就在这行）。
@@ -1442,6 +1505,62 @@ class DshInstaller(
         /** 安装最长容忍时间：低于此值可能是网络慢，高于此值基本是卡死 */
         const val INSTALL_TIMEOUT_MS = 30 * 60 * 1000L
 
+        // ===== R49 / BL-250 修正版的测试 seam =============================
+        //
+        // ## 为什么需要它们
+        //
+        // BL-250 第一版修错时，测试是**源码文本断言**（"函数体里出现 ownDshDir 这个词"），
+        // 于是它证明了"改成了 ownDshDir"，却证明不了"安装还能成功" —— 而那次改动本身
+        // 就让命中预装的安装必然失败。这是标准的假绿：测试绿了，功能坏了。
+        //
+        // 下面这三个 seam 让"读哪棵树"这个**决定**可以在 JVM 上被直接驱动和断言，
+        // 不必读源码文本。它们只暴露"返回哪个标签"，不暴露任何真实路径，
+        // 也不会被生产代码调用（`@VisibleForTesting` 语义，靠命名与注释约束）。
+
+        /** 实例自己的树（ownDshDir）的标签 —— 测试断言用，不是真实路径 */
+        const val ownTreeTagForTest = "own"
+        /** 预装树（effectiveDshDir 回退后的结果）的标签 */
+        const val preinstalledTreeTagForTest = "preinstalled"
+
+        /**
+         * 驱动一行安装输出，等价于 `onInstallLine` 里与"走哪条成功路径"相关的那部分。
+         *
+         * 只处理 [PREINSTALLED_MARKER] 的识别 —— 不复制 `onInstallLine` 的日志/节流/状态逻辑，
+         * 那样 seam 本身就会变成第二个实现。判据只有一条：这一行是不是
+         * `[setup] DONE … source=preinstalled`。
+         */
+        fun noteInstallOutputForTest(instanceId: String, line: String) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("[setup] DONE") && trimmed.contains(PREINSTALLED_MARKER)) {
+                hintForTest?.invoke(instanceId, true)
+            }
+        }
+
+        /**
+         * 返回该实例当前判据会读哪棵树（[ownTreeTagForTest] / [preinstalledTreeTagForTest]）。
+         *
+         * 这就是 `readInstalledVersion` 里那个 `if` 的**同一个判据** —— seam 不另写一份。
+         */
+        fun installedDirTagForTest(instanceId: String): String =
+            if (hintForTest?.invoke(instanceId, null) == true) preinstalledTreeTagForTest else ownTreeTagForTest
+
+        /** 清掉所有实例的标记（测试间不许互相污染） */
+        fun resetInstallHintsForTest() {
+            hintForTest?.invoke(null, null)
+        }
+
+        /**
+         * 由实例初始化时注入的两参回调（instanceId, mark?）：
+         * - `mark != null` ⇒ 置位
+         * - `mark == null` 且 `instanceId != null` ⇒ 读取
+         * - 两者都 null ⇒ 清空
+         *
+         * 用回调而不是直接暴露 `usedPreinstalled`：后者是 `private val` 在实例上，
+         * companion 够不到。回调在 `init` 里绑到实例的 map，语义与生产完全同一条。
+         */
+        @Volatile
+        internal var hintForTest: ((String?, Boolean?) -> Boolean?)? = null
+
         /** [errorTails] 保留的错误行数：够看清"哪一步、什么码"，又不会被前面的警告行顶掉 */
         private const val ERROR_TAIL_LINES = 12
 
@@ -1451,6 +1570,27 @@ class DshInstaller(
          *   字符串判据按原文写死——两边都是本仓库代码，真机无混用新旧版本的路径（预检行走同一进程）。
          */
         private const val PREFLIGHT_FAIL_PREFIX = "[proot] 预检失败:"
+
+        /**
+         * ★ R49 / BL-250 修正版：`setup-node-dsh.sh` 命中预装、跳过下载时打的那一行的前缀。
+         *
+         * 脚本原文（`:153`）：
+         * ```
+         * echo "[setup] DONE version=$PRE_VER source=preinstalled"
+         * exit 0
+         * ```
+         * 此时**实例目录里没有任何 node_modules** —— 但这是**合法的安装成功**
+         * （"bundled in runtime, no download needed"）。
+         *
+         * 用这个标记把两种成功结局分开：[readInstalledVersion] 据此决定读预装树还是实例树。
+         * 判据按原文写死（与 [PREFLIGHT_FAIL_PREFIX] 同一纪律）——两边都是本仓库代码，
+         * 协议变更时两边一起改，且 [R49PreinstalledInstallTest] 钉住这行真的会被识别。
+         *
+         * ★ 判据必须带 `source=preinstalled` 后缀，**不能只匹配 `[setup] DONE version=`**：
+         *   真下载成功也会打 DONE，若只按前缀匹配，那条"真下载"的路径就会被误判成走预装树 ——
+         *   而实例树里明明有包，读预装树反而会读错版本。两种结局要靠**同一个后缀**区分开。
+         */
+        private const val PREINSTALLED_MARKER = "source=preinstalled"
 
         /**
          * ★ R34：`ProotProcessExecutor.run()` **顶层 catch** 打出的失败行前缀

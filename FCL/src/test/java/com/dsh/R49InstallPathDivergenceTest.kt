@@ -50,21 +50,35 @@ class R49InstallPathDivergenceTest {
         val start = src.indexOf("private fun readInstalledVersion(")
         assertTrue("找不到 readInstalledVersion —— 被改名或删了？", start >= 0)
         val rawBody = src.substring(start, minOf(src.length, start + 3000))
-        // ★ 必须剥注释：修复的注释里**本来就写着** effectiveDshDir 这几个字
-        //   （解释"为什么不能用它"）。不剥就会把说明文字判成缺陷 —— 这类误报会让人
-        //   开始怀疑测试本身，比没有测试更糟。
         val body = blankComments(rawBody)
 
-        assertFalse(
-            "★ BL-250 复发：readInstalledVersion 的**可执行代码**里又在用 effectiveDshDir —— " +
-                "那个函数会回退到 rootfs 预装目录，于是**没装过任何东西的实例**会被判" +
-                "「安装完整」（目录空也算装完）。必须用 ownDshDir（只看实例自己的树）。" +
-                "实际函数体（已剥注释）：<$body>",
-            Regex("""effectiveDshDir""").containsMatchIn(body)
+        // ★★ 这条断言被**重写过两次**，历史值得留着：
+        //
+        // 第一版（错的）：断言"函数体里不许出现 effectiveDshDir"。那是基于"预装回退一定有害"
+        //   的错误前提。按它改出来的实现让**命中预装的安装必然判失败**（setup 脚本命中预装时
+        //   exit 0 且实例目录为空），而这条测试仍然是绿的 —— 因为它守的是字面，不是行为。
+        //   R2 安全验收把它抓出来了（详见 R49PreinstalledInstallTest 的 KDoc）。
+        //
+        // 现在守的是**正确的性质**：两种成功结局都要接受，所以
+        //   · 必须**有** ownDshDir 这条分支（真下载的结局）
+        //   · 必须有**由 usedPreinstalled 驱动**的 effectiveDshDir 分支（命中预装的结局）
+        //   · 且驱动它的必须是那个按实例的标记，不能是无条件回退
+        //
+        // 真正的行为断言在 R49PreinstalledInstallTest 里（那些是能真跑的，不是文本匹配）。
+        // 这条留在这里只做"结构还在"的粗筛 —— 它比没有强，但**不是**这条缺陷的主防线。
+        assertTrue(
+            "★ BL-250：readInstalledVersion 必须保留 ownDshDir 分支（真下载的结局）",
+            Regex("""DshPaths\s*\.\s*ownDshDir\s*\(\s*instance\s*\.\s*id\s*\)""").containsMatchIn(body)
         )
         assertTrue(
-            "★ BL-250：readInstalledVersion 必须显式用 DshPaths.ownDshDir(instance.id)",
-            Regex("""DshPaths\s*\.\s*ownDshDir\s*\(\s*instance\s*\.\s*id\s*\)""").containsMatchIn(body)
+            "★ BL-250：命中预装的结局也要接受 —— 必须存在 effectiveDshDir 分支",
+            Regex("""DshPaths\s*\.\s*effectiveDshDir\s*\(\s*instance\s*\.\s*id\s*\)""").containsMatchIn(body)
+        )
+        assertTrue(
+            "★ 关键：effectiveDshDir 那支必须由**按实例的** usedPreinstalled 标记驱动，" +
+                "不许无条件回退预装（否则「从没装过东西」的实例会被判「安装完整」）。" +
+                "实际函数体（已剥注释）：<$body>",
+            Regex("""usedPreinstalled\s*\[\s*instance\s*\.\s*id\s*\]""").containsMatchIn(body)
         )
     }
 

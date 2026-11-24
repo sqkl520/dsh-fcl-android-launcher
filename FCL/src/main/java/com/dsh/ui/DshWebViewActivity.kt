@@ -492,16 +492,27 @@ class DshWebViewActivity : FCLActivity() {
                 // 只需要"发出去了什么"的留痕；骨架口径与 openExternalFresh 一致
                 // （scheme://host:port + 有无凭据，绝不记 token 值）。
                 // BL-208：走 logWeb（实例流 + 全局双写），让实例详情页的日志 tab 也看得到。
+                //
+                // ★ R49 验收补（F-4 口径统一）：原来这里是裸 `ACTION_VIEW`，而 F-4 刚把
+                //   "接收方不可校验"认定为要修的问题，并给门禁那一支做了 externalBrowserIntent
+                //   （CATEGORY_BROWSABLE 收窄候选面 + resolveActivity 留痕"交给了谁"）。
+                //   页面内点击恰恰是**攻击者更容易控制的那条路**（聊天里贴的链接由 dsh 前端
+                //   渲染），却还走旧路 —— 这正是 F-1 要消灭的"两处口径分叉"。
+                //   externalBrowserIntent 有兜底（BROWSABLE 解析不到会退回裸 ACTION_VIEW），
+                //   所以不会把"本来能跳"改坏。
+                val dispatch = externalBrowserIntent(url)
                 val dispatched = runCatching {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    startActivity(dispatch.intent)
                 }
+                // 把"交给了谁"写进日志（unresolved = 解析不到，不许假装知道）
+                val target = dispatch.targetPackage ?: "unresolved"
                 dispatched.fold(
                     onSuccess = {
-                        logWeb("[web] external link dispatched: " + urlSkeleton(url))
+                        logWeb("[web] external link dispatched to $target: " + urlSkeleton(url))
                     },
                     onFailure = { e ->
                         logWeb(
-                            "[web] external link failed (no browser handler?): " +
+                            "[web] external link failed (no browser handler?) to $target: " +
                                 urlSkeleton(url) + ", " + e
                         )
                     }
@@ -2299,16 +2310,54 @@ fun sensitiveClip(label: String, text: String): ClipData {
  */
 fun redactFrontendLog(text: String): String {
     var out = text
-    // `sk-` 形态（DeepSeek/OpenAI 系）：前缀 + 至少 16 个 token 字符才打码
+    // `sk-` / `sk-proj-` 形态：前缀 + 至少 16 个 token 字符才打码
     out = SK_KEY_RE.replace(out) { m -> m.groupValues[1] + "***" }
     // `Bearer <value>` 形态（HTTP 头）
     out = BEARER_RE.replace(out) { m -> m.groupValues[1] + "***" }
+    // Google / Gemini 系
+    out = GOOGLE_KEY_RE.replace(out) { m -> m.groupValues[1] + "***" }
+    // JSON 字段 / 头 / 查询参数里的字段名+值（**放最后**：前面几条更精确，先跑）
+    out = FIELD_KEY_RE.replace(out) { m -> m.groupValues[1] + "***" }
     return out
 }
 
-/** `sk-` 前缀的 API Key（`sk-` + 16 个以上 base64url 字符；保留前缀便于排障时辨认形态）。 */
-private val SK_KEY_RE = Regex("""(?i)\b(sk-)[A-Za-z0-9_\-]{16,}""")
+/**
+ * `sk-` / `sk-proj-` 前缀的 API Key（保留前缀便于排障时辨认形态）。
+ *
+ * ★ R49 验收修正（R2 安全验收实测抓出来的漏）：原来的字符类 `[A-Za-z0-9_\-]`
+ * **不含 `.`**。而 OpenAI 现行 key 是 `sk-proj-abc.defghijklmnopqrstuvwxyz` 这种
+ * **带点**的形态 —— `sk-` 之后只有 `proj-abc` 8 个合法字符就撞上 `.`，
+ * 凑不满 `{16,}` ⇒ **整条不匹配 ⇒ key 原样落日志**。
+ * 实测对照：`sk-proj-abc.defg…` 漏、`sk-proj-abcdefg…`（无点）命中。
+ * 把 `.` 加进字符类即可覆盖；尾部多余的 `.` 最多多打一点码 ——
+ * **脱敏宁可多打，不可少打**。
+ */
+private val SK_KEY_RE = Regex("""(?i)\b(sk-)[A-Za-z0-9_\-.]{16,}""")
 
 /** `Bearer <token>`（保留 `Bearer` 一词，只抹值）。 */
 private val BEARER_RE = Regex("""(?i)\b(Bearer\s+)[A-Za-z0-9_\-.=]{20,}""")
+
+/**
+ * Google / Gemini 系 key：`AIza` 固定前缀 + 30 位以上。
+ *
+ * 前缀是 Google 的公开固定格式，加上长度下界后不会误伤普通单词。
+ * 为什么加这条：dsh 支持接任意网关，用户可能配 Gemini；原文里 `AIza…` 不带 `sk-`，
+ * 前面两条一个都抓不到。
+ */
+private val GOOGLE_KEY_RE = Regex("""\b(AIza)[A-Za-z0-9_\-]{30,}""")
+
+/**
+ * JSON / HTTP 头 / 查询参数里的"字段名 + 值"，**保留字段名、只抹值**。
+ *
+ * 为什么要它：`{"apiKey":"abcdefghijklmnopqrstuvwx"}` 里那段值**不含 `sk-` 前缀**，
+ * 前三条正则一个都抓不到 —— 而"插件把整个配置对象 `console.log` 出来"正是最常见的泄漏形态。
+ * 覆盖 `apiKey` / `api_key` / `api-key` / `apikey` / `access_token` / `secret`，
+ * 分隔符接受冒号或等号、引号可有可无。
+ *
+ * 值至少 8 位才抹：太短的多半是 `"apiKey":"none"` / `"apiKey":null` 这类占位，
+ * 打掉反而让人看不懂日志。
+ */
+private val FIELD_KEY_RE = Regex(
+    """(?i)("?[\w\-]*(?:api[_-]?key|apikey|access[_-]?token|secret)[\w\-]*"?\s*[:=]\s*"?)([A-Za-z0-9_\-.]{8,})"""
+)
 

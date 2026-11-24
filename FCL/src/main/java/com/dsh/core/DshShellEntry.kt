@@ -19,7 +19,9 @@ import android.content.Intent
  *
  * ## 注册与退化
  * ui / App 层通过 [DshNavigation.register] 注入实现（本项目在
- * `FCLApp.onCreate` 的 `initStep("dshNavigation", …)` 里注册一次，早于任何服务启动 ——
+ * `FCLApp.onCreate` 的 `registerUiCapabilitiesForCore()` 里注册一次，早于任何服务启动 ——
+ * （★ 它**刻意不包在 initStep 里**：initStep 的职责是"可能抛、失败要登记"，而这里只是给
+ *   `@Volatile var` 赋值、传入的 lambda 此刻不求值，不可能抛。详见 FCLApp 里那段注释。）
  * 服务是由 App 进程拉起的，`Application.onCreate` 必然已经跑过）。
  *
  * 未注册时 [DshNavigation.shellEntry] 为 null，[DshRuntimeService] **不得**因此崩溃：

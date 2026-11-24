@@ -475,4 +475,5 @@ Version %1$s</string>
     <string name="dsh_file_edit_running">Stop the instance before editing its configuration</string>
     <string name="dsh_file_edit_backup_note">A .bak copy of the previous contents is kept next to the file.</string>
     <string name="dsh_logs_write_failed">Couldn\'t write the log file — recent lines may be lost. Free up storage, then retry.</string>
+    <string name="dsh_file_edit_no_backup_note">For credential files no .bak is kept (a backup copy would be a second plaintext key). Save carefully.</string>
 </resources>

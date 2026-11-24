@@ -440,4 +440,5 @@
     <string name="dsh_file_edit_running">先停止實例，再改它的設定</string>
     <string name="dsh_file_edit_backup_note">上一份內容會在同目錄留一個 .bak 備份。</string>
     <string name="dsh_logs_write_failed">日誌寫入檔案失敗，最近的紀錄可能已遺失。請清理儲存空間後重試。</string>
+    <string name="dsh_file_edit_no_backup_note">憑證類檔案不保留 .bak 備份（備份副本會是第二份明文金鑰）。請謹慎儲存。</string>
 </resources>

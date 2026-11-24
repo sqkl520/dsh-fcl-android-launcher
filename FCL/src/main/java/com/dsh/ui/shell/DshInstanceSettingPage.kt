@@ -14,6 +14,8 @@ import com.dsh.core.DshInstance
 import com.dsh.core.DshInstances
 import com.dsh.core.DshLogBus
 import com.dsh.core.DshPaths
+import com.dsh.core.isCredentialFileName
+import com.dsh.ui.sensitiveClip
 import com.dsh.core.DshRuntime
 import com.dsh.core.DshServices
 import com.dsh.core.ProotCommand
@@ -586,7 +588,7 @@ class DshInstanceSettingPage(
      */
     private fun homeDirText(): String {
         val i = inst ?: return "-"
-        val guestPath = "${ProotCommand.GUEST_ROOT}/instances/${i.id}"
+        val guestPath = DshPaths.instanceGuestDir(i.id)
         val effective = resolveHomeRootfs(guestPath, i.homeDir)
         return if (i.homeDir.isNullOrBlank()) {
             context.getString(R.string.dsh_home_default_value, effective)
@@ -616,7 +618,22 @@ class DshInstanceSettingPage(
             return
         }
         val launched = runCatching {
-            host.activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            // ★ R49 验收补（S-13 覆盖缺口）：原来这里是把**带活 token** 的 URL 用裸
+            //   ACTION_VIEW 甩给系统，接收方不可校验。与 DshWebViewActivity 的
+            //   externalBrowserIntent 同一套收窄手段（那边还有 resolveActivity 留痕，
+            //   这里没有 owner 上下文，只做能复用的那一半）：
+            //   CATEGORY_BROWSABLE 把候选从"任意声明了 VIEW 的 App"收窄到"自称浏览器"的那批。
+            //   仍不是安全边界（恶意 App 也能声明），但排除了大量只想接 VIEW 的普通 App。
+            //   兜底：少数 ROM 的浏览器 filter 只写 scheme 不写 category，硬套会变成
+            //   ActivityNotFoundException —— 那时退回裸 ACTION_VIEW（与改造前行为一致）。
+            val browseable = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+            val intent = runCatching {
+                host.activity.packageManager.resolveActivity(
+                    browseable, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+                )
+            }.getOrNull()
+            host.activity.startActivity(if (intent != null) browseable else Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }
         if (launched.isFailure) {
             // 实例级：这条属于该实例的"怎么把界面交给外部"的失败，用户到它的日志页能对上
@@ -672,7 +689,7 @@ class DshInstanceSettingPage(
                     toastSaveOutcome(i.id)
                     return@editText
                 }
-                val guestInstancePath = "${ProotCommand.GUEST_ROOT}/instances/${i.id}"
+                val guestInstancePath = DshPaths.instanceGuestDir(i.id)
                 val normalized = resolveHomeRootfs(guestInstancePath, trimmed)
                 when {
                     // ★ R31/BL-241：**拒绝原因必须分开说**。
@@ -811,7 +828,11 @@ class DshInstanceSettingPage(
             .setMessage(context.getString(R.string.dsh_copy_url_confirm_message))
             .setPositiveButton(context.getString(R.string.dsh_action_copy)) {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("dsh access url", url))
+                // ★ R49 验收补（S-14 覆盖缺口）：这条 URL **带活 token**，与
+                //   DshWebViewActivity 的三处复制是同一类数据。原来这里用裸 newPlainText，
+                //   没有 EXTRA_IS_SENSITIVE ⇒ Android 13+ 的剪贴板浮层会显示明文内容预览。
+                //   走同包的顶层 sensitiveClip（同一个实现，不复制第二份逻辑）。
+                cm.setPrimaryClip(sensitiveClip("dsh access url", url))
                 toast(context.getString(R.string.dsh_url_copied))
             }
             .setNegativeButton(context.getString(R.string.dialog_negative), null)
@@ -936,12 +957,24 @@ class DshInstanceSettingPage(
                 //   UnsupportedOperationException，用户在 CrashReportActivity 里看到崩溃页）。
                 //   一个可选的编辑入口不值得让整个启动器挂掉：失败就报错并留在设置页。
                 runCatching {
+                    // ★ R49 验收补（G-3 文案不实）：`dsh_file_edit_backup_note` 说的是
+                    //   「上一份内容会在同目录留一个 .bak 备份」—— 对**凭据文件**这句话是假的：
+                    //   `writeFileAtomically` 按文件名识别凭据类（`.credentials.yaml` 等）
+                    //   并**有意不写 .bak**（那是第二份明文 Key，且永不清理、轮换后旧 Key 留存）。
+                    //   用户按这句话去"从 .bak 捞回改坏的 Key"时会找不到文件 ——
+                    //   这是用文案制造了一个不存在的回滚点，与 BL-207 的"已复制"同形。
+                    val hint = if (isCredentialFileName(file.name)) {
+                        context.getString(titles.second) + "\n" +
+                            context.getString(R.string.dsh_file_edit_no_backup_note)
+                    } else {
+                        context.getString(titles.second) + "\n" +
+                            context.getString(R.string.dsh_file_edit_backup_note)
+                    }
                     DshFileEditDialog(
                         activity = host.activity,
                         target = file,
                         titleText = context.getString(titles.first),
-                        hintText = context.getString(titles.second) + "\n" +
-                            context.getString(R.string.dsh_file_edit_backup_note),
+                        hintText = hint,
                         readOnly = false,
                         onSaved = { reload() }
                     ).show()

@@ -12,7 +12,7 @@ import com.tungsten.fcllibrary.util.LocaleUtils
  * UI 概念漏进 core：core 的字符串正确性取决于"此刻有没有 Activity 在前台"，
  * 而这与"core 想表达什么"毫无关系。
  *
- * 现在 core 只认这个接口：由 App 组装层（本项目的 `FCLApp.onCreate` → `initStep("dshStrings", …)`）
+ * 现在 core 只认这个接口：由 App 组装层（本项目的 `FCLApp.onCreate` → `registerUiCapabilitiesForCore()`）
  * 注入一个实现，回答"拿哪个 Context 取词语言才正确"。
  *
  * ## 未注入时怎么办（**不能因此变差**）
@@ -115,7 +115,7 @@ object DshUiText {
      *
      * ★ L2（R49）：**不再直接引用 `FCLApp.getActivity()`**。拿前台 Activity 这件事
      * 收敛到 [DshStringProvider]，由 App 层注入（见 `FCLApp.onCreate` 的
-     * `initStep("dshStrings", …)`）。注入缺失/失败时走 [DshAppContextHolder.context]，
+     * `registerUiCapabilitiesForCore()`）。注入缺失/失败时走 [DshAppContextHolder.context]，
      * 与改造前"没有前台 Activity"完全同一条退路 —— 不会让现状回退。
      */
     @JvmStatic

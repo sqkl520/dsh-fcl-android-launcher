@@ -81,7 +81,23 @@ public class FCLApp extends Application implements Application.ActivityLifecycle
         initStep("appContext", () -> com.dsh.core.DshAppContextHolder.init(this));
         // ★ L1 + L2（R49 架构）：把两项"core 需要、只有 UI 侧才知道"的能力注册给 core。
         //   详见 registerUiCapabilitiesForCore 的注释（**关键**：这里刻意不用 initStep）。
-        registerUiCapabilitiesForCore();
+        //
+        // ★ R49 验收补：外面**仍然必须有兜底**。理由不是"它可能抛"（当前实现确实抛不了：
+        //   两次 register 都只是给 @Volatile var 赋值、传入的 lambda 此刻不求值），
+        //   而是**防护等级一致性**：这是 Application.onCreate 里唯一没有 try 的步骤，
+        //   将来若有人往这两行里加了会抛的东西，异常会直接穿出 onCreate ⇒
+        //   handleBindApplication 崩溃 ⇒ 闪退循环（R31 的注释正是为此而写）。
+        //   套 runCatching 不改变 initStep 的条数（R31 的闸门仍看到 6），
+        //   也保留了"绝不穿出去"这条更重要的性质。
+        //   ⚠️ 必须留日志：真出问题时"注册没成功"要在日志里看得见，否则下游
+        //   退到 PM 的 LAUNCHER 入口时完全无痕，排障会以为注册成功了。
+        try {
+            registerUiCapabilitiesForCore();
+        } catch (Throwable t) {
+            com.dsh.core.DshLogBus.append(
+                "[app] registerUiCapabilitiesForCore failed (core will fall back to "
+                    + "PM launcher entry / AppContext): " + t);
+        }
         initStep("dshTasks", com.dsh.core.DshTasks::startDefault);
     }
 

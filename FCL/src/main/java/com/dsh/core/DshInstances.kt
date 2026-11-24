@@ -682,6 +682,28 @@ fun writeFileAtomically(target: File, text: String) {
             StandardCopyOption.REPLACE_EXISTING,
             StandardCopyOption.ATOMIC_MOVE
         )
+        // ★ R49 验收补（G-2 的另一半）：rename 之后必须 fsync **父目录**。
+        //
+        //   只 sync 文件不够：rename 改的是目录项，目录项本身也可能还在页缓存里。
+        //   掉电时可能出现"文件内容已落盘、但目录项没写下去" ⇒ 目标路径仍是**旧文件**。
+        //   对 `.credentials.yaml` 就是：用户改了 Key、以为生效了、重启后还是旧 Key ——
+        //   dsh 拿旧 Key 请求，表现为 401。不是数据损坏，是**静默回退到上一个版本**。
+        //
+        //   同仓 `ProcessUtil.atomicWriteText`（DshRuntime.kt）早就有这一步，
+        //   `writeFileAtomically` 一直没有 —— 同一类"原子写"两份实现口径不一致，
+        //   正是 ARCH 报告 B2 说的那件事。
+        //
+        //   ★ 失败只记日志、不抛：把"写成功但目录 fsync 失败"报成写失败会触发无谓的重试，
+        //     而那正是 E5-04 明确禁止的（见 platformFsyncDir 的 KDoc）。
+        target.parentFile?.let { dir ->
+            runCatching { (DshInstances.dirFsync ?: ::platformFsyncDir)(dir) }
+                .onFailure { e ->
+                    DshLogBus.append(
+                        "[instances] 目录 fsync 失败（写入本身已成功，掉电时可能回退到旧内容）：" +
+                            "${dir.absolutePath} ← ${e.javaClass.simpleName}: ${e.message}"
+                    )
+                }
+        }
     } catch (e: Exception) {
         // 失败时 tmp 必须清掉，否则实例目录里每试一次就多一个残留。
         runCatching { tmp.delete() }
