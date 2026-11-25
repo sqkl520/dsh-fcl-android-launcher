@@ -26,9 +26,9 @@
 > 如果喜欢这个项目就 Star 一下喵 ⭐
 >
 > **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
-> **公开发布的最新包是 `0.1.6-SNAPSHOT-fix26`**。本 README 不单独维护版本号 ——
+> **公开发布的最新包是 `0.1.6-SNAPSHOT-fix27`**。本 README 不单独维护版本号 ——
 > 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
-> 装完请到**关于页核对版本号后缀**（如 `-fix26`）确认装对了包。
+> 装完请到**关于页核对版本号后缀**（如 `-fix27`）确认装对了包。
 
 ---
 
@@ -117,7 +117,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 
 ## 📌 当前进度
 
-> 最后更新：2026-11-19（fix26）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
+> 最后更新：2026-11-26（fix27）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
 
 | 模块 | 状态 |
 |---|---|
@@ -142,7 +142,8 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 | 修复轮次 **fix23**（R31+R32：URL 采信门、页面回收重建、脚本版本号） | ✅ 已出包（code 129） |
 | 修复轮次 **fix24**（R33~R44：日志脱敏加严、pid/overlay/删除事务原子化、孤儿清理不再静默失败） | ✅ 已出包（code 130） |
 | 修复轮次 **fix25**（R45：门禁框正文在高字号下不再被裁掉，且能滚动） | ✅ 已出包（code 131） |
-| 修复轮次 **fix26**（R45：`launcher.patch.yml` 不再整份覆盖，保留用户配的 provider） | ✅ 已发布（code 132，当前最新） |
+| 修复轮次 **fix26**（R45：`launcher.patch.yml` 不再整份覆盖，保留用户配的 provider） | ✅ 已发布（code 132） |
+| 修复轮次 **fix27**（合并 fix27~fix40 期间全部改动：编辑配置入口、会话锁误报、删实例残留） | ✅ 已发布（code 133，当前最新） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
 **质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **1096/1096** · 脚本自检 40/40
@@ -185,7 +186,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 - **贡献指南**：[`CONTRIBUTING.md`](CONTRIBUTING.md) —— 怎么报问题、怎么提 PR、代码风格与测试要求。
 - **构建与测试**：`.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest`（Windows，单测）；
   `sh run-compile.sh` → `sh run-tests.sh`（arm64 Linux / 手机沙箱，编译校验 + 单测）。环境接线见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)。
-- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix26`）、机型、Android 版本、复现步骤；
+- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix27`）、机型、Android 版本、复现步骤；
   想改代码请先开个 Issue 说一声，避免白写。
 
 [![Contributors](https://contrib.rocks/image?repo=sqkl520/dsh-fcl-android-launcher)](https://github.com/sqkl520/dsh-fcl-android-launcher/graphs/contributors)

@@ -26,10 +26,10 @@ A dsh launcher built on top of [Fold Craft Launcher](https://github.com/FCL-Team
 > If you find it useful, a star means a lot ⭐
 >
 > **The [Releases page](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) is the source of truth for versions.**
-> **The latest publicly released build is `0.1.6-SNAPSHOT-fix26`.**
+> **The latest publicly released build is `0.1.6-SNAPSHOT-fix27`.**
 > This README does not maintain a version number on its own — historically it mentioned stale values
 > like `fix4`/`fix6`, and **whenever it disagrees with the Releases page, the Releases page wins**.
-> After installing, check the version suffix on the About screen (e.g. `-fix26`) to confirm you
+> After installing, check the version suffix on the About screen (e.g. `-fix27`) to confirm you
 > installed the right package.
 
 ---
@@ -121,7 +121,7 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 
 ## 📌 Current status
 
-> Last updated: 2026-11-19 (fix26). The single source of truth for version numbers is `dshVersion` /
+> Last updated: 2026-11-26 (fix27). The single source of truth for version numbers is `dshVersion` /
 > `dshVersionCode` in `gradle.properties`.
 
 | Area | Status |
@@ -147,7 +147,8 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 | Fix round **fix23** (R31+R32: URL adoption gate, page teardown/rebuild, script version marker) | ✅ Built (code 129) |
 | Fix round **fix24** (R33–R44: stricter log redaction, atomic pid/overlay/delete transactions, orphan cleanup no longer fails silently) | ✅ Built (code 130) |
 | Fix round **fix25** (R45: gate dialog body no longer clipped at large font sizes, and it scrolls) | ✅ Built (code 131) |
-| Fix round **fix26** (R45: `launcher.patch.yml` is no longer overwritten wholesale, so your configured providers survive) | ✅ Released (code 132, current) |
+| Fix round **fix26** (R45: `launcher.patch.yml` is no longer overwritten wholesale, so your configured providers survive) | ✅ Released (code 132) |
+| Fix round **fix27** (merges everything from fix27~fix40: config editor entry, phantom session-lock error, leftover files after instance deletion) | ✅ Released (code 133, current) |
 | `1.0.0` (can reliably start / download / manage dsh) | ⬜ Pending promotion from 0.1.6 |
 
 **Quality baseline**: build BUILD SUCCESSFUL · unit tests **1060/1060** · script self-check 33/33
@@ -196,7 +197,7 @@ to join in; Issues and PRs are both accepted.
 - **Build and test**: `.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest` (Windows, unit tests);
   `sh run-compile.sh` → `sh run-tests.sh` (arm64 Linux / phone sandbox, compile check + unit tests). Environment wiring in [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT-EN.md).
 - **Issues and PRs**: when reporting a bug please include the **version suffix shown on the About screen**
-  (e.g. `0.1.6-SNAPSHOT-fix26`), device model, Android version and reproduction steps. If you want to change
+  (e.g. `0.1.6-SNAPSHOT-fix27`), device model, Android version and reproduction steps. If you want to change
   code, open an Issue first so your work is not wasted.
 
 [![Contributors](https://contrib.rocks/image?repo=sqkl520/dsh-fcl-android-launcher)](https://github.com/sqkl520/dsh-fcl-android-launcher/graphs/contributors)
