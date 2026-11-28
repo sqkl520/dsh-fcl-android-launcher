@@ -29,6 +29,37 @@
 ---
 
 ## 0.1.6-SNAPSHOT-fix22
+> **You can now edit an instance's config files right in the launcher, and dsh no longer falsely
+> reports "session already in use".**
+
+### Added
+
+- **Settings has a new "Edit config file" entry**, so you can change `home/.credentials.yaml`,
+  `launcher.patch.yml` and similar files without hooking up a computer or digging through a file
+  manager. Saves go through an atomic replace — a power cut halfway through won't leave a truncated file.
+
+### Fixed
+
+- **dsh kept saying "this session is already owned", even when nobody owned it.** The root cause is
+  that the file lock's inode self-check always failed under proot. A preload shim now projects a
+  consistent inode so the lock can actually be recognised.
+
+  This change relies on an updated startup script, so **the first launch after upgrading will go
+  through the setup page once to re-extract the scripts** (a second or two; your rootfs and session
+  records are untouched).
+
+- **Deleting an instance no longer leaves a few hundred MB behind.** It is cleaned up now.
+- **A start directory outside the instance is no longer silent.** It used to be ignored quietly; now
+  you are told.
+
+### Upgrade notes
+
+- **Over-the-top install works** (fix21 → fix22 needs no uninstall).
+- **The startup scripts are re-extracted on first launch** (script version 23 → 24, takes a second).
+
+---
+
+## 0.1.6-SNAPSHOT-fix21
 > **The model provider you add no longer disappears.** Previously one restart wiped the provider you
 > configured, with no warning at all.
 
@@ -55,7 +86,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix21
+## 0.1.6-SNAPSHOT-fix20
 > **Risk warnings are no longer cut off when you increase the system font size.** The gate dialog body
 > used to break off mid-sentence.
 
@@ -79,7 +110,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix20
+## 0.1.6-SNAPSHOT-fix19
 > **A "failures must be visible" pass.** Several error paths used to swallow the failure silently, so you
 > could never work out what went wrong.
 
@@ -101,7 +132,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix19
+## 0.1.6-SNAPSHOT-fix18
 > **A security hardening: nobody can steer your UI to another site any more.** Plus a batch of stability fixes.
 
 ### Security
@@ -128,7 +159,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix18
+## 0.1.6-SNAPSHOT-fix17
 > **The same dialog no longer reappears after you copy the access link.** And opening the UI in an
 > external browser no longer re-downloads the front-end files every time.
 
@@ -183,7 +214,6 @@ upgrade notes matter to you today are called out in the notes column.
 
 | Version | Headline | Notes |
 |---|---|---|
-| `0.1.6-SNAPSHOT` (fix17) | Warn on empty directories + correct three inaccurate explanations | — |
 | `0.1.6-SNAPSHOT` (fix16) | API key exposure surface warning + diagnosable empty-directory typo | — |
 | `0.1.6-SNAPSHOT` (fix15) | Ghost-instance protection + call-site contract tests | — |
 | `0.1.6-SNAPSHOT` (fix14) | Comment corrections + reject `..` + auto-create custom directories | — |
