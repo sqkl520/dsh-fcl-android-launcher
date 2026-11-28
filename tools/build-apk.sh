@@ -97,6 +97,52 @@ else
   echo "   [warn] 找不到 aapt2，跳过出货三查（装 aapt2 后可用 check-apk 复核）"
 fi
 
+# ★ 第四查（R49 / BL-252）：**签名一致性**。
+#
+# 为什么必须有：签名不一致的 APK 在**干净设备上装得上**，测试时看不出来；
+# 只有已装旧版的用户升级时会报 INSTALL_FAILED_UPDATE_INCOMPATIBLE，而那已经是发出去之后了，
+# 补救只能撤回 Release。
+#
+# 这项能力原先只存在于 `tools/publish-fix23-26.sh`（一次性脚本，R49 已删）——
+# 删掉之后仓库里**一处签名校验都没有**。R49 补发 14 个包时是手工跑 apksigner 逐个核对的，
+# 那是运气不是流程：下次谁忘了，没有任何东西会拦住。
+#
+# 判据：本次包的证书指纹必须与 `output/` 里**最近一个已存在的正式包**一致。
+# 为什么拿 output 里的旧包当基准：它是"用户手里可能装着的那个"最直接的代理，
+# 而且不依赖网络（不用去 GitHub Release 拉）。
+#
+# 拿不到基准时（首次出包 / 没有旧包）**跳过并明说**，不静默放行也不挡死链 ——
+# 与上面 aapt2 缺失的处理口径一致。
+APKSIGNER=""
+for c in "${ANDROID_HOME:-}/build-tools/"*/apksigner "${SDK}/build-tools/"*/apksigner.bat "${SDK}/build-tools/"*/apksigner; do
+  [ -x "$c" ] && { APKSIGNER="$c"; break; }
+done
+if [ -n "$APKSIGNER" ]; then
+  _fp_of() { "$APKSIGNER" verify --print-certs "$1" 2>/dev/null | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr -d '\r'; }
+  NEW_FP=$(_fp_of "$APK")
+  # 找最近一个**不是本次目标**的已存在包当基准
+  BASELINE=""
+  for old in $(ls -t "$OUT_DIR"/*.apk 2>/dev/null | head -6); do
+    [ "$(basename "$old")" = "${NAME}.apk" ] && continue
+    BASELINE="$old"; break
+  done
+  if [ -n "$NEW_FP" ] && [ -n "$BASELINE" ]; then
+    OLD_FP=$(_fp_of "$BASELINE")
+    if [ -n "$OLD_FP" ] && [ "$NEW_FP" != "$OLD_FP" ]; then
+      echo "!! 签名与上一版不一致 —— 已装旧版的用户将无法覆盖升级（INSTALL_FAILED_UPDATE_INCOMPATIBLE）"
+      echo "   本次：$NEW_FP"
+      echo "   旧版：$OLD_FP（$(basename "$BASELINE")）"
+      echo "   如果这是有意换签名（如密钥轮换），请手工确认后重跑；否则检查 signingConfig。"
+      exit 1
+    fi
+    echo "   第四查（签名一致性）通过 ✓ 与 $(basename "$BASELINE") 同指纹"
+  else
+    echo "   [warn] 无法核对签名（基准包或指纹缺失：NEW=${NEW_FP:-无} BASE=${BASELINE:-无}）"
+  fi
+else
+  echo "   [warn] 找不到 apksigner，跳过签名一致性校验（第四查）"
+fi
+
 echo "== 3/3 落交付目录 + 版本快照 =="
 mkdir -p "$OUT_DIR" "$ARCHIVE_DIR"
 OUT="$OUT_DIR/${NAME}.apk"
