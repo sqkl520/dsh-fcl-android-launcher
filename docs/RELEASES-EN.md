@@ -28,8 +28,7 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix26
-
+## 0.1.6-SNAPSHOT-fix22
 > **The model provider you add no longer disappears.** Previously one restart wiped the provider you
 > configured, with no warning at all.
 
@@ -52,12 +51,11 @@
 
 ### Upgrade notes
 
-- **Over-the-top install works** (fix25 → fix26 needs no uninstall).
+- **Over-the-top install works** (fix21 → fix22 needs no uninstall).
 
 ---
 
-## 0.1.6-SNAPSHOT-fix25
-
+## 0.1.6-SNAPSHOT-fix21
 > **Risk warnings are no longer cut off when you increase the system font size.** The gate dialog body
 > used to break off mid-sentence.
 
@@ -77,12 +75,11 @@
 
 ### Upgrade notes
 
-- **Over-the-top install works** (fix24 → fix25 needs no uninstall).
+- **Over-the-top install works** (fix20 → fix21 needs no uninstall).
 
 ---
 
-## 0.1.6-SNAPSHOT-fix24
-
+## 0.1.6-SNAPSHOT-fix20
 > **A "failures must be visible" pass.** Several error paths used to swallow the failure silently, so you
 > could never work out what went wrong.
 
@@ -100,12 +97,11 @@
 
 ### Upgrade notes
 
-- **Over-the-top install works** (fix23 → fix24 needs no uninstall).
+- **Over-the-top install works** (fix19 → fix20 needs no uninstall).
 
 ---
 
-## 0.1.6-SNAPSHOT-fix23
-
+## 0.1.6-SNAPSHOT-fix19
 > **A security hardening: nobody can steer your UI to another site any more.** Plus a batch of stability fixes.
 
 ### Security
@@ -128,12 +124,11 @@
 
 ### Upgrade notes
 
-- **Over-the-top install works** (fix22 → fix23 needs no uninstall).
+- **Over-the-top install works** (fix18 → fix19 needs no uninstall).
 
 ---
 
-## 0.1.6-SNAPSHOT-fix22
-
+## 0.1.6-SNAPSHOT-fix18
 > **The same dialog no longer reappears after you copy the access link.** And opening the UI in an
 > external browser no longer re-downloads the front-end files every time.
 
@@ -188,27 +183,23 @@ upgrade notes matter to you today are called out in the notes column.
 
 | Version | Headline | Notes |
 |---|---|---|
-| `0.1.6-SNAPSHOT` (fix21) | Corrected three things the previous build stated wrongly; warn automatically about the empty-directory trap (hit three times) | — |
-| `0.1.6-SNAPSHOT` (fix20) | Third R28 review: API key exposure surface warning + diagnosable empty-directory typo | — |
-| `0.1.6-SNAPSHOT` (fix19) | Second R28 review: ghost-instance protection + call-site contract tests | — |
-| `0.1.6-SNAPSHOT` (fix18) | R28 review rework: comment corrections + reject `..` + auto-create custom directories | — |
-| `0.1.6-SNAPSHOT` (fix17) | `HOME` points at the instance directory + customisable start directory | — |
-| `0.1.6-SNAPSHOT` (fix16) | Open in browser + stable ports, so an external browser can stay authenticated | — |
-| `0.1.6-SNAPSHOT` (fix15) | External browser could not pick a workspace — `HOME` now points at the instance workspace | — |
-| `0.1.6-SNAPSHOT` (fix14) | R26 wrap-up: cross-implementation consistency tests drop the mirrored implementation; mutation verification added | — |
-| `0.1.6-SNAPSHOT` (fix13) | R26 item 3: tests upgraded from "pinning implementation" to "contract + pipeline" | — |
-| `0.1.6-SNAPSHOT` (fix12) | R25 unified criteria: one definition of "is it installed"; failures are no longer swallowed | — |
-| `0.1.6-SNAPSHOT` (fix11) | R24 state machine: startup retry and stop reliability | — |
-| `0.1.6-SNAPSHOT` (fix10) | R23 review rework: four-branch gate dialog + no blank screen after copying + script version comparison wired up | **First build where the script-version comparison actually runs on startup** |
-| `0.1.6-SNAPSHOT` (fix9) | Superseded by fix10 | — |
-| `0.1.6-SNAPSHOT` (fix8) | — | — |
-| `0.1.6-SNAPSHOT` (fix7) | — | — |
-| `0.1.6-SNAPSHOT` (fix6) | **First identity change: a new app; the old package can coexist** | **Package name changes to `com.dsh.fcl.androidlauncher` with a dedicated key (not debuggable). fix6 does not inherit data from fix1–fix5** |
-| `0.1.6-SNAPSHOT` (fix5) | Verified locally only, never uploaded to Releases | — |
-| `0.1.6-SNAPSHOT` (fix4) | — | — |
-| `0.1.6-SNAPSHOT` (fix3) | — | — |
-| `0.1.6-SNAPSHOT` (fix2) | — | — |
-| `0.1.6-SNAPSHOT` (fix1) | — | Package names carry a `.debug` suffix with the public debug key |
+| `0.1.6-SNAPSHOT` (fix17) | Warn on empty directories + correct three inaccurate explanations | — |
+| `0.1.6-SNAPSHOT` (fix16) | API key exposure surface warning + diagnosable empty-directory typo | — |
+| `0.1.6-SNAPSHOT` (fix15) | Ghost-instance protection + call-site contract tests | — |
+| `0.1.6-SNAPSHOT` (fix14) | Comment corrections + reject `..` + auto-create custom directories | — |
+| `0.1.6-SNAPSHOT` (fix13) | `HOME` points at the instance directory + customisable start directory | — |
+| `0.1.6-SNAPSHOT` (fix12) | Open in browser + stable ports, so an external browser can stay authenticated | — |
+| `0.1.6-SNAPSHOT` (fix11) | External browser could not pick a workspace — `HOME` now points at the instance workspace | — |
+| `0.1.6-SNAPSHOT` (fix10) | Cross-implementation consistency tests drop the mirrored implementation; mutation verification added | — |
+| `0.1.6-SNAPSHOT` (fix09) | Tests upgraded from "pinning implementation" to "contract + pipeline" | — |
+| `0.1.6-SNAPSHOT` (fix08) | One definition of "is it installed"; failures are no longer swallowed | — |
+| `0.1.6-SNAPSHOT` (fix07) | Startup retry and stop reliability | — |
+| `0.1.6-SNAPSHOT` (fix06) | **Merges the former fix6~fix10**: new app identity, install progress, external-browser 401, gate-dialog dead ends | **Package name changes to `com.dsh.fcl.androidlauncher` with a dedicated key (not debuggable). Earlier `.debug` builds can coexist** |
+| `0.1.6-SNAPSHOT` (fix05) | Install progress visible; external-browser 401 and dead-end buttons handled | — |
+| `0.1.6-SNAPSHOT` (fix04) | — | Package names carry a `.debug` suffix with the public debug key |
+| `0.1.6-SNAPSHOT` (fix03) | — | — |
+| `0.1.6-SNAPSHOT` (fix02) | — | — |
+| `0.1.6-SNAPSHOT` (fix01) | — | — |
 | `0.1.6-SNAPSHOT` | Base 0.1.6 build | — |
 | `0.1.5-SNAPSHOT` | Task area, setup page and right panel polished | — |
 | `0.1.4-SNAPSHOT` | Instance management and version download reworked | — |
