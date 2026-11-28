@@ -147,7 +147,7 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 | Fix round **fix19** (R31+R32: URL adoption gate, page teardown/rebuild, script version marker) | ✅ Released (code 129) |
 | Fix round **fix20** (R33–R44: stricter log redaction, atomic pid/overlay/delete transactions, orphan cleanup no longer fails silently) | ✅ Released (code 130) |
 | Fix round **fix21** (R45: gate dialog body no longer clipped at large font sizes, and it scrolls) | ✅ Released (code 131) |
-| Fix round **fix22** (merges the former fix26 + fix27~fix40: config editor entry, phantom session-lock error, leftover files after instance deletion) | ✅ Released (code 132, current) |
+| Fix round **fix22** (R45: `launcher.patch.yml` is no longer overwritten wholesale, so your configured providers survive) | ✅ Released (code 132, current) |
 | `1.0.0` (can reliably start / download / manage dsh) | ⬜ Pending promotion from 0.1.6 |
 
 **Quality baseline**: build BUILD SUCCESSFUL · unit tests **1060/1060** · script self-check 33/33
