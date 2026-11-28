@@ -26,10 +26,10 @@ A dsh launcher built on top of [Fold Craft Launcher](https://github.com/FCL-Team
 > If you find it useful, a star means a lot ⭐
 >
 > **The [Releases page](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) is the source of truth for versions.**
-> **The latest publicly released build is `0.1.6-SNAPSHOT-fix26`.**
+> **The latest publicly released build is `0.1.6-SNAPSHOT-fix22`.**
 > This README does not maintain a version number on its own — historically it mentioned stale values
 > like `fix4`/`fix6`, and **whenever it disagrees with the Releases page, the Releases page wins**.
-> After installing, check the version suffix on the About screen (e.g. `-fix26`) to confirm you
+> After installing, check the version suffix on the About screen (e.g. `-fix22`) to confirm you
 > installed the right package.
 
 ---
@@ -121,7 +121,7 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 
 ## 📌 Current status
 
-> Last updated: 2026-11-19 (fix26). The single source of truth for version numbers is `dshVersion` /
+> Last updated: 2026-11-27 (fix22). The single source of truth for version numbers is `dshVersion` /
 > `dshVersionCode` in `gradle.properties`.
 
 | Area | Status |
@@ -130,24 +130,24 @@ allows executing), so **there is no need to drop targetSdk to 28**. See
 | App shell: three pages + instance detail + right panel + dynamic island | ✅ Done |
 | Runtime base: proot + rootfs + PROOT_LOADER | ✅ Integrated, verified on device |
 | End-to-end on device: install → start → stop → restart → chat | ✅ Verified (0.1.6, 2026-10-11) |
-| Fix rounds fix1 ~ fix9 | ✅ All released (fix5 was verified locally only and never uploaded to Releases — see the "fix5, historical verification build" section of [`docs/RELEASES.md`](docs/RELEASES-EN.md)); current state on [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
-| Fix round **fix10** (R23 review rework: four-branch gate dialog + no blank screen after copying + script version comparison wired up) | ✅ Released (code 116, see Releases) |
-| Fix round **fix11** (R24 state machine: startup retry and stop reliability) | ✅ Released (code 117, see Releases) |
-| Fix round **fix12** (R25 unified criteria: one definition of "is it installed" + failures no longer swallowed) | ✅ Released (code 118, see Releases) |
-| Fix round **fix13** (R26 item 3: tests upgraded from "pinning implementation" to "contract + pipeline") | ✅ Released (code 119, see Releases) |
-| Fix round **fix14** (R26 wrap-up: cross-implementation consistency tests drop the mirrored implementation, add mutation verification) | ✅ Released (code 120, see Releases) |
-| Fix round **fix15** (R27: can't pick a workspace in an external browser — `HOME` points at the instance workspace) | ✅ Released (code 121, see Releases) |
-| Fix round **fix16** (R27: open in browser + stable ports, so an external browser can stay authenticated) | ✅ Released (code 122, see Releases) |
-| Fix round **fix17** (R27: `HOME` points at the instance directory + customisable start directory) | ✅ Built (code 123) |
-| Fix round **fix18** (R28 review rework: comment corrections + reject `..` + auto-create custom directories) | ✅ Built (code 124) |
-| Fix round **fix19** (R28 second review: ghost-instance protection + call-site contract tests) | ✅ Built (code 125) |
-| Fix round **fix20** (R28 third review: API key exposure warning + diagnosable empty-directory typo) | ✅ Built (code 126) |
-| Fix round **fix21** (R28 C3 user perspective: warn on empty directories + correct three inaccurate explanations) | ✅ Built (code 127) |
-| Fix round **fix22** (R29: stop re-prompting the WebView gate after copying the link + cache headers for front-end assets, so the UI no longer re-downloads every time) | ✅ Built (code 128) |
-| Fix round **fix23** (R31+R32: URL adoption gate, page teardown/rebuild, script version marker) | ✅ Built (code 129) |
-| Fix round **fix24** (R33–R44: stricter log redaction, atomic pid/overlay/delete transactions, orphan cleanup no longer fails silently) | ✅ Built (code 130) |
-| Fix round **fix25** (R45: gate dialog body no longer clipped at large font sizes, and it scrolls) | ✅ Built (code 131) |
-| Fix round **fix26** (R45: `launcher.patch.yml` is no longer overwritten wholesale, so your configured providers survive) | ✅ Released (code 132, current) |
+| Fix rounds **fix01 ~ fix05** | ✅ Released (code 107~111). These carry the `.debug` package suffix and a separate debug certificate, so they can coexist with later builds |
+| Fix round **fix06** (merges the former fix6~fix10: new app identity, install progress, external-browser 401, gate-dialog dead ends) | ✅ Released (code 116) |
+| Fix round **fix07** (R24: startup retry and stop reliability) | ✅ Released (code 117) |
+| Fix round **fix08** (R25: one definition of "is it installed" + failures no longer swallowed) | ✅ Released (code 118) |
+| Fix round **fix09** (R26: tests upgraded from "pinning implementation" to "contract + pipeline") | ✅ Released (code 119) |
+| Fix round **fix10** (R26 wrap-up: cross-implementation consistency tests drop the mirrored implementation, add mutation verification) | ✅ Released (code 120) |
+| Fix round **fix11** (R27: can't pick a workspace in an external browser — `HOME` points at the instance workspace) | ✅ Released (code 121) |
+| Fix round **fix12** (R27: open in browser + stable ports, so an external browser can stay authenticated) | ✅ Released (code 122) |
+| Fix round **fix13** (R27: `HOME` points at the instance directory + customisable start directory) | ✅ Released (code 123) |
+| Fix round **fix14** (R28: comment corrections + reject `..` + auto-create custom directories) | ✅ Released (code 124) |
+| Fix round **fix15** (R28: ghost-instance protection + call-site contract tests) | ✅ Released (code 125) |
+| Fix round **fix16** (R28: API key exposure warning + diagnosable empty-directory typo) | ✅ Released (code 126) |
+| Fix round **fix17** (R28: warn on empty directories + correct three inaccurate explanations) | ✅ Released (code 127) |
+| Fix round **fix18** (R29: stop re-prompting the WebView gate after copying the link + cache headers for front-end assets) | ✅ Released (code 128) |
+| Fix round **fix19** (R31+R32: URL adoption gate, page teardown/rebuild, script version marker) | ✅ Released (code 129) |
+| Fix round **fix20** (R33–R44: stricter log redaction, atomic pid/overlay/delete transactions, orphan cleanup no longer fails silently) | ✅ Released (code 130) |
+| Fix round **fix21** (R45: gate dialog body no longer clipped at large font sizes, and it scrolls) | ✅ Released (code 131) |
+| Fix round **fix22** (merges the former fix26 + fix27~fix40: config editor entry, phantom session-lock error, leftover files after instance deletion) | ✅ Released (code 132, current) |
 | `1.0.0` (can reliably start / download / manage dsh) | ⬜ Pending promotion from 0.1.6 |
 
 **Quality baseline**: build BUILD SUCCESSFUL · unit tests **1060/1060** · script self-check 33/33
@@ -196,7 +196,7 @@ to join in; Issues and PRs are both accepted.
 - **Build and test**: `.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest` (Windows, unit tests);
   `sh run-compile.sh` → `sh run-tests.sh` (arm64 Linux / phone sandbox, compile check + unit tests). Environment wiring in [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT-EN.md).
 - **Issues and PRs**: when reporting a bug please include the **version suffix shown on the About screen**
-  (e.g. `0.1.6-SNAPSHOT-fix26`), device model, Android version and reproduction steps. If you want to change
+  (e.g. `0.1.6-SNAPSHOT-fix22`), device model, Android version and reproduction steps. If you want to change
   code, open an Issue first so your work is not wasted.
 
 [![Contributors](https://contrib.rocks/image?repo=sqkl520/dsh-fcl-android-launcher)](https://github.com/sqkl520/dsh-fcl-android-launcher/graphs/contributors)

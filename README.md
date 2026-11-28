@@ -26,9 +26,9 @@
 > 如果喜欢这个项目就 Star 一下喵 ⭐
 >
 > **当前版本以 [Releases 页](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) 为准**：
-> **公开发布的最新包是 `0.1.6-SNAPSHOT-fix26`**。本 README 不单独维护版本号 ——
+> **公开发布的最新包是 `0.1.6-SNAPSHOT-fix22`**。本 README 不单独维护版本号 ——
 > 历史上这里写过 `fix4`/`fix6` 等旧值，与 Releases 页对不上时**一律以 Releases 页为准**。
-> 装完请到**关于页核对版本号后缀**（如 `-fix26`）确认装对了包。
+> 装完请到**关于页核对版本号后缀**（如 `-fix22`）确认装对了包。
 
 ---
 
@@ -117,32 +117,28 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 
 ## 📌 当前进度
 
-> 最后更新：2026-11-19（fix26）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
+> 最后更新：2026-11-27（fix22）。版本号唯一真源：`gradle.properties` 的 `dshVersion` / `dshVersionCode`。
 
 | 模块 | 状态 |
 |---|---|
-| FCL 改造：移除全部 Minecraft 代码与资源 | ✅ 完成（约 −226k 行） |
-| 应用外壳：三页 + 实例详情 + 右面板 + 动态岛 | ✅ 完成 |
-| 运行时底座：proot + rootfs + PROOT_LOADER | ✅ 已集成、真机点亮 |
-| 真机端到端：装 → 启 → 停 → 再启 → 对话 | ✅ 已点亮（0.1.6，2026-10-11） |
-| 修复轮次 fix1 ~ fix9 | ✅ 全部已发布（fix5 仅本机验证、未上传 Releases，原因见 [`docs/RELEASES.md`](docs/RELEASES.md) 的 fix5 段）；状态见 [Releases](https://github.com/sqkl520/dsh-fcl-android-launcher/releases) |
-| 修复轮次 **fix10**（R23 锐评返工：门禁框四支按钮 + 复制后不再空白 + 脚本版本比对接通） | ✅ 已发布（code 116，见 Releases） |
-| 修复轮次 **fix11**（R24 状态机收口：启动重试与停止可靠性） | ✅ 已发布（code 117，见 Releases） |
-| 修复轮次 **fix12**（R25 判据统一：装好了没只认一套口径 + 失败不再被吞掉） | ✅ 已发布（code 118，见 Releases） |
-| 修复轮次 **fix13**（R26 第三件事：测试从「钉实现」升级为「契约 + 管线」） | ✅ 已发布（code 119，见 Releases） |
-| 修复轮次 **fix14**（R26 收尾：跨实现一致性测试去掉镜像实现，加变异验证） | ✅ 已发布（code 120，见 Releases） |
-| 修复轮次 **fix15**（R27：外部浏览器选不了工作区 —— `HOME` 指向实例 workspace） | ✅ 已发布（code 121，见 Releases） |
-| 修复轮次 **fix16**（R27：在浏览器中打开 + 端口稳定，让外部浏览器能长期免认证） | ✅ 已发布（code 122，见 Releases） |
-| 修复轮次 **fix17**（R27：HOME 指向实例目录 + 「启动目录」可自定义） | ✅ 已出包（code 123） |
-| 修复轮次 **fix18**（R28 锐评返工：注释纠偏 + `..` 拒绝 + 自定义目录自动创建） | ✅ 已出包（code 124） |
-| 修复轮次 **fix19**（R28 二轮锐评：幽灵实例保护 + 调用点契约测试） | ✅ 已出包（code 125） |
-| 修复轮次 **fix20**（R28 三轮锐评：API Key 暴露面提示 + typo 空目录可诊断） | ✅ 已出包（code 126） |
-| 修复轮次 **fix21**（R28 C3 用户视角：空目录自动告警 + 更正三处错误说明） | ✅ 已出包（code 127） |
-| 修复轮次 **fix22**（R29：复制链接后不再重问 WebView 门禁 + 前端资源补缓存头，打开界面不再每次重下） | ✅ 已出包（code 128） |
-| 修复轮次 **fix23**（R31+R32：URL 采信门、页面回收重建、脚本版本号） | ✅ 已出包（code 129） |
-| 修复轮次 **fix24**（R33~R44：日志脱敏加严、pid/overlay/删除事务原子化、孤儿清理不再静默失败） | ✅ 已出包（code 130） |
-| 修复轮次 **fix25**（R45：门禁框正文在高字号下不再被裁掉，且能滚动） | ✅ 已出包（code 131） |
-| 修复轮次 **fix26**（R45：`launcher.patch.yml` 不再整份覆盖，保留用户配的 provider） | ✅ 已发布（code 132，当前最新） |
+| 修复轮次 **fix01 ~ fix05** | ✅ 已发布（code 107~111）。此期包名带 `.debug` 后缀、用独立调试证书，可与后续版本并存 |
+| 修复轮次 **fix06**（合并原 fix6~fix10：换 App 正式身份、安装进度、外部浏览器 401、门禁框死路） | ✅ 已发布（code 116） |
+| 修复轮次 **fix07**（R24：启动重试与停止可靠性） | ✅ 已发布（code 117） |
+| 修复轮次 **fix08**（R25：装好了没只认一套口径 + 失败不再被吞掉） | ✅ 已发布（code 118） |
+| 修复轮次 **fix09**（R26：测试从「钉实现」升级为「契约 + 管线」） | ✅ 已发布（code 119） |
+| 修复轮次 **fix10**（R26 收尾：跨实现一致性测试去掉镜像实现，加变异验证） | ✅ 已发布（code 120） |
+| 修复轮次 **fix11**（R27：外部浏览器选不了工作区 —— `HOME` 指向实例 workspace） | ✅ 已发布（code 121） |
+| 修复轮次 **fix12**（R27：在浏览器中打开 + 端口稳定，让外部浏览器能长期免认证） | ✅ 已发布（code 122） |
+| 修复轮次 **fix13**（R27：HOME 指向实例目录 + 「启动目录」可自定义） | ✅ 已发布（code 123） |
+| 修复轮次 **fix14**（R28：注释纠偏 + `..` 拒绝 + 自定义目录自动创建） | ✅ 已发布（code 124） |
+| 修复轮次 **fix15**（R28：幽灵实例保护 + 调用点契约测试） | ✅ 已发布（code 125） |
+| 修复轮次 **fix16**（R28：API Key 暴露面提示 + typo 空目录可诊断） | ✅ 已发布（code 126） |
+| 修复轮次 **fix17**（R28：空目录自动告警 + 更正三处错误说明） | ✅ 已发布（code 127） |
+| 修复轮次 **fix18**（R29：复制链接后不再重问 WebView 门禁 + 前端资源补缓存头） | ✅ 已发布（code 128） |
+| 修复轮次 **fix19**（R31+R32：URL 采信门、页面回收重建、脚本版本号） | ✅ 已发布（code 129） |
+| 修复轮次 **fix20**（R33~R44：日志脱敏加严、pid/overlay/删除事务原子化） | ✅ 已发布（code 130） |
+| 修复轮次 **fix21**（R45：门禁框正文在高字号下不再被裁掉，且能滚动） | ✅ 已发布（code 131） |
+| 修复轮次 **fix22**（合并原 fix26 + fix27~fix40：编辑配置入口、会话锁误报、删实例残留） | ✅ 已发布（code 132，当前最新） |
 | `1.0.0`（能正常启动 / 下载 / 管理 dsh） | ⬜ 待 0.1.6 转正 |
 
 **质量基线**：编译 BUILD SUCCESSFUL · 单元测试 **1096/1096** · 脚本自检 40/40
@@ -185,7 +181,7 @@ Android 10+ 对 `targetSdk ≥ 29` 的 App 启用 **W^X**：禁止 `execve` 应�
 - **贡献指南**：[`CONTRIBUTING.md`](CONTRIBUTING.md) —— 怎么报问题、怎么提 PR、代码风格与测试要求。
 - **构建与测试**：`.\gradlew.bat --no-daemon :FCL:testFordebugUnitTest`（Windows，单测）；
   `sh run-compile.sh` → `sh run-tests.sh`（arm64 Linux / 手机沙箱，编译校验 + 单测）。环境接线见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)。
-- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix26`）、机型、Android 版本、复现步骤；
+- **Issues 与 PR**：报 bug 请带上**关于页显示的版本号后缀**（如 `0.1.6-SNAPSHOT-fix22`）、机型、Android 版本、复现步骤；
   想改代码请先开个 Issue 说一声，避免白写。
 
 [![Contributors](https://contrib.rocks/image?repo=sqkl520/dsh-fcl-android-launcher)](https://github.com/sqkl520/dsh-fcl-android-launcher/graphs/contributors)
