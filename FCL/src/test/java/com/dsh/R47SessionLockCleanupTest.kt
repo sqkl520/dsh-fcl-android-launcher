@@ -16,7 +16,7 @@ import java.nio.file.Files
  *
  * ## 这条修的是什么
  *
- * 真机（KKG-AN00 / v0.1.6-SNAPSHOT-fix26）发消息报：
+ * 真机（Android 10 设备 / v0.1.6-SNAPSHOT-fix26）发消息报：
  * ```
  * session "session-c203b2d6-…" is already owned by an active write handle
  * ```

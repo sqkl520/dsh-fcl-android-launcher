@@ -1,7 +1,7 @@
 /**
  * BL-247 修复：proot 环境下让 inode 校验恒成立。
  *
- * ## 问题（真机实测，KKG-AN00 / Android 10 / proot）
+ * ## 问题（真机实测，Android 10 设备 / proot）
  *
  * dsh 的会话写锁在 `@deepseek-ai/dsh-session-persistence-jsonl/src/lease.ts`：
  * 先用非阻塞 `flock(2)` 拿锁，**然后**校验"我锁住的 inode 是否还是 lock 路径上那个文件"：

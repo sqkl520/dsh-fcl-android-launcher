@@ -3,9 +3,9 @@
 > 用途：荣耀/华为手机插上后只认 MTP，`adb devices` 永远是空的。
 > 根因是系统里**没有 VID_12D1 的驱动**（设备管理器里 `HDB Interface` 报 `CM_PROB_FAILED_INSTALL`）。
 
-## 背景（2026-10-31 实测）
+## 背景（实测）
 
-在 HONOR X10 Max / KKG-AN00 / Android 10 上遇到：
+在一台荣耀手机上遇到（Android 10 系统）：
 
 ```
 HDB Interface          Status: Error      ← CM_PROB_FAILED_INSTALL

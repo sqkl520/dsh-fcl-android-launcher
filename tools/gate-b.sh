@@ -163,7 +163,7 @@ wait_state() {
   return 1
 }
 
-# WebView 兼容门禁（BL-243 的现象）：本机 WebView 114 < dsh 要求的 119+。
+# WebView 兼容门禁（BL-243 的现象）：本机 WebView 版本过旧 < dsh 要求的 119+。
 #
 # ★ 它**必然**会在点「启动」之后弹出来，因为启动成功的回调是
 #   `onStarted = { openWebView() }`（DshMainActivity.kt:263 等三处）——

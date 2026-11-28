@@ -118,7 +118,7 @@ class DshWebViewActivity : FCLActivity() {
      * ## 为什么不复用 [compatOk]
      * [compatOk] 的语义是"用户同意在本页用不达标的 WebView 内核加载 dsh"。复制链接**不是**
      * 这个同意 —— 用户拿走链接恰恰是要**离开**本页。混用会让用户从浏览器切回来时直接
-     * `loadUrl`，用旧内核去渲染 dsh 0.2.x ⇒ 撞上 WebView 114 的必崩（[DshWebViewCompat]
+     * `loadUrl`，用旧内核去渲染 dsh 0.2.x ⇒ 撞上 WebView 版本过旧 的必崩（[DshWebViewCompat]
      * 拦的正是这件事）。两件事必须各有一个标记。
      *
      * ## 为什么不落盘
@@ -1496,7 +1496,7 @@ class DshWebViewActivity : FCLActivity() {
         //
         // ## 为什么必须兜底（真机实测）
         //
-        // HONOR X10 Max / Android 10 / Edge 155：
+        // 真机实测 / Android 10 / Edge 155：
         // - App 日志写的是 `auth=yes`（`UrlScanner.tokenOf(url) != null`，URL 确实带 token）
         // - 但 Edge 里用 CDP 量到的是 `http://127.0.0.1:38501/` —— **没有 query**
         // - 结果页显示 `dsh web authentication required`
@@ -1969,7 +1969,7 @@ class DshWebViewActivity : FCLActivity() {
      * （重试 / 日志 / 停止）——**没有任何指向浏览器的出口**。用户复制成功了，
      * 但下一步"去哪"完全靠猜：得自己退到桌面、找到浏览器、长按地址栏粘贴。
      *
-     * 而本机（WebView 114）**每次**打开界面都要走这一遍，这是最高频的一次交互。
+     * 而本机（WebView 版本过旧）**每次**打开界面都要走这一遍，这是最高频的一次交互。
      *
      * 这一支把"复制成功 → 打开浏览器"补成一条完整路径：
      * 点它 → `openExternalFresh` → 先复制（幂等，反正刚复制过）→ `ACTION_VIEW`。

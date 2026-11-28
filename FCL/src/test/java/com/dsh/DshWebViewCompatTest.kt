@@ -87,7 +87,7 @@ class DshWebViewCompatTest {
         assertEquals("厂商前缀 V", 114, DshWebViewCompat.parseWebViewMajor("V114.0.5.302"))
         assertEquals("chrome 前缀", 119, DshWebViewCompat.parseWebViewMajor("chrome119.0"))
         assertEquals("android- 前缀", 114, DshWebViewCompat.parseWebViewMajor("android-114.0.5.302"))
-        assertEquals("WebView 前缀", 114, DshWebViewCompat.parseWebViewMajor("WebView 114.0.5.302"))
+        assertEquals("WebView 前缀", 114, DshWebViewCompat.parseWebViewMajor("WebView 版本过旧.0.5.302"))
         assertEquals("M 前缀", 119, DshWebViewCompat.parseWebViewMajor("M119.0.6045"))
         assertEquals("数字带尾字母", 114, DshWebViewCompat.parseWebViewMajor("114abc.0.5.302"))
         assertEquals("数字带尾字母（短）", 114, DshWebViewCompat.parseWebViewMajor("114a"))

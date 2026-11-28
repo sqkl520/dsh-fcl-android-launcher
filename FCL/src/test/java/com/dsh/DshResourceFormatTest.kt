@@ -151,7 +151,7 @@ class DshResourceFormatTest {
         // DshWebViewCompat（R1b）：%1$d = 要求的最低 WebView 主版本号（R16/fix4 起为 119）
         "dsh_webview_compat_message" to arrayOf<Any>(119),
         // R30/BL-223：%1$s = 运行期真探测出的缺失 API 列表（用 ", " 连接）。
-        // 真机（HONOR X10 Max / WebView 114）实测的样子就是这两项。
+        // 真机（Android 10 设备 / WebView 版本过旧）实测的样子就是这两项。
         "dsh_webview_compat_message_missing" to
             arrayOf<Any>("Promise.withResolvers (needs 119+), AbortSignal.any (needs 116+)"),
         // BL-185（R22）：%1$s = WebView 读到的 versionName 原文（**只在非 null 时**走这条；

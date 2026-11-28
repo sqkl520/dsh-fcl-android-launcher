@@ -75,7 +75,7 @@ object DshWebViewCompat {
      * 探测一次的实际收益：门禁文案能写出**具体缺什么**，用户看到的就不是
      * 泛泛的"太旧"，而是"缺少 Promise.withResolvers（需 119+）"。
      *
-     * ## 实测背景（HONOR X10 Max / WebView 114）
+     * ## 实测背景（Android 10 设备 / WebView 版本过旧）
      *
      * ```
      * [typeof Promise.withResolvers, typeof AbortSignal.any] → "undefined | undefined"
@@ -227,7 +227,7 @@ object DshWebViewCompat {
      *
      * 解析规则（刻意宽松，只取数字、不赌分隔符）：
      * - `trim()` 后取**第一个** `[0-9]+` 段：`V114.0.5.302`/`chrome119.0`/`114_0_5_302`/
-     *   `114,0,5,302`/`WebView 114.x` 都能拿到正确大版本；
+     *   `114,0,5,302`/`WebView 版本过旧.x` 都能拿到正确大版本；
      * - 全角数字（`１１４`）先归一再匹配 —— 部分厂商的版本串混用全角；
      * - ZWSP（U+200B）等不可见字符不是数字，正则自然跳过，`trim` 裁不掉也不影响；
      * - 数字段超出 `Int` 范围（溢出）→ `toIntOrNull()` 返回 null，按"读不出"处理。
@@ -384,7 +384,7 @@ object DshWebViewCompat {
         // 再决定文案。探测有结果就用"点名具体缺什么"的版本（`_message_missing`），
         // 探测不出/超时就退回原来的泛化文案 —— 门禁不能因为诊断失败而卡住用户。
         //
-        // ★ 为什么值得多这一次异步：实测（HONOR X10 Max / WebView 114）发现，
+        // ★ 为什么值得多这一次异步：实测（Android 10 设备 / WebView 版本过旧）发现，
         //   "版本太旧"在这台设备上的真实表现**不是白屏**，而是界面正常打开、
         //   所有后端操作静默失败（选工作区永远"正在加载"、发不出消息）。
         //   旧文案说的"可能白屏或没有响应"会让用户以为"还能凑合用"，

@@ -20,7 +20,7 @@ import org.junit.Test
  *
  * 用户看到的就是"这个 App 连报错都报不利索"，而我们失去的是一次可信的诊断。
  *
- * 基准值来自真机实测（HONOR X10 Max / WebView 114）：
+ * 基准值来自真机实测（Android 10 设备 / WebView 版本过旧）：
  * ```
  * [typeof Promise.withResolvers, typeof AbortSignal.any].join(" | ")
  * → "undefined | undefined"

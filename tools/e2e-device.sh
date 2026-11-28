@@ -175,7 +175,7 @@ fi
 echo
 
 echo "== 5. WebView 门禁框 + fix22 复制链接流程 =="
-# ⚠ 这一组在**真机实测跑通过**（HONOR X10 Max / KKG-AN00 / Android 10 / WebView 114）：
+# ⚠ 这一组在**真机实测跑通过**（Android 10 设备 / Android 10 设备 / Android 10 / WebView 版本过旧）：
 #   门禁框弹出 → Copy link → Copy → 落到「Link copied」面板（**不重弹**）→ Retry → 门禁回来。
 #
 # 两个必踩的坑，都记在这里：
@@ -277,7 +277,7 @@ else
           [ -z "$C" ] && break
         done
         # 就绪的判据有三个，任一命中即可：
-        #   ① 直接弹出 WebView 门禁框（本例：WebView 114 < 119，启动即弹）
+        #   ① 直接弹出 WebView 门禁框（本例：WebView 版本过旧 < 119，启动即弹）
         #   ② 落到「已复制」面板（上一次测试留下的状态）
         #   ③ 右栏 Open UI 变为可用
         # ★ 首次装完 dsh 后要跑 npm/解包，实测可能 >90 秒；给到 240 秒。
