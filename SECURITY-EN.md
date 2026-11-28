@@ -28,7 +28,7 @@ Security fixes are issued for the **latest published build only**.
 
 | Version | Supported | Notes |
 |---------|-----------|-------|
-| `0.1.6-SNAPSHOT-fix26` (**latest publicly released build**) | ✅ Yes | Security fixes land here |
+| `0.1.6-SNAPSHOT-fix22` (**latest publicly released build**) | ✅ Yes | Security fixes land here |
 | Earlier `-fixN` builds | ❌ No | Upgrade to the latest published build |
 | The `0.1.6-SNAPSHOT` non-fix build | ⚠️ Critical fixes only | Not yet promoted to `1.0.0` |
 
@@ -57,7 +57,7 @@ API key, your model provider URL, access tokens or personal data into a report; 
 
 ### What to include
 
-- The version suffix (the string on the **About** screen, e.g. `0.1.6-SNAPSHOT-fix26`) — without it
+- The version suffix (the string on the **About** screen, e.g. `0.1.6-SNAPSHOT-fix22`) — without it
   there is no way to tell whether you are on the current build
 - Device model + Android version + **WebView version** (shown on the About screen, or
   `chrome://version`) — proot, WebView and storage-path behaviour are strongly ROM-dependent
@@ -477,6 +477,6 @@ check alone, `http://127.0.0.1:<attacker port>/?token=x` was still adopted.
 
 ---
 
-> This document describes the implementation at **code baseline `0.1.6-SNAPSHOT-fix26`** (code 132);
-> the latest publicly released build is **fix26**. Security claims are answerable to the code: if you
+> This document describes the implementation at **code baseline `0.1.6-SNAPSHOT-fix22`** (code 132);
+> the latest publicly released build is **fix22**. Security claims are answerable to the code: if you
 > find this document disagreeing with the code, **the code wins**, and an issue pointing it out is welcome.
