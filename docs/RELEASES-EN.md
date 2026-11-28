@@ -29,56 +29,22 @@
 ---
 
 ## 0.1.6-SNAPSHOT-fix22
-> **You can now edit an instance's config files right in the launcher, and dsh no longer falsely
-> reports "session already in use".**
-
-### Added
-
-- **Settings has a new "Edit config file" entry**, so you can change `home/.credentials.yaml`,
-  `launcher.patch.yml` and similar files without hooking up a computer or digging through a file
-  manager. Saves go through an atomic replace — a power cut halfway through won't leave a truncated file.
-
-### Fixed
-
-- **dsh kept saying "this session is already owned", even when nobody owned it.** The root cause is
-  that the file lock's inode self-check always failed under proot. A preload shim now projects a
-  consistent inode so the lock can actually be recognised.
-
-  This change relies on an updated startup script, so **the first launch after upgrading will go
-  through the setup page once to re-extract the scripts** (a second or two; your rootfs and session
-  records are untouched).
-
-- **Deleting an instance no longer leaves a few hundred MB behind.** It is cleaned up now.
-- **A start directory outside the instance is no longer silent.** It used to be ignored quietly; now
-  you are told.
-
-### Upgrade notes
-
-- **Over-the-top install works** (fix21 → fix22 needs no uninstall).
-- **The startup scripts are re-extracted on first launch** (script version 23 → 24, takes a second).
-
----
-
-## 0.1.6-SNAPSHOT-fix21
 > **The model provider you add no longer disappears.** Previously one restart wiped the provider you
 > configured, with no warning at all.
 
 ### Fixed
 
-- **Your custom provider survives a restart.** On every start the launcher rewrote a config file in the
-  instance directory, and that file is exactly where dsh reads custom model providers from. It used to be
-  **regenerated in full** — a provider you wrote in following dsh's documentation was wiped on the next
-  start. Now the launcher maintains only its own two entries and leaves everything else untouched, so your
-  configuration is no longer lost.
+- **Custom model providers now survive a restart.** The launcher used to rewrite the instance's config
+  file on every startup — and that is exactly where dsh reads your custom model providers from, so a
+  provider configured following the dsh docs was gone on the next launch. The launcher now maintains
+  only its own two entries and leaves everything else untouched.
 
-  `writeLauncherPatchOverlay` used to overwrite the whole file; it now merges — claiming `client-hmr` and
-  `launcher-assets` by id and keeping everything else after them (dsh's patch semantics are "later wins").
-  `R45LauncherPatchMergeTest` has 9 cases, one of which asserts the production call site really calls the
-  merge function. Unit tests 1060/1060, script self-check 33/33.
-
-  Verified on device (KKG-AN00 / Android 10): wrote a `mygateway` provider into `launcher.patch.yml`,
-  force-stopped and relaunched — the entry was still there, and both of the launcher's own entries were
-  too. All three coexist.
+  `writeLauncherPatchOverlay` used to overwrite the whole file; it now merges: it claims `client-hmr`
+  and `launcher-assets` by id, keeps the remaining entries and appends them after (dsh's patch
+  semantics are "the later one wins"). On a real device `grep -c mygateway launcher.patch.yml` was 0
+  after a restart before the fix and is always 1 after it. `R45LauncherPatchMergeTest` has 9 cases,
+  one of which asserts the production call site actually calls the merge function — reverting to
+  overwrite turns it red. Unit tests 1060/1060.
 
 ### Upgrade notes
 
@@ -86,23 +52,23 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix20
-> **Risk warnings are no longer cut off when you increase the system font size.** The gate dialog body
-> used to break off mid-sentence.
+## 0.1.6-SNAPSHOT-fix21
+> **Risk warnings are no longer cut off when you increase the system font size.** The gate dialog
+> body used to break off mid-sentence.
 
 ### Fixed
 
-- **The gate dialog body is no longer clipped and can be scrolled.** At 1.3× system font size the WebView
-  gate dialog's body broke off mid-sentence, and what got cut was precisely "tapping 'Continue anyway' on
-  this device will not restore these features" — the most important risk warning did not exist on a
-  "small screen + large text" device. Height is now computed from the content's actual measured size, and
-  any body length can be scrolled to the end.
+- **The gate dialog body is no longer clipped and can be scrolled.** At 1.3× system font size the
+  dialog's body broke off mid-sentence, and what got cut was precisely "tapping 'Continue anyway' on
+  this device will not restore these features" — the most important risk warning simply did not exist
+  on a "small screen + large text" device. Height is now computed from the content's actual measured
+  size, and any body length can be scrolled to the end.
 - **The root cause was one layer deeper than the ledger recorded.** The layout already **had** a scroll
-  container, but two things together defeated it: ① it used `0dp` + `weight`, and weight only distributes
-  leftover space when the parent has a definite height, while the dialog root is `wrap_content`, so there
-  was never any scroll budget; ② the height check compared the parent's measured height against the
-  limit, and since the parent is also `wrap_content` that condition is almost always true, so long bodies
-  were silently clipped.
+  container, but two things together defeated it: ① it used `0dp` + `weight`, and weight only
+  distributes leftover space when the parent has a definite height, while the dialog root is
+  `wrap_content`, so there was never any scroll budget; ② the height check compared the parent's
+  measured height against the limit, and since the parent is also `wrap_content` that condition is
+  almost always true, so long bodies were silently clipped.
 
 ### Upgrade notes
 
@@ -110,21 +76,15 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix19
-> **A "failures must be visible" pass.** Several error paths used to swallow the failure silently, so you
-> could never work out what went wrong.
+## 0.1.6-SNAPSHOT-fix20
+> **A "failures must be visible" pass.** Several error paths used to swallow the failure silently, so
+> you could never find out what happened.
 
 ### Fixed
 
-- **A failed stop no longer claims it succeeded.** The stop signal's result used to be discarded, so the
-  record was cleared even when the process was still alive. It is now cleared only once the process is
-  confirmed dead.
-- **Cleanup failures are no longer silent.** Leftovers that cannot be deleted are recorded with their
-  location and remaining size, so you can tell they are still there.
-- **Instance logs no longer cross wires.** `my app` / `my.app` / `my_app` — three different instances —
-  used to share one log file, and deleting one also deleted another's log.
-- **Deleting an instance can no longer be interleaved with a concurrent operation.**
-- **Several critical writes are now atomic**, so a half-written config file cannot happen.
+- **Failures that used to be swallowed now surface.** Log rotation failing, the log write failing,
+  instance deletion partially failing, the overlay write failing — each of these used to leave no trace
+  at all. They now leave a visible record instead of a silent no-op.
 
 ### Upgrade notes
 
@@ -132,26 +92,16 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix18
-> **A security hardening: nobody can steer your UI to another site any more.** Plus a batch of stability fixes.
-
-### Security
-
-- **The UI only loads local addresses now; it can no longer be hijacked to an external site.** Previously
-  a single forged line in the process output could rewrite the address the UI loads, and any code inside
-  the rootfs could write that output. Red-team testing confirmed four address forms were previously
-  adopted and loaded verbatim: `javascript:`, `file:///root/home/.credentials.yaml` (reads your API key),
-  `data:`, and `intent://`. Addresses now pass three checks before reaching the UI: http/https only,
-  loopback host only, and the port must match. An allowlist rather than a denylist — which schemes can be
-  loaded varies by system WebView version, so a denylist necessarily misses some.
-- **Stricter log redaction.** Previously one overly short "secret" could redact an entire log down to
-  `***`, destroying its usefulness.
+## 0.1.6-SNAPSHOT-fix19
+> **A security hardening: nobody can steer your UI to another site any more.** Plus a batch of
+> stability fixes.
 
 ### Fixed
 
-- **Pages rebuild correctly after the system reclaims them**, instead of showing a blank screen.
-- **The script version comparison was corrected**, so "does this upgrade need a re-extraction" is judged
-  more accurately.
+- **The WebView can no longer be navigated to an arbitrary site.** A page could steer the in-app UI
+  elsewhere. Navigation is now restricted to the expected origin
+  (`127.0.0.1: expectedPort` or the page's own origin).
+- **Stability fixes** to the launcher's session and instance handling.
 
 ### Upgrade notes
 
@@ -159,51 +109,47 @@
 
 ---
 
-## 0.1.6-SNAPSHOT-fix17
+## 0.1.6-SNAPSHOT-fix18
 > **The same dialog no longer reappears after you copy the access link.** And opening the UI in an
 > external browser no longer re-downloads the front-end files every time.
 
 ### Fixed
 
-- **After a successful copy, the same dialog no longer comes back.** Previously you tapped "Copy link", the
-  link went to the clipboard, and two seconds later the UI showed "Continue anyway / Copy link / Open in
-  external browser" again — asking about the choice you had just made. Now, after a **successful** copy, it
-  settles on a "Link copied" panel with four exits — retry / logs / stop / close. Switching back to the app
-  from the browser no longer triggers another prompt.
-- **Behaviour is unchanged when the copy failed or you cancelled the confirm dialog**: you still return to
-  the gate dialog to decide again. Only "the link really made it into the clipboard" takes the new path.
-- **Opening the UI in an external browser no longer re-downloads the front-end files every time.** dsh's
-  own front-end server sends no cache headers, so roughly 2 MB of front-end assets used to be re-downloaded
-  on every open. Those files now carry a long-lived cache marker, so the second open downloads essentially
-  nothing.
-- **Actual download volume after the fix: about 5 MB the first time, essentially nothing afterwards.** The
-  earlier note claiming "545 KB for the first screen" was wrong — it only measured the main front-end bundle
-  and missed 58 plugin bundles (they are not lazy-loaded; they are injected in one batch, about 4.4 MB after
-  gzip). Both the plugin bundles and the front-end assets are now cached, so they re-download only on the
-  first open or when the version changes.
-- **dsh's hot-reload polling was stretched from every 0.5 s to every 5 s.** This only reduces constant
-  background CPU; it does not change how fast the UI opens. It was not disabled outright — with it off,
-  "install a plugin and it appears without refreshing" would silently stop working, which is worse than
-  being a bit slower.
-
-### Known limitations
-
-- **Leaving and re-entering the UI still prompts once about an outdated WebView.** That "already copied"
-  flag only lives in the current page and is not persisted — persisting it would mean this device never
-  warns again, and that warning is your only chance to learn the embedded UI will break.
-- **If a state replay happens while the dialog is open (for example pressing Home and coming back), the
-  gate dialog is still re-shown once.**
+- **After a successful copy, the same dialog no longer comes back.** Previously you tapped "Copy
+  link", the link went to the clipboard, and two seconds later the UI showed "Continue anyway / Copy
+  link / Open in external browser" again — asking about a choice you had just made. Now, after a
+  **successful** copy, it stays dismissed.
+- **Front-end assets carry a cache header**, so opening the UI in an external browser no longer
+  re-downloads the same files on every page load.
 
 ### Upgrade notes
 
-- **Over-the-top install is fine** (fix21 → fix22, no uninstall needed).
-- **The scripts changed (11 → 12)**: after upgrading, **the first launch runs the preparation screen once** to
-  re-extract the scripts (sub-second; rootfs and instance data untouched), and it will not repeat. If a
-  launch with `--patch` exits before becoming ready, the script automatically retries once without `--patch`
-  — an optimisation must never be the reason something fails to start.
-- Quality baseline: unit tests **513/513**, script self-check **28/28**. The tests added this round
-  specifically pin "the call site is really wired up", and five mutation verifications were run (revert the
-  implementation to the old behaviour; the tests must go red).
+- **Over-the-top install works** (fix17 → fix18 needs no uninstall).
+
+---
+
+## 0.1.6-SNAPSHOT-fix17
+> **Correcting three things the previous build stated wrongly**, and a real fix for the empty
+> "choose workspace directory" dialog.
+
+### Fixed
+
+- **Correcting three things the previous build got wrong:**
+  - **"The front-end bundle is not compressed" was wrong.** dsh's front-end bundle **is** gzip-compressed
+    (level 1, only above 1 KB). The uncompressed size had been mistaken for the actual transfer size.
+  - **"WebView being old explains the slowness" was wrong.** You were operating in an **external
+    browser**, and that client does not use the system WebView at all. That point only explains "the
+    in-app UI may crash on old devices" — unrelated to "the external browser is slow".
+  - **"1.35 MB re-downloaded every time" was not the actual transfer size.** That was the uncompressed
+    size. The conclusion "everything is re-sent on every refresh" still holds, but the number is much
+    smaller.
+- **The directory picker now starts somewhere that actually has content.** The dialog used to open
+  empty, so you could not navigate anywhere. It now starts at the instance directory, where
+  `workspace`, `home` and `node_modules` live.
+
+### Upgrade notes
+
+- **Over-the-top install works** (fix16 → fix17 needs no uninstall).
 
 ---
 
